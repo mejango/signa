@@ -121,6 +121,7 @@ export interface RestWalletRuntime {
 }
 
 export async function createRestRuntime(options: {
+  surface?: "wallet";
   pool: Pool;
   store: Store;
   services: Services;
@@ -539,12 +540,14 @@ export async function createRestRuntime(options: {
   walletPayments?.attachSubmission((submission) => userOperations!.submitApproved(submission));
   walletPayments?.attachSpeculation((actor, operationId) => userOperations!.speculate(actor, operationId));
   const openapi = buildRestOpenApi({
+    ...(options.surface ? { surface: options.surface } : {}),
     contracts,
     indexer,
     operations,
     publicOrigin: auth.audience,
   });
   const app = createRestApp({
+    ...(options.surface ? { surface: options.surface } : {}),
     auth,
     quota: options.store,
     contracts,
@@ -688,10 +691,11 @@ export async function createRestRuntime(options: {
   if (options.startMaintenance !== false) wallet?.refresh.start();
   return {
     site: {
+      ...(options.surface ? { surface: options.surface } : {}),
       ...(walletSite ? { wallet: walletSite, walletOrigins: [wallet!.origin, ...(options.wallet?.legacyOrigins ?? [])] } : {}),
       app,
       audience: auth.audience,
-      docsHtml: apiDocsPage(openapi),
+      docsHtml: apiDocsPage(openapi, options.surface),
       docsCss: apiDocsCss,
       ...assets,
     },

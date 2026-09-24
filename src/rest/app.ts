@@ -68,6 +68,8 @@ import {
 } from "./http.js";
 
 export interface RestDependencies {
+  /** Omit standalone protocol reference routes while retaining account execution. */
+  surface?: "wallet";
   auth: RestAuth;
   quota: Pick<Store, "consumeRequest">;
   contracts: ContractCatalog;
@@ -199,6 +201,7 @@ const SLOW_AUTH_MS = 300;
 
 export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
   const app = new Hono<RestEnv>();
+  const reference = deps.surface === "wallet" ? undefined : app;
   const descriptors = operationDescriptors(deps.operations);
   const byId = new Map(descriptors.map((entry) => [entry.id, entry]));
   let active = 0;
@@ -346,7 +349,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       throw new RestError(
         404,
         "TRANSACTION_OPERATION_NOT_FOUND",
-        "Choose a transaction operation from the catalog",
+        deps.surface === "wallet" ? "Choose a transaction operation from the API reference" : "Choose a transaction operation from the catalog",
       );
     const draft = await deps.operations.prepare(id, input, {
       source: "onchain",
@@ -368,6 +371,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       openapi: `${REST_PREFIX}/openapi.json`,
       accounts: "/accounts",
       capabilities: `${REST_PREFIX}/capabilities`,
+      ...(deps.surface === "wallet" ? { protocolReference: "https://juicebox.center/api" } : {}),
     });
   });
   app.get("/openapi.json", (context) => {
@@ -404,27 +408,29 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       smartAccounts: deps.smartAccounts
         ? await deps.smartAccounts.capabilities()
         : { state: "unavailable" },
-      omnichain: {
-        available: Boolean(deps.omnichain),
-        atomicAcrossChains: false,
-        receiptConfirmsBridgeSettlement: false,
-      },
-      sources: {
-        onchain: { canonicalBlockHash: true },
-        bendystraw: {
-          canonicalBlockHash: false,
-          pagination: "cursor",
-          protocolVersion: 6,
+      ...(deps.surface === "wallet" ? { protocolReference: "https://juicebox.center/api" } : {
+        omnichain: {
+          available: Boolean(deps.omnichain),
+          atomicAcrossChains: false,
+          receiptConfirmsBridgeSettlement: false,
         },
-      },
-      catalogs: {
-        contracts: `${REST_PREFIX}/catalog/contracts`,
-        indexer: `${REST_PREFIX}/catalog/indexer`,
-        operations: `${REST_PREFIX}/catalog/operations`,
-      },
+        sources: {
+          onchain: { canonicalBlockHash: true },
+          bendystraw: {
+            canonicalBlockHash: false,
+            pagination: "cursor",
+            protocolVersion: 6,
+          },
+        },
+        catalogs: {
+          contracts: `${REST_PREFIX}/catalog/contracts`,
+          indexer: `${REST_PREFIX}/catalog/indexer`,
+          operations: `${REST_PREFIX}/catalog/operations`,
+        },
+      }),
     });
   });
-  app.get("/catalog/contracts", (context) => {
+  reference?.get("/catalog/contracts", (context) => {
     const params = query(context, [
       "packageId",
       "category",
@@ -496,11 +502,11 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       nextOffset: offset + limit < all.length ? offset + limit : null,
     });
   });
-  app.get("/catalog/contract", (context) => {
+  reference?.get("/catalog/contract", (context) => {
     const params = query(context, ["id"]);
     return response(context, deps.contracts.get(required(params, "id")));
   });
-  app.get("/catalog/method", (context) => {
+  reference?.get("/catalog/method", (context) => {
     const params = query(context, ["contractId", "signature", "abiHash"]);
     const method = deps.contracts.method(
       required(params, "contractId"),
@@ -513,15 +519,15 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       outputJsonSchema: functionOutputJsonSchema(method),
     });
   });
-  app.get("/catalog/indexer", (context) => {
+  reference?.get("/catalog/indexer", (context) => {
     query(context, []);
     return response(context, deps.indexer.catalog());
   });
-  app.get("/catalog/operations", (context) => {
+  reference?.get("/catalog/operations", (context) => {
     query(context, []);
     return response(context, { operations: descriptors });
   });
-  app.get("/catalog/operations/:id", (context) => {
+  reference?.get("/catalog/operations/:id", (context) => {
     query(context, []);
     const descriptor = byId.get(context.req.param("id"));
     if (!descriptor)
@@ -542,7 +548,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
     }),
   );
 
-  app.get("/protocol/resolve", async (context) => {
+  reference?.get("/protocol/resolve", async (context) => {
     const params = query(context, [
       "chainId",
       "contractId",
@@ -559,7 +565,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       ),
     );
   });
-  app.get("/protocol/read", async (context) => {
+  reference?.get("/protocol/read", async (context) => {
     const params = query(context, [
       "chainId",
       "contractId",
@@ -578,7 +584,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       ),
     );
   });
-  app.get("/indexer/status", async (context) => {
+  reference?.get("/indexer/status", async (context) => {
     const params = query(context, ["network"]);
     await authenticate(context, ["read"]);
     return response(
@@ -589,7 +595,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       ),
     );
   });
-  app.get("/indexer/:entity/record", async (context) => {
+  reference?.get("/indexer/:entity/record", async (context) => {
     const params = query(context, [
       "network",
       "chainId",
@@ -607,7 +613,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       ),
     );
   });
-  app.get("/indexer/:entity", async (context) => {
+  reference?.get("/indexer/:entity", async (context) => {
     const params = query(context, [
       "network",
       "chainId",
@@ -628,7 +634,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       ),
     );
   });
-  app.get("/projects/:chainId/:projectId", async (context) => {
+  reference?.get("/projects/:chainId/:projectId", async (context) => {
     const selected = source(query(context, ["source"]));
     await authenticate(context, ["read"]);
     return response(
@@ -649,7 +655,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       ),
     );
   });
-  app.get("/projects/:chainId/:projectId/omnichain", async (context) => {
+  reference?.get("/projects/:chainId/:projectId/omnichain", async (context) => {
     const params = query(context, ["source", "maxMembers"]);
     const selected = source(params);
     await authenticate(context, ["read"]);
@@ -683,7 +689,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       ),
     );
   });
-  app.get("/operations/:id", async (context) => {
+  reference?.get("/operations/:id", async (context) => {
     const params = query(context, ["input", "source"]);
     const id = context.req.param("id");
     const descriptor = byId.get(id);

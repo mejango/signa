@@ -30,6 +30,7 @@ export interface BuildRestOpenApiInput {
   indexer: Pick<IndexerReadService, "catalog">;
   operations: ProtocolOperations;
   publicOrigin: string;
+  surface?: "wallet";
 }
 type Access = "public" | "owner" | "read" | "plan" | "relay";
 type Parameter = Record<string, unknown>;
@@ -64,7 +65,7 @@ function modernSchema(value: unknown, schemaName: string): unknown {
   return result;
 }
 
-export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin }: BuildRestOpenApiInput): OpenApiDocument {
+export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin, surface }: BuildRestOpenApiInput): OpenApiDocument {
   const parsed = new URL(publicOrigin);
   if (parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== "/"
     || !(parsed.protocol === "https:" || parsed.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))) {
@@ -72,7 +73,8 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin 
   }
   const origin = parsed.origin;
   const catalog = indexer.catalog();
-  const descriptors = operationDescriptors(operations);
+  const wallet = surface === "wallet";
+  const descriptors = operationDescriptors(operations).filter(item => !wallet || item.transaction);
   const schemas = { ...sharedSchemas(contracts.data.chains.map((chain) => chain.id)), ...sponsorshipSchemas(), ...smartAccountSchemas(), ...sessionSchemas(), ...walletPaymentSchemas() };
   const parameters: Record<string, Schema> = {};
   const header = (key: keyof typeof REST_AUTH_HEADERS, schema: Schema, description: string, required: boolean) => {
@@ -144,6 +146,7 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin 
   };
   const add = (route: string, method: string, operationId: string, summary: string, tag: string, access: Access,
     options: { parameters?: Parameter[]; body?: Schema; result?: Schema; status?: number; description?: string; idempotent?: boolean; extra?: Record<string, unknown> } = {}) => {
+    if (wallet && (/^\/(?:catalog|protocol|indexer|projects)(?:\/|$)/.test(route) || method === "GET" && route.startsWith("/operations/"))) return;
     const signed = access !== "public";
     const status = options.status ?? 200;
     const authParameters = signed ? [...requestHeaders, options.idempotent ? "idempotencyRequired" : "idempotencyKey"].map(componentParameter) : [];
@@ -168,7 +171,8 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin 
     document.paths[path] ??= {};
     document.paths[path]![method.toLowerCase()] = operation;
   };
-  add("/", "GET", "apiDiscovery", "Find API entry points", "Discovery", "public", { result: object({ version: { const: "1" }, protocolVersion: ref("ProtocolVersion"), documentation: text, openapi: text, accounts: text, capabilities: text }) });
+  add("/", "GET", "apiDiscovery", "Find API entry points", "Discovery", "public", { result: object({ version: { const: "1" }, protocolVersion: ref("ProtocolVersion"), documentation: text, openapi: text, accounts: text, capabilities: text,
+    ...(wallet ? { protocolReference: { type: "string", const: "https://juicebox.center/api" } } : {}) }) });
   add("/openapi.json", "GET", "getOpenApi", "Read this OpenAPI 3.1.2 document", "Discovery", "public", { result: { type: "object", required: ["openapi", "info", "paths"], additionalProperties: true } });
   add("/capabilities", "GET", "getCapabilities", "Check enabled transports, chains and limits", "Discovery", "public", {
     description: "Read before planning. Per-chain relay, confirmation and sponsorship availability is runtime configuration. Unsupported smart-account or session mechanisms are not implied by a bot grant.",
@@ -177,8 +181,10 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin 
       transactions: { type: "object", additionalProperties: true }, sponsorship: { type: "object", additionalProperties: true },
       userOperations: { anyOf: [ref("UserOperationCapabilities"), object({ state: { type: "string", const: "unavailable" } })] },
       sessions: { anyOf: [ref("SessionCapabilities"), object({ state: { type: "string", const: "unavailable" } })] },
-      smartAccounts: { anyOf: [ref("SmartAccountCapabilities"), object({ state: { type: "string", const: "unavailable" } })] }, omnichain: { type: "object", additionalProperties: true }, sources: { type: "object", additionalProperties: true }, catalogs: { type: "object", additionalProperties: true } },
-    ["version", "protocolVersion", "audience", "authentication", "chains", "limits", "transactions", "sponsorship", "userOperations", "sessions", "smartAccounts", "omnichain", "sources", "catalogs"]),
+      smartAccounts: { anyOf: [ref("SmartAccountCapabilities"), object({ state: { type: "string", const: "unavailable" } })] },
+      ...(wallet ? { protocolReference: { type: "string", const: "https://juicebox.center/api" } }
+        : { omnichain: { type: "object", additionalProperties: true }, sources: { type: "object", additionalProperties: true }, catalogs: { type: "object", additionalProperties: true } }) },
+    ["version", "protocolVersion", "audience", "authentication", "chains", "limits", "transactions", "sponsorship", "userOperations", "sessions", "smartAccounts", ...(wallet ? ["protocolReference"] : ["omnichain", "sources", "catalogs"])]),
   });
   add("/catalog/contracts", "GET", "listContracts", "Browse the complete pinned V6 contract inventory", "Discovery", "public", {
     parameters: [queryParameter("packageId", { ...text, enum: contracts.data.packages.map((item) => item.id) }),
@@ -275,7 +281,7 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin 
   for (const descriptor of [...readDescriptors, ...transactionDescriptors]) {
     const selectable = descriptor.sources.filter((source) => ["onchain", "bendystraw"].includes(source));
     const extra = { "x-operation": descriptor.id, "x-source": descriptor.sources, "x-effects": descriptor.effects,
-      "x-input-schema": `${REST_PREFIX}/catalog/operations/${descriptor.id}#/inputJsonSchema` };
+      "x-input-schema": wallet ? `#/components/schemas/OperationInput_${descriptor.id}` : `${REST_PREFIX}/catalog/operations/${descriptor.id}#/inputJsonSchema` };
     if (descriptor.transaction) add(`/operations/${descriptor.id}/plans`, "POST", `prepare_${descriptor.id}`, descriptor.description, "Operations", "plan", {
       body: ref(`OperationInput_${descriptor.id}`), result: ref("Plan"), status: 201, idempotent: true, extra,
       description: "Creates an immutable, durable unsigned plan from canonical onchain state. Review its exact calls, evidence, commitment and expiry before wallet signing.",
@@ -425,6 +431,21 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin 
     parameters: [pathParameter("id", ref("ResourceId"))], result: ref("UserOperation"),
     description: "Refreshes submitted operations. A provider receipt is a location hint; confirmed requires the exact EntryPoint operation and its scoped account-call evidence. Submitted signature bytes remain omitted. Reconcile the source plan for dependency status and distinguish bridge settlement from execution.",
   });
+
+  if (wallet) {
+    document.info = { title: "Signa Wallet API", version: "1.0.0", summary: "Accounts, wallet approvals and transaction execution",
+      description: "Manage Signa accounts and bot grants, prepare exact wallet transactions, approve spending and reconcile execution. Protected requests use the documented EIP-712 headers with this service's exact audience; wallet spending approval remains separate. Juicebox Center provides protocol catalogs and project reads at https://juicebox.center/api." };
+    const usedTags = new Set(Object.values(document.paths).flatMap(methods => Object.values(methods).flatMap(operation => operation.tags)));
+    document.tags = document.tags.filter(tag => usedTags.has(tag.name)).map(tag => tag.name === "Operations"
+      ? { ...tag, description: "Transaction preparations generated from the shared operation descriptors." } : tag);
+    const { contractMethodSchemas: _methods, indexerLimits: _indexer, ...protocol } = document["x-juicebox"] as Record<string, unknown>;
+    document["x-juicebox"] = { ...protocol, protocolReference: "https://juicebox.center/api",
+      discovery: { capabilities: `${REST_PREFIX}/capabilities`, openapi: `${REST_PREFIX}/openapi.json`, accounts: "/accounts",
+        smartAccounts: "/api/docs/smart-accounts", sessions: "/api/docs/sessions" } };
+    const call = schemas.PrepareContractCall!.properties as Record<string, Schema>;
+    call.args = { ...call.args, description: "Positional ABI arguments. Obtain the exact deployed ABI and inputJsonSchema from Juicebox Center's https://juicebox.center/api/v1/catalog/method using the resolved abiHash. Integer values are decimal strings." };
+    return document;
+  }
 
   // Concrete indexer routes have input/output schemas derived from the pinned SDL.
   // Unsupported global-wallet aggregates remain visible only in the catalog.

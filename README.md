@@ -39,6 +39,12 @@ assets. The retained `mcp` package supplies protocol libraries; Signa does not m
 an MCP listener. Client packages and API documentation remain available through
 the API host. Inherited Center source has not all been pruned.
 
+The Signa API exposes account and bot management, smart wallets, delegated sessions,
+wallet payment reviews, transaction plans, sponsorship and UserOperations. Its
+`/api` page and OpenAPI document list those routes. Protocol catalogs, project and
+indexer reads remain at [Juicebox Center](https://juicebox.center/api); inherited
+Markdown guide links redirect there. Signa does not serve those protocol read routes.
+
 Protocol project-intent reads query `https://juicebox.center` with Signa's configured
 API origin; they do not read or import Center accounts into Signa's database. Center
 must admit that exact origin for these reference reads. RPC requests use Signa's
@@ -50,8 +56,12 @@ REST operation surface.
 `SIGNA_RUNTIME_ENABLED` defaults to `false`. Dormant startup constructs no account
 runtime, database migrations, signers or workers. `/healthz` reports process
 liveness; `/readyz` on the deployment/API host returns 503 until the runtime is
-active. Railway probes `/healthz` so a dormant image can be installed before
-activation. A successful build or health probe does not establish wallet readiness.
+active. Set the Railway service's health check explicitly for each stage: use
+`/healthz` with a 30-second timeout for a dormant deployment, then `/readyz` with a
+120-second timeout when enabling the runtime. Verify those settings in the active
+deployment manifest. The repository leaves health check settings to the service
+so a later deployment cannot restore the dormant liveness probe. A successful
+build or liveness probe does not establish wallet readiness.
 
 Configure a fresh `DATABASE_URL`, `DWELLIR_API_KEY`, the two origins and a new random
 `MCP_PLAN_SECRET` of at least 32 bytes before activation. Keep that plan secret stable

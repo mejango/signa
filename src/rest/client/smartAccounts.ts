@@ -421,7 +421,7 @@ export function sessionActionPlanInput(
     input.tokenContractId.length > 512
   )
     invalid(
-      "An ERC20 transfer needs its exact verified contract ID from this host's contract catalog.",
+      "An ERC20 transfer needs its exact verified contract ID from Juicebox Center's contract catalog.",
     );
   return {
     account: session.compiled.wallet,

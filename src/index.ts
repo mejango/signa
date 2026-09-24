@@ -75,6 +75,7 @@ async function activate(): Promise<void> {
     ...(networksPayerKey ? { networksPayerKey } : {}) };
   const rpcUrl = `https://${DWELLIR_RPC_HOSTS[8453]}/${process.env.DWELLIR_API_KEY}`;
   accountRuntime = await createRestRuntime({
+    surface: "wallet",
     pool, store, services: protocol.services, config: protocol.config, upstreams, audience, wallet,
     rpcSiteLimitPerMinute, metrics: new Metrics(), executionConfiguration: await readRestExecutionConfiguration(process.env),
     ...(creation ? { walletSignup: (context: Parameters<typeof createBaseWalletSignupHost>[0]) => createBaseWalletSignupHost(context, {

@@ -118,6 +118,64 @@ async function fixture(overrides: Partial<RestDependencies> = {}) {
     execute, semanticPrepare, prepare, ownerConfig, prepared, sendPrepared, send, register };
 }
 
+describe("wallet and account API surface", () => {
+  it("omits standalone Center reference reads without invoking their services or authentication", async () => {
+    const f = await fixture({ surface: "wallet" });
+    const authenticate = vi.spyOn(f.auth, "authenticate");
+    const paths = [
+      "/catalog/contracts", "/catalog/contract", "/catalog/method", "/catalog/indexer", "/catalog/operations", "/catalog/operations/get_project",
+      "/protocol/resolve", "/protocol/read", "/indexer/status", "/indexer/projects", "/indexer/projects/record",
+      "/projects/1/1?source=onchain", "/projects/1/1/omnichain?source=onchain", "/operations/get_project?source=onchain",
+    ];
+    for (const path of paths) {
+      expect((await f.app.request(`${audience}/api/v1${path}`)).status, path).toBe(404);
+      expect((await f.send({ requestTarget: `/api/v1${path}` })).status, path).toBe(404);
+    }
+    expect(authenticate).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled(); expect(f.semanticPrepare).not.toHaveBeenCalled(); expect(f.prepare).not.toHaveBeenCalled();
+  });
+
+  it("keeps actual account, grant and transaction planning journeys with their signed authorization", async () => {
+    const f = await fixture({ surface: "wallet" });
+    expect((await f.send({ requestTarget: "/api/v1/accounts/me" })).status).toBe(200);
+    const ownerPlan = await f.send({ method: "POST", requestTarget: "/api/v1/plans", json: { operation: "contract_calls", input: {} }, idempotencyKey: "wallet-owner-plan" });
+    expect(ownerPlan.status).toBe(201); expect(f.prepare).toHaveBeenCalledTimes(1);
+    const { grant, config } = await f.register(["read", "plan"]);
+    const prepared = await f.send({ method: "POST", requestTarget: "/api/v1/operations/prepare_pay/plans", json: {}, idempotencyKey: "wallet-bot-plan" }, config);
+    expect(prepared.status).toBe(201); expect(f.semanticPrepare).toHaveBeenCalledTimes(1);
+    const plan = await prepared.json();
+    expect((await f.send({ requestTarget: `/api/v1/plans/${plan.id}` }, config)).status).toBe(200);
+    // A plan grant still cannot relay, and revoked grants cannot read their old plans.
+    const relay = await f.send({ method: "POST", requestTarget: `/api/v1/plans/${plan.id}/steps/0/submissions`, json: { rawSignedTransaction: "0x01" }, idempotencyKey: "wallet-forbidden-relay" }, config);
+    expect(relay.status).toBe(403);
+    expect((await f.send({ method: "DELETE", requestTarget: `/api/v1/accounts/me/bots/${grant.id}` })).status).toBe(200);
+    expect((await f.send({ requestTarget: `/api/v1/plans/${plan.id}` }, config)).status).toBe(403);
+    expect(f.rpcCalls.some(call => call.method === "eth_sendRawTransaction")).toBe(false);
+  });
+
+  it("keeps execution routes protected and points discovery at Center's protocol reference", async () => {
+    const f = await fixture({ surface: "wallet" });
+    for (const path of ["/plans", "/sponsorships", "/smart-accounts/binding-challenges", "/smart-accounts/sessions", "/user-operations", "/wallet/payment-reviews"]) {
+      expect((await f.app.request(`${audience}/api/v1${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, path).toBe(401);
+    }
+    const capabilities = await (await f.app.request(`${audience}/api/v1/capabilities`)).json();
+    expect(capabilities).toMatchObject({ audience, protocolReference: "https://juicebox.center/api", authentication: expect.any(Object), transactions: expect.any(Object), smartAccounts: expect.any(Object) });
+    for (const field of ["catalogs", "sources", "omnichain"]) expect(capabilities).not.toHaveProperty(field);
+    expect(await (await f.app.request(`${audience}/api/v1`)).json()).toMatchObject({ protocolReference: "https://juicebox.center/api", accounts: "/accounts" });
+  });
+
+  it("retains the existing full reference surface when no wallet profile is selected", async () => {
+    const f = await fixture();
+    expect((await f.app.request(`${audience}/api/v1/catalog/contracts`)).status).toBe(200);
+    const catalog = await (await f.app.request(`${audience}/api/v1/catalog/operations`)).json();
+    expect(catalog.operations.map((entry: { id: string }) => entry.id)).toEqual(["get_project", "prepare_pay"]);
+    expect((await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" })).status).toBe(200);
+    const capabilities = await (await f.app.request(`${audience}/api/v1/capabilities`)).json();
+    expect(capabilities).toHaveProperty("catalogs"); expect(capabilities).toHaveProperty("sources"); expect(capabilities).toHaveProperty("omnichain");
+    expect(capabilities).not.toHaveProperty("protocolReference");
+  });
+});
+
 describe('slow admission logging', () => {
   it('names the phases that waited when authentication passes 300 ms', async () => {
     const f = await fixture({ walletPayments: { prepare: vi.fn(), getForApp: vi.fn(async () => paymentProjectionFixture()) } as never });

@@ -51,7 +51,7 @@ export function smartWalletSections(referenceOrigin = ""): string {
 <details id="operation-session-template" hidden><summary>Fill from bot permissions</summary>
 <label>New address for project details<input id="operation-uri" placeholder="ipfs://…" spellcheck="false"></label>
 <label>Payment or transfer amount, smallest token units<input id="operation-amount" inputmode="numeric"></label>
-<label>Verified token contract ID for an ERC20 transfer<input id="operation-token-contract" spellcheck="false" placeholder="From the host's contract catalog"></label>
+<label>Verified token contract ID for an ERC20 transfer<input id="operation-token-contract" spellcheck="false" placeholder="From Juicebox Center's contract catalog"></label>
 <button id="operation-template" type="button">Fill current session action</button>
 <p>For ERC-20 payments, the owner must separately approve how many tokens the payment contract (terminal) may spend. This limit is an allowance.</p></details>
 <label class="smart-field">Operation name<input id="operation-name" value="contract_calls" spellcheck="false"></label><label>Operation input JSON<textarea id="operation-input" rows="7" spellcheck="false" autocomplete="off" placeholder='{"account":"0x…","calls":[…]}'></textarea></label><button id="operation-plan" type="button">Prepare transaction plan</button>
