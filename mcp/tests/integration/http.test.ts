@@ -499,7 +499,9 @@ describe('stateless Streamable HTTP transport', () => {
   it('allows an active response to complete within the shutdown grace period', async () => {
     const tool = new EventEmitter();
     let finishTool!: () => void;
-    const completion = new Promise<void>((resolve) => { finishTool = resolve; });
+    const completion = new Promise<void>((resolve) => {
+      finishTool = resolve;
+    });
     const { url, runtime } = await start(
       () => {
         const server = fixtureServer();
