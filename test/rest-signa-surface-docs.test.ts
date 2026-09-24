@@ -94,6 +94,7 @@ describe("Signa wallet API documentation", () => {
     expect(html).toContain(`npm install ${origin}/api/client/juicebox-center-client-0.1.0.tgz`);
     expect(html).toContain('href="https://juicebox.center/api"');
     expect(html).toContain('href="https://juicebox.center/api/docs/client"');
+    expect(html).toContain('rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg"');
     for (const text of ["/api/v1/accounts/me", "/api/v1/user-operations", "Request body", "Response 201", "&lt;img"])
       expect(html).toContain(text);
     for (const text of ["<img", "Choose a data source", 'href="/api/v1/catalog/', 'class="route">/api/v1/projects/', 'href="/"', "·"])
@@ -111,6 +112,8 @@ describe("Signa wallet API documentation", () => {
     };
     const app = mount("wallet");
     expect(await (await app.request("/api")).text()).toContain("Wallet API | Signa");
+    const icon = await app.request("/assets/accounts-icon.svg");
+    expect(icon.status).toBe(200); expect(icon.headers.get("content-type")).toContain("image/svg+xml");
     for (const name of ["quickstart", "client", "contracts", "CLIENT.md"]) {
       const response = await app.request(`/api/docs/${name}`);
       expect(response.status).toBe(302);
