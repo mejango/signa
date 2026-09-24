@@ -27,6 +27,12 @@ describe("typed wallet app grant identity and bounded public metadata", () => {
   it("bounds the API audience in UTF-8 bytes before PostgreSQL insertion", () => {
     expect(() => validateWalletAppGrantAdmission({ ...admission(), audience: `https://center.test/${"é".repeat(1024)}` })).toThrow();
   });
+  it("accepts exactly ninety days and rejects one second more against fixed grant creation time", () => {
+    const value = grant(), expiresAt = value.createdAt + 90 * 86_400;
+    expect(validateWalletAppGrant({ ...value, expiresAt, retainUntil: expiresAt + 86_400 }).expiresAt).toBe(expiresAt);
+    expect(() => validateWalletAppGrant({ ...value, expiresAt: expiresAt + 1, retainUntil: expiresAt + 86_401 }))
+      .toThrow(expect.objectContaining({ code: "WALLET_APP_GRANT_INVALID" }));
+  });
   it.each([{ authorityEpoch: "01" }, { sessionEpoch: 1 }, { incarnation: "9223372036854775808" },
     { scopes: ["read"] }, { scopes: ["read", "plan", "relay", "spend"] }, { kind: "bot" }, { privateKey: "secret" },
     { callbackUri: "https://juicebox.money/wallet/callback" }, { appGeneration: Number.MAX_SAFE_INTEGER + 1 },

@@ -187,9 +187,11 @@ suite("PostgreSQL typed app-grant storage (trusted fixture; no browser authentic
     expect(await counts()).toEqual({ apps: 1, bots: 0, registry: 1 });
   });
   it("rejects caller-selected IDs and malformed authority/lifetime fields before insertion", async () => {
+    // Earlier cases can consume seconds before the store samples DB time.
+    // The unit suite checks the exact boundary against a fixed creation time.
     for (const changes of [{ id: randomUUID() }, { incarnation: "1" }, { signerAddress: owner }, { scopes: ["read"] },
       { expectedAuthorityEpoch: "01" }, { expectedSessionEpoch: "0" }, { expectedAuthorityEpoch: 1 },
-      { expiresAt: await now() - 1 }, { expiresAt: await now() + 90 * 86_400 + 1 }, { expiresAt: 1.5 }])
+      { expiresAt: await now() - 1 }, { expiresAt: await now() + 91 * 86_400 }, { expiresAt: 1.5 }])
       await expect(store.insert({ ...await input(), ...changes } as Insert)).rejects.toMatchObject({ code: "WALLET_APP_GRANT_INVALID" });
     expect((await counts()).apps).toBe(0);
   });
