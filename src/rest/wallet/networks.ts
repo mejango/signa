@@ -83,6 +83,9 @@ export interface WalletNetworkBundle {
   paymentTx: { hash: Hex; raw: Hex; nonce: number; sentAtMs: number | null } | null; createdAtMs: number; updatedAtMs: number;
 }
 export interface WalletNetworksStore {
+  /** Serializes funding by chain and sender across processes; no transaction spans RPC. */
+  withPayer<T>(chainId: number, payer: Address, run: (store: WalletNetworksStore) => Promise<T>): Promise<T>;
+  assertPayerNonceAvailable(chainId: number, payer: Address, nonce: number): Promise<void>;
   listNetworks(accountId: string): Promise<WalletNetworkRow[]>;
   listBundles(accountId: string): Promise<WalletNetworkBundle[]>;
   getBundle(accountId: string, id: string): Promise<WalletNetworkBundle | null>;
@@ -126,8 +129,8 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
   const maximumPayment = options.maximumPaymentWei ?? WALLET_NETWORKS_MAXIMUM_PAYMENT_WEI, maximumBundles = options.maximumBundlesPerFamily ?? WALLET_NETWORKS_MAXIMUM_BUNDLES_PER_FAMILY;
   const { store, provider, rpc } = options;
   function name(chainId: number) { return chainId === WALLET_HOME_NETWORK.chainId ? WALLET_HOME_NETWORK.name : networkById.get(chainId)?.name ?? `Chain ${chainId}`; }
-  async function view(accountId: string) {
-    const rows = await store.listNetworks(accountId), bundles = await store.listBundles(accountId);
+  async function view(accountId: string, source = store) {
+    const rows = await source.listNetworks(accountId), bundles = await source.listBundles(accountId);
     const networks = [{ chainId: WALLET_HOME_NETWORK.chainId, name: WALLET_HOME_NETWORK.name, state: "deployed" as const, txHash: null as Hex | null },
       ...rows.sort((a, b) => a.chainId - b.chainId).map(row => ({ chainId: row.chainId, name: name(row.chainId), state: row.state, txHash: row.txHash }))];
     const busy = new Set(rows.filter(row => row.state !== "failed").map(row => row.chainId));
@@ -144,10 +147,10 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     return hexBytes(await rpc.request(chainId, "eth_getCode", [address, "latest"])) !== "0x";
   }
   /** Fails the bundle and frees its chain rows so they can be quoted again. */
-  async function fail(bundle: WalletNetworkBundle, from: WalletNetworkBundleState) {
+  async function fail(bundle: WalletNetworkBundle, from: WalletNetworkBundleState, source = store) {
     const current = now(); bundle.state = "failed";
-    if (!await store.transitionBundle(bundle, from, current)) return;
-    for (const chainId of bundle.chainIds) await store.upsertNetwork(bundle.accountId, { chainId, state: "failed", bundleId: bundle.id, txHash: null }, current);
+    if (!await source.transitionBundle(bundle, from, current)) return;
+    for (const chainId of bundle.chainIds) await source.upsertNetwork(bundle.accountId, { chainId, state: "failed", bundleId: bundle.id, txHash: null }, current);
   }
   /** Quotes older than their approval window, and quoted bundles replaced by a new quote, stop holding chains. */
   async function expireQuotes(accountId: string, replacing: readonly number[] = []) {
@@ -229,7 +232,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     /** The passkey approves the exact quoted bundle; Center's payer then funds it with one simulated, capped transaction. */
     async approve(session: WalletCentralSession, input: { bundleId: string; assertion: WalletAssertion }) {
       if (!input || typeof input.bundleId !== "string") invalid("Choose the quoted bundle.");
-      const bundle = await store.getBundle(session.accountId, input.bundleId);
+      const bundleId = input.bundleId, bundle = await store.getBundle(session.accountId, bundleId);
       if (!bundle) state();
       if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId) };
       if (now() >= bundle.document.expiresAtMs) { await fail(bundle, "quoted"); throw new RestError(410, "WALLET_NETWORKS_EXPIRED", "The quote expired. Get a new quote."); }
@@ -247,28 +250,37 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
       }
       if (!options.payer) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network deployment funding is not configured.");
       const payment = bundle.payment, chainId = payment.chainId, payer = options.payer.address, value = BigInt(payment.value);
-      if (value > maximumPayment[bundle.family]) throw new RestError(502, "WALLET_NETWORKS_QUOTE_UNSUPPORTED", "The quote exceeds what Center covers.");
-      const call = { from: payer, to: payment.to, data: payment.data, value: toHex(value) };
-      const [block, nonce, balance, code, estimate] = await Promise.all([
-        rpc.request(chainId, "eth_getBlockByNumber", ["latest", false]), rpc.request(chainId, "eth_getTransactionCount", [payer, "pending"]),
-        rpc.request(chainId, "eth_getBalance", [payer, "latest"]), rpc.request(chainId, "eth_getCode", [payment.to, "latest"]),
-        rpc.request(chainId, "eth_estimateGas", [call, "latest"]).catch(() => { throw new RestError(502, "WALLET_NETWORKS_QUOTE_UNSUPPORTED", "The payment would not go through right now."); })]);
-      // Only the reviewed prepayment contract receives funds; a different runtime at that address gets nothing.
-      if (keccak256(hexBytes(code)).toLowerCase() !== RELAYR_PAYMENT_CODE_HASH.toLowerCase()) throw new RestError(502, "WALLET_NETWORKS_PAYMENT_RUNTIME", "The payment contract differs from the reviewed one.");
-      if (quantity(estimate, "payment gas") > RELAYR_PAYMENT_GAS) throw new RestError(502, "WALLET_NETWORKS_QUOTE_UNSUPPORTED", "The payment needs more gas than allowed.");
-      const baseFee = quantity((block as { baseFeePerGas?: unknown })?.baseFeePerGas, "base fee"), priority = WALLET_NETWORKS_PRIORITY_FEE_PER_GAS;
-      const maxFee = 2n * baseFee + priority;
-      if (maxFee > WALLET_NETWORKS_MAXIMUM_FEE_PER_GAS) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network fees are too high right now. Try again later.");
-      if (quantity(balance, "payer balance") < value + RELAYR_PAYMENT_GAS * maxFee) throw new RestError(503, "WALLET_NETWORKS_UNFUNDED", "Network deployment funding is short right now. Try again later.");
-      const payerNonce = Number(quantity(nonce, "payer nonce"));
-      const transaction: TransactionSerializableEIP1559 = { type: "eip1559", chainId, nonce: payerNonce, to: payment.to, data: payment.data,
-        value, gas: RELAYR_PAYMENT_GAS, maxFeePerGas: maxFee, maxPriorityFeePerGas: priority, accessList: [] };
-      const raw = await options.payer.signTransaction(transaction), hash = keccak256(raw);
-      bundle.state = "paying"; bundle.paymentTx = { hash, raw, nonce: payerNonce, sentAtMs: null };
-      // The signed bytes are on record before they leave; a concurrent approval of the same bundle loses here and signs nothing that is sent.
-      if (!await store.transitionBundle(bundle, "quoted", now())) { const current = (await store.getBundle(session.accountId, bundle.id))!; return { bundle: publicBundle(current), replayed: true, view: await view(session.accountId) }; }
-      await broadcast(bundle);
-      return { bundle: publicBundle(bundle), replayed: false, view: await view(session.accountId) };
+      return store.withPayer(chainId, payer, async funding => {
+        // A previous request may have completed while this one verified the passkey.
+        const bundle = await funding.getBundle(session.accountId, bundleId);
+        if (!bundle) state();
+        if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId, funding) };
+        if (now() >= bundle.document.expiresAtMs) { await fail(bundle, "quoted", funding); throw new RestError(410, "WALLET_NETWORKS_EXPIRED", "The quote expired. Get a new quote."); }
+        if (value > maximumPayment[bundle.family]) throw new RestError(502, "WALLET_NETWORKS_QUOTE_UNSUPPORTED", "The quote exceeds what Center covers.");
+        const call = { from: payer, to: payment.to, data: payment.data, value: toHex(value) };
+        const [block, nonce, balance, code, estimate] = await Promise.all([
+          rpc.request(chainId, "eth_getBlockByNumber", ["latest", false]), rpc.request(chainId, "eth_getTransactionCount", [payer, "pending"]),
+          rpc.request(chainId, "eth_getBalance", [payer, "latest"]), rpc.request(chainId, "eth_getCode", [payment.to, "latest"]),
+          rpc.request(chainId, "eth_estimateGas", [call, "latest"]).catch(() => { throw new RestError(502, "WALLET_NETWORKS_QUOTE_UNSUPPORTED", "The payment would not go through right now."); })]);
+        // Only the reviewed prepayment contract receives funds; a different runtime at that address gets nothing.
+        if (keccak256(hexBytes(code)).toLowerCase() !== RELAYR_PAYMENT_CODE_HASH.toLowerCase()) throw new RestError(502, "WALLET_NETWORKS_PAYMENT_RUNTIME", "The payment contract differs from the reviewed one.");
+        if (quantity(estimate, "payment gas") > RELAYR_PAYMENT_GAS) throw new RestError(502, "WALLET_NETWORKS_QUOTE_UNSUPPORTED", "The payment needs more gas than allowed.");
+        const baseFee = quantity((block as { baseFeePerGas?: unknown })?.baseFeePerGas, "base fee"), priority = WALLET_NETWORKS_PRIORITY_FEE_PER_GAS;
+        const maxFee = 2n * baseFee + priority;
+        if (maxFee > WALLET_NETWORKS_MAXIMUM_FEE_PER_GAS) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network fees are too high right now. Try again later.");
+        if (quantity(balance, "payer balance") < value + RELAYR_PAYMENT_GAS * maxFee) throw new RestError(503, "WALLET_NETWORKS_UNFUNDED", "Network deployment funding is short right now. Try again later.");
+        const payerNonce = Number(quantity(nonce, "payer nonce"));
+        if (!Number.isSafeInteger(payerNonce)) throw new RestError(502, "WALLET_NETWORKS_RPC_INVALID", "Invalid payer nonce.");
+        await funding.assertPayerNonceAvailable(chainId, payer, payerNonce);
+        const transaction: TransactionSerializableEIP1559 = { type: "eip1559", chainId, nonce: payerNonce, to: payment.to, data: payment.data,
+          value, gas: RELAYR_PAYMENT_GAS, maxFeePerGas: maxFee, maxPriorityFeePerGas: priority, accessList: [] };
+        const raw = await options.payer!.signTransaction(transaction), hash = keccak256(raw);
+        bundle.state = "paying"; bundle.paymentTx = { hash, raw, nonce: payerNonce, sentAtMs: null };
+        // The signed bytes are on record before they leave; a concurrent approval of the same bundle loses here and signs nothing that is sent.
+        if (!await funding.transitionBundle(bundle, "quoted", now())) { const current = (await funding.getBundle(session.accountId, bundle.id))!; return { bundle: publicBundle(current), replayed: true, view: await view(session.accountId, funding) }; }
+        await broadcast(bundle, funding);
+        return { bundle: publicBundle(bundle), replayed: false, view: await view(session.accountId, funding) };
+      });
     },
     /** Rebroadcasts a signed payment the chain has not seen, then reads the payment receipt, Relayr and code per chain. */
     async status(session: WalletCentralSession) {
@@ -300,22 +312,23 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     },
   };
   /** Sends the signed payment and decides by what the chain reports, never by an error message. */
-  async function broadcast(bundle: WalletNetworkBundle) {
-    const tx = bundle.paymentTx!, chainId = bundle.payment.chainId, payer = options.payer!.address;
+  async function broadcast(bundle: WalletNetworkBundle, source = store) {
+    const tx = bundle.paymentTx!, chainId = bundle.payment.chainId;
     const seen = async () => {
-      const [known, count] = await Promise.all([rpc.request(chainId, "eth_getTransactionByHash", [tx.hash]).catch(() => null), rpc.request(chainId, "eth_getTransactionCount", [payer, "latest"])]);
-      return isObject(known) || quantity(count, "payer nonce") > BigInt(tx.nonce);
+      const known = await rpc.request(chainId, "eth_getTransactionByHash", [tx.hash]).catch(() => null);
+      return isObject(known) && typeof known.hash === "string" && same(known.hash, tx.hash);
     };
     if (!await seen()) {
-      // Past the Relayr deadline the prepayment would revert and only burn gas; the bundle ends instead.
-      if (now() >= Number(bundle.payment.deadline) * 1000) { await fail(bundle, "paying"); return; }
+      // A lost response can hide a payment already included before its deadline. Keep its
+      // signed bytes and chain reservations; neither expiry nor another transaction is proof.
+      if (now() >= Number(bundle.payment.deadline) * 1000) return;
       try { await rpc.request(chainId, "eth_sendRawTransaction", [tx.raw]); } catch { /* Decided below by the chain's own view. */ }
       if (!await seen()) return;
     }
     const current = now();
     bundle.state = "paid"; bundle.paymentTx = { ...tx, sentAtMs: tx.sentAtMs ?? current };
-    if (!await store.transitionBundle(bundle, "paying", current)) return;
-    for (const chainId of bundle.chainIds) await store.upsertNetwork(bundle.accountId, { chainId, state: "pending", bundleId: bundle.id, txHash: null }, current);
+    if (!await source.transitionBundle(bundle, "paying", current)) return;
+    for (const chainId of bundle.chainIds) await source.upsertNetwork(bundle.accountId, { chainId, state: "pending", bundleId: bundle.id, txHash: null }, current);
   }
   function publicBundle(bundle: WalletNetworkBundle) {
     return { id: bundle.id, family: bundle.family, chainIds: bundle.chainIds, state: bundle.state, centerPays: bundle.centerPays,

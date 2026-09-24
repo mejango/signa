@@ -22,6 +22,7 @@ COPY mcp/package.json mcp/package-lock.json ./mcp/
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm --prefix mcp ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
 
 FROM production-dependencies AS runtime
+# Protocol libraries and evidence remain packaged; src/index.ts owns the Signa runtime.
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build /app/dist ./dist

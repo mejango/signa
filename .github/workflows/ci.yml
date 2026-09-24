@@ -59,4 +59,4 @@ jobs:
         run: npm run check
       - run: npm audit --omit=dev --audit-level=high
       - run: npm --prefix mcp audit --omit=dev --audit-level=high
-      - run: docker build -t jbcenter:${{ github.sha }} .
+      - run: docker build -t signa:${{ github.sha }} .

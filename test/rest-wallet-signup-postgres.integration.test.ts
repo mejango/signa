@@ -65,6 +65,25 @@ suite("durable pre-account signup continuation and purpose-bound recovery", () =
     const rows = (await pool.query("SELECT to_jsonb(r)::text AS value FROM rest_wallet_signup_resumes r")).rows[0].value;
     expect(rows).not.toContain(resume.resumeToken); expect(rows).not.toContain(recovered.flowToken);
   });
+  it("keeps continuation reads, locked mutations and resume replays on the enrollment's original origin", async () => {
+    const value = await registered(), signa = new PostgresWalletSignupStore(pool, { ...policy, origin: "https://signa.center", rpId: "signa.center" });
+    const other = await signa.begin({ recoveryOwner: enrollmentBackupAccount.address, passkeyName: "Signa test" });
+    expect(await signa.authenticate(other.flowToken)).toEqual(other.flow);
+    expect(await store.authenticate(other.flowToken)).toBeNull();
+    expect(await signa.authenticate(value.begun.flowToken)).toBeNull();
+    for (const [wrongStore, begun] of [[signa, value.begun], [store, other]] as const)
+      await expect(wrongStore.associateDeployment(begun.flowToken, begun.flow.revision, randomUUID())).rejects.toMatchObject({ status: 403 });
+    const resume = await store.beginResume();
+    const input = { resumeId: resume.challenge.id, resumeToken: resume.resumeToken,
+      assertion: signGet({ ...value.credential, rpId, origin, challenge: resume.challenge.challenge }) };
+    await expect(signa.completeResume(input)).rejects.toMatchObject({ status: 403 });
+    expect(await store.authenticate(value.begun.flowToken)).toEqual(value.begun.flow);
+    const resumed = await store.completeResume(input);
+    await expect(signa.completeResume(input)).rejects.toMatchObject({ status: 403 });
+    expect(await store.completeResume(input)).toEqual({ ...resumed, replayed: true });
+    expect(await signa.authenticate(resumed.flowToken)).toBeNull();
+    expect(await store.authenticate(resumed.flowToken)).toEqual(resumed.flow);
+  });
   it("never treats a locator, old purpose, other credential, missing user handle or different RP as recovery authority", async () => {
     const value = await registered(), other = await registered(), resume = await store.beginResume();
     const good = signGet({ ...value.credential, rpId, origin, challenge: resume.challenge.challenge });

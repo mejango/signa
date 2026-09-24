@@ -108,9 +108,10 @@ export class PostgresWalletSignupStore {
   }
   async authenticate(flowToken: string): Promise<WalletSignupFlow | null> {
     if (!token(flowToken)) return null;
-    const row = (await this.pool.query<FlowRow>(`SELECT * FROM rest_wallet_signup_flows WHERE token_hash=$1 AND expires_at_ms>${sqlNow}`,
+    const row = (await this.pool.query<FlowRow & { origin: string; rp_id: string }>(`SELECT f.*,e.intent->>'origin' AS origin,e.intent->>'rpId' AS rp_id
+      FROM rest_wallet_signup_flows f JOIN rest_wallet_enrollments e ON e.id=f.enrollment_id WHERE f.token_hash=$1 AND f.expires_at_ms>${sqlNow}`,
       [hashToken(flowToken, "flow")])).rows[0];
-    return row ? flowOf(row) : null;
+    return row?.origin === this.policy.origin && row.rp_id === this.policy.rpId ? flowOf(row) : null;
   }
   /** Host clock for original review issuance. The authoritative mutation checks DB time again. */
   async now(): Promise<number> {
@@ -231,7 +232,9 @@ export class PostgresWalletSignupStore {
   }
   private async lockFlow(client: PoolClient, flowToken: string): Promise<FlowRow> {
     if (!token(flowToken)) unauthorized();
-    const row = (await client.query<FlowRow>("SELECT * FROM rest_wallet_signup_flows WHERE token_hash=$1 FOR UPDATE", [hashToken(flowToken, "flow")])).rows[0];
+    const row = (await client.query<FlowRow>(`SELECT f.* FROM rest_wallet_signup_flows f JOIN rest_wallet_enrollments e ON e.id=f.enrollment_id
+      WHERE f.token_hash=$1 AND e.intent->>'origin'=$2 AND e.intent->>'rpId'=$3 FOR UPDATE OF f`,
+      [hashToken(flowToken, "flow"), this.policy.origin, this.policy.rpId])).rows[0];
     if (!row || Number(row.expires_at_ms) <= await walletCeremonyDatabaseNow(client)) unauthorized();
     return row;
   }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createServer, request, type Server } from 'node:http';
+import { EventEmitter, once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -496,38 +497,47 @@ describe('stateless Streamable HTTP transport', () => {
   });
 
   it('allows an active response to complete within the shutdown grace period', async () => {
-    let finishTool: (() => void) | undefined;
+    const tool = new EventEmitter();
+    let finishTool!: () => void;
+    const completion = new Promise<void>((resolve) => { finishTool = resolve; });
     const { url, runtime } = await start(
       () => {
         const server = fixtureServer();
         server.registerTool('wait', {}, async () => {
-          await new Promise<void>((resolve) => {
-            finishTool = resolve;
-          });
+          tool.emit('started');
+          await completion;
           return { content: [{ type: 'text', text: 'Completed before shutdown.' }] };
         });
         return server;
       },
       { shutdownGraceMs: 1_000 },
     );
+    // Tool admission precedes the shutdown deadline; allow suite scheduling time
+    // without changing the grace period this test exercises.
+    const started = once(tool, 'started', { signal: AbortSignal.timeout(5_000) });
     const pending = post(url, {
       jsonrpc: '2.0',
       id: 1,
       method: 'tools/call',
       params: { name: 'wait', arguments: {} },
     });
-    await vi.waitFor(() => expect(finishTool).toBeTypeOf('function'));
-    const closing = runtime.close();
-    finishTool!();
-    const response = await pending;
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      result: { content: [{ text: 'Completed before shutdown.' }] },
-    });
-    await closing;
-    expect(runtime.activeRequests()).toBe(0);
-    await expect(runtime.listen()).rejects.toThrow('cannot be restarted');
-  });
+    const settled = Promise.allSettled([pending]);
+    try {
+      await started;
+      const closing = runtime.close();
+      finishTool();
+      const [response] = await Promise.all([pending, closing]);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        result: { content: [{ text: 'Completed before shutdown.' }] },
+      });
+      expect(runtime.activeRequests()).toBe(0);
+      await expect(runtime.listen()).rejects.toThrow('cannot be restarted');
+    } finally {
+      finishTool();
+      await Promise.all([runtime.close(), settled]);
+    }
+  }, 10_000);
 });
 
 async function startMounted(factory = fixtureServer, options: HttpOptions = {}) {
