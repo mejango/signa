@@ -895,7 +895,7 @@ export function installSmartWalletUI(options: {
           typeof data.privateKey !== "string" ||
           !/^0x[0-9a-fA-F]{64}$/.test(data.privateKey)
         )
-          fail("Use a Juicebox Center bot key file.");
+          fail("Use a bot key file.");
         const signer = privateKeyToAccount(data.privateKey as Hex);
         if (
           !data.botAddress ||

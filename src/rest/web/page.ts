@@ -7,16 +7,16 @@ export function accountsPage(options: { scriptPath?: string; stylePath?: string;
   const referenceOrigin = options.audience ?? "";
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
-<title>Accounts | Juicebox Center</title><link rel="icon" type="image/svg+xml" href="${escapeHtml(options.faviconPath ?? "/favicon.svg")}"><link rel="stylesheet" href="${escapeHtml(options.stylePath ?? "/assets/accounts.css")}"><script type="module" src="${escapeHtml(options.scriptPath ?? "/assets/accounts.js")}"></script></head>
+<title>Accounts | Signa</title><link rel="icon" type="image/svg+xml" href="${escapeHtml(options.faviconPath ?? "/favicon.svg")}"><link rel="stylesheet" href="${escapeHtml(options.stylePath ?? "/assets/accounts.css")}"><script type="module" src="${escapeHtml(options.scriptPath ?? "/assets/accounts.js")}"></script></head>
 <body data-audience="${escapeHtml(options.audience ?? "")}"><main>
-<header><a href="${escapeHtml(referenceOrigin)}/">${BRAND_ICON} JUICEBOX CENTER</a><span>V6 / ACCOUNTS</span></header>
+<header><a href="${escapeHtml(referenceOrigin)}/api">${BRAND_ICON} SIGNA</a><span>V6 / ACCOUNTS</span></header>
 <h1>Your account.<br>Your bots.</h1>
 <p class="lede">Sign in, choose what your app can do, and download its API connection. Your account stays in control of transaction approvals.</p>
-<nav class="section-nav" aria-label="Account sections"><a href="#wallet-heading">Sign in</a><a href="#bots-heading">API access</a><a href="#smart-heading">Optional transaction wallet</a><a id="session-nav" href="#session-heading" hidden>Bot permissions</a><a href="${escapeHtml(referenceOrigin)}/api">API docs</a></nav>
+<nav class="section-nav" aria-label="Account sections"><a href="#wallet-heading">Signa in</a><a href="#bots-heading">API access</a><a href="#smart-heading">Optional transaction wallet</a><a id="session-nav" href="#session-heading" hidden>Bot permissions</a><a href="${escapeHtml(referenceOrigin)}/api">API docs</a></nav>
 <p id="status" role="status" aria-live="polite">Sign in to get started.</p>
 <section aria-labelledby="wallet-heading"><h2 id="wallet-heading">01 / Sign in</h2>
 <p>Use an existing wallet to create and manage API access.</p>
-<div class="row"><button id="connect" type="button">Sign in</button><button id="disconnect" type="button" hidden>Sign out</button></div>
+<div class="row"><button id="connect" type="button">Signa in</button><button id="disconnect" type="button" hidden>Sign out</button></div>
 <p id="identity">Sign in to create or manage API access.</p>
 </section>
 <section aria-labelledby="bots-heading"><h2 id="bots-heading">02 / API access</h2>

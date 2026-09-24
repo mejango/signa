@@ -154,7 +154,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     await fillForm();
     // Sign up opens the passkey prompt at once; a cancelled prompt leaves the explicit button as the fallback.
     await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: false });
-    await page.getByRole('button', { name: 'Sign up' }).click();
+    await page.getByRole('button', { name: 'Signa up' }).click();
     // A prompt waiting on the user is not work in flight: the status mark holds still.
     await expect.poll(() => page.locator('#wallet-status').getAttribute('data-state'), { timeout: 5000 }).toBe('ready');
     await page.getByRole('button', { name: 'Cancel prompt' }).click();
@@ -164,12 +164,12 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     await expect.poll(() => page.getByLabel('Passkey name').isVisible()).toBe(true);
     expect((await context.cookies()).some(item => item.name === walletSignupCookie)).toBe(false);
     await fillForm();
-    await page.getByRole('button', { name: 'Sign up' }).click();
+    await page.getByRole('button', { name: 'Signa up' }).click();
     // The prompt opens straight from the tap; cancelling it leaves the explicit button as the fallback.
     await page.getByRole('button', { name: 'Cancel prompt' }).click();
     await contains('cancelled');
     // A begun signup without a passkey yet still offers "log in" for someone who already has an account.
-    expect(await page.getByRole('link', { name: 'log in' }).isVisible()).toBe(true);
+    expect(await page.getByRole('link', { name: 'Signa in' }).isVisible()).toBe(true);
     await page.getByRole('button', { name: 'Create passkey', exact: true }).click();
     await page.getByRole('button', { name: 'Cancel prompt' }).click();
     await contains('cancelled');
@@ -240,7 +240,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     if (resumed) {
       await context.clearCookies({ name: walletSignupCookie });
       await page.reload();
-      await page.getByRole('link', { name: 'log in' }).click();
+      await page.getByRole('link', { name: 'Signa in' }).click();
       await proceed('Pick up your signup');
       await contains('Your account is ready');
       expect(await page.locator('#signup-address').textContent()).toBe(originalAddress);
@@ -283,7 +283,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     // that wants a fresh click for the prompt (or a slower refresh) leaves the Log in button instead.
     for (let i = 0; i < 40 && !(await page.locator('#wallet-status').textContent())?.includes('You are signed in'); i++) {
       await new Promise(resolve => setTimeout(resolve, 500));
-      if (i >= 12 && await page.getByRole('button', { name: 'Log in', exact: true }).isVisible()) { await page.getByRole('button', { name: 'Log in', exact: true }).click({ timeout: 2000 }).catch(() => undefined); }
+      if (i >= 12 && await page.getByRole('button', { name: 'Signa in', exact: true }).isVisible()) { await page.getByRole('button', { name: 'Signa in', exact: true }).click({ timeout: 2000 }).catch(() => undefined); }
     }
     await contains('You are signed in');
     // An unresumed signup is signed in from its creation approval, with no login prompt; a journey

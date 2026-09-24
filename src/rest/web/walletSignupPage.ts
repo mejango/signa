@@ -1,17 +1,18 @@
+import { BRAND_ICON } from '../../branding.js';
 import { walletCss } from './walletPage.js';
 export function walletSignupPage(options: { base?: string } = {}) {
   const base = options.base ?? '/wallet';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer"><title>Your account</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Your account | Signa</title>
 <link rel="stylesheet" href="${base}/assets/wallet-signup.css"><script type="module" src="${base}/assets/wallet-signup.js"></script></head>
-<body><main><a class="brand" id="wallet-back" href="${base || '/'}">JUICEBOX CENTER</a>
+<body><main><a class="brand" id="wallet-back" href="${base || '/'}">${BRAND_ICON} SIGNA</a>
 <h1>Your account</h1>
 <p id="wallet-status" role="status" aria-live="polite" aria-atomic="true">Checking your signup…</p>
 <form id="signup-form" hidden><label>Passkey name<input id="passkey-name" maxlength="120" autocomplete="off" required></label>
 <fieldset id="recovery-method"><legend>If you lose this passkey, get back in with</legend>
 <label class="choice"><input type="radio" name="recovery-method" value="kit" checked>A backup password made for you</label>
 <label class="choice"><input type="radio" name="recovery-method" value="wallet">A wallet you already have</label></fieldset>
-<button type="submit" id="signup-begin">Sign up</button></form>
+<button type="submit" id="signup-begin">Signa up</button></form>
 <section id="signup-details" hidden aria-label="Account details"><dl><dt>Account address</dt><dd id="signup-address"></dd>
 <dt>Passkey name</dt><dd id="signup-name"></dd>
 <dt id="signup-recovery-label">Recovery</dt><dd><span id="signup-recovery"></span>
@@ -29,7 +30,7 @@ export function walletSignupPage(options: { base?: string } = {}) {
 <button type="button" id="signup-check" hidden>Check signup</button>
 <button type="button" id="signup-cancel" class="link" hidden>Cancel prompt</button></div>
 <button type="button" id="signup-restart" class="quiet" hidden>Start over</button>
-<div id="signup-links"><a href="#" id="signup-resume" hidden>Log in</a><a id="signup-fullscreen" target="_top" rel="noopener" title="Fullscreen" hidden>Fullscreen</a></div>
+<div id="signup-links"><a href="#" id="signup-resume" hidden>Signa in</a><a id="signup-fullscreen" target="_top" rel="noopener" title="Fullscreen" hidden>Fullscreen</a></div>
 <dialog id="signup-explain"><form method="dialog"><h2 id="explain-title"></h2><p id="explain-text"></p>
 <div class="actions"><button value="continue" id="explain-continue">Continue</button><button value="cancel" class="quiet">Cancel</button></div></form></dialog>
 <noscript><p>Enable JavaScript to create or resume your account.</p></noscript></main></body></html>`;

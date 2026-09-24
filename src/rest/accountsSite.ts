@@ -12,7 +12,7 @@ export function mountAccountsSite(app: Hono<JbcenterEnv>, options: { audience: s
     throw new Error("Accounts requires an exact API origin.");
   const headers = { ...REST_PAGE_HEADERS, "Content-Security-Policy": REST_PAGE_HEADERS["Content-Security-Policy"]
     .replace("connect-src 'self'", `connect-src 'self' ${audience}`) };
-  app.get("/accounts", context => context.html(accountsPage({ audience, faviconPath: "/assets/accounts-icon.svg" }), 200, headers));
+  app.get("/accounts", context => context.html(accountsPage({ audience, faviconPath: "/assets/accounts-icon.svg?v=signa" }), 200, headers));
   app.get("/assets/accounts.css", context => context.body(accountsCss(), 200, {
     ...REST_PAGE_HEADERS, "Content-Type": "text/css; charset=utf-8",
   }));

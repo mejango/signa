@@ -40,6 +40,42 @@ describe("served Center signup page", () => {
   });
   afterAll(async () => { await browser?.close(); await new Promise<void>(resolve => server?.close(() => resolve())); });
 
+  it("keeps the local default and edited name, and guides a passkey retry within the same signup", async () => {
+    const context = await browser.newContext({ locale: 'pt-BR', timezoneId: 'America/Sao_Paulo' });
+    const signup = await context.newPage();
+    try {
+      await signup.clock.setFixedTime(new Date('2026-09-24T20:26:00Z'));
+      await signup.goto(`${origin}/wallet`);
+      const name = signup.getByLabel('Passkey name', { exact: true });
+      await expect.poll(() => name.inputValue()).toBe('localhost | 5:26 PM Sep 24, 2026');
+      await name.fill('My phone');
+      await signup.getByLabel('A wallet you already have', { exact: true }).check();
+      expect(await name.inputValue()).toBe('My phone');
+      expect(await signup.locator('.brand').textContent()).toBe('🚬 SIGNA');
+      expect(await signup.locator('#signup-begin').textContent()).toBe('Signa up');
+      expect(await signup.locator('#signup-resume').textContent()).toBe('Signa in');
+      await signup.getByLabel('A backup password made for you', { exact: true }).check();
+      let begins = 0;
+      await signup.route('**/wallet/signup/begin', route => {
+        begins++;
+        expect(route.request().postDataJSON().passkeyName).toBe('My phone');
+        return route.fulfill({ json: { view: { phase: 'awaiting_registration', enrollmentId: 'same-signup',
+          origin, rpId: 'localhost', passkeyName: 'My phone',
+          registration: { challenge: Buffer.alloc(32, 1).toString('base64url'), userHandle: Buffer.alloc(32, 2).toString('base64url') } } } });
+      });
+      await signup.evaluate(() => {
+        navigator.credentials.create = async () => { throw new DOMException('See https://www.w3.org/TR/webauthn-2/', 'NotAllowedError'); };
+      });
+      await signup.locator('#signup-begin').click();
+      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your passkey.');
+      expect(await signup.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
+      expect(await signup.locator('#wallet-status').textContent()).not.toMatch(/NotAllowedError|https:/);
+      await signup.getByRole('button', { name: 'Create passkey', exact: true }).click();
+      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your passkey.');
+      expect(begins).toBe(1);
+    } finally { await context.close(); }
+  });
+
   it("shows one filled button at a time, with clear space between buttons, on a phone", async () => {
     await page.setViewportSize({ width: 393, height: 852 });
     await page.goto(`${origin}/wallet`);

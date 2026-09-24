@@ -1,3 +1,4 @@
+import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
 import { formatUnits } from 'viem';
 import { getUserOperationHash, normalizeUserOperation, uoCanonical, userOperationMaximumCost } from '../userOperations/codec.js';
@@ -220,7 +221,7 @@ function goBackToApp() {
 async function approvePayment() {
   if (!review || review.status !== 'pending' || expired() || uncertain) return;
   if (frameTooSmall() || !approveVisible) { setStatus('ready', 'Open this review as a page of its own to approve it.'); render(); return; }
-  if (!window.isSecureContext || !navigator.credentials?.get) { blocked = true; setStatus('error', 'This browser cannot use passkeys here. Open Center in a browser that supports passkeys.'); return; }
+  if (!window.isSecureContext || !navigator.credentials?.get) { blocked = true; setStatus('error', 'This browser cannot use passkeys here. Open Signa in a browser that supports passkeys.'); return; }
   // No network await precedes get(): it runs from the explicit approval click.
   nativePrompt = new AbortController(); setStatus('authenticating', 'Use your passkey to approve this payment.'); render();
   // No allow list, deliberately: the review checks the credential server-side, and an allow list
@@ -247,8 +248,10 @@ async function run(action: () => Promise<void>) {
   if (busy || blocked) return; busy = true; canRetry = false; render();
   try { await action(); }
   catch (error) {
-    if (error instanceof DOMException && ['NotAllowedError', 'AbortError'].includes(error.name) && nativePrompt) {
-      setStatus('ready', 'Passkey approval cancelled. You can try again.');
+    if (error instanceof DOMException && nativePrompt) {
+      const feedback = nativePasskeyError(error, nativePrompt.signal.aborted);
+      canRetry = feedback.state === 'error';
+      setStatus(feedback.state, feedback.message);
     } else if (error instanceof InvalidResponse) {
       blocked = true; setStatus('error', 'This payment response could not be verified. Return to the app to check this payment.');
     } else {

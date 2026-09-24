@@ -30,7 +30,7 @@ export function smartWalletSections(referenceOrigin = ""): string {
 <label class="smart-field">Current network<select id="smart-manifest"><option value="">Sign in first</option></select></label>
 <button id="smart-switch" type="button" hidden>Switch to this network</button>
 <details id="smart-existing-wallet"><summary>Connect a wallet you already own</summary>
-<p>Enter a Safe wallet address on the current network. A Safe can have one owner or several owners who approve together (a multisig). Center checks its setup and ownership before you approve the connection. Connecting it gives no bot permission to spend.</p>
+<p>Enter a Safe wallet address on the current network. A Safe can have one owner or several owners who approve together (a multisig). Signa checks its setup and ownership before you approve the connection. Connecting it gives no bot permission to spend.</p>
 <label>Wallet address<input id="smart-address" spellcheck="false" autocomplete="off" placeholder="0x…"></label>
 <button id="smart-bind-prepare" type="button">Review wallet connection</button>
 </details>

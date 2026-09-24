@@ -1,4 +1,5 @@
 import { walletSignupPage } from '../web/walletSignupPage.js';
+import { FAVICON_SVG } from '../../branding.js';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Hex } from 'viem';
@@ -52,8 +53,6 @@ export interface WalletSiteOptions {
   onEvent?: (event: { action: string; outcome: 'ok' | 'rejected' | 'unavailable'; code?: string; detail?: Record<string, unknown> }) => void;
 }
 
-// The status line's lightning, as the tab icon.
-const walletFavicon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="88">⚡</text></svg>`;
 function reject(status = 400, code = 'WALLET_HTTP_INVALID'): never {
   throw new RestError(status, code, 'Wallet request could not be completed.');
 }
@@ -256,7 +255,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   if (base) app.get(`${base}/`, landing);
   app.get(`${base}/assets/wallet.js`, c => c.body(browserScript, 200, { 'Content-Type': 'application/javascript; charset=utf-8' }));
   app.get(`${base}/assets/wallet.css`, c => c.body(walletCss(), 200, { 'Content-Type': 'text/css; charset=utf-8' }));
-  app.get(`${base}/assets/favicon.svg`, c => c.body(walletFavicon, 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' }));
+  app.get(`${base}/assets/favicon.svg`, c => c.body(FAVICON_SVG, 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' }));
   app.get(`${base}/config`, async c => {
     const candidate = c.req.header('Origin');
     const entry = candidate && candidate !== origin ? await appOrigin(c) : undefined;

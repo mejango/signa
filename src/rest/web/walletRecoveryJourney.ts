@@ -1,3 +1,5 @@
+import { nativePasskeyError } from './walletPasskeyError.js';
+import { defaultPasskeyName } from './passkeyName.js';
 import { base } from './walletBase.js';
 import { getAddress, hashTypedData, isAddress, type Address, type TypedDataDefinition } from 'viem';
 import type { WalletRecoveryView } from '../wallet/recoveryService.js';
@@ -91,6 +93,7 @@ function accept(result: { view: WalletRecoveryView | null; csrfToken?: string })
 function render() {
   spin();
   form.hidden = !known || !!view; form.querySelector('button')!.disabled = engaged || !!pending || !!reference.value;
+  if (!form.hidden && !name.value) name.value = defaultPasskeyName();
   name.disabled = engaged; wallet.disabled = engaged;
   const recoverable = view?.phase !== 'ready_to_sign_in';
   el<HTMLFieldSetElement>('recovery-method').hidden = !known || !recoverable; el<HTMLFieldSetElement>('recovery-method').disabled = engaged;
@@ -146,11 +149,10 @@ async function run(action: () => Promise<void>, quiet = false) {
       pending = null; rotation = null;
       try { accept(await request('state')); } catch { /* Fresh resume proves both owners if the cookie was lost. */ }
     }
-    message(error instanceof DOMException && native && (error.name === 'AbortError' || (error.name === 'NotAllowedError' && native.signal.aborted))
-      ? 'Passkey prompt cancelled. You can try again.'
-      : error instanceof DOMException && native
-      ? `The passkey prompt did not complete (${error.name}${error.message ? ': ' + error.message : ''}). If your passkey manager just saved this passkey, wait a moment and try again.`
-      : error instanceof Error ? error.message : 'Recovery is unavailable. Check the original recovery again.', true);
+    if (error instanceof DOMException && native) {
+      const feedback = nativePasskeyError(error, native.signal.aborted);
+      message(feedback.message, feedback.state === 'error');
+    } else message(error instanceof Error ? error.message : 'Recovery is unavailable. Check the original recovery again.', true);
   } finally { native = null; busy = false; engaged = false; if (!disposed) render(); }
 }
 function provider(): Ethereum {
@@ -203,7 +205,7 @@ async function advance() {
   if (!view) return;
   if (view.phase === 'awaiting_registration' && view.registration) {
     native = new AbortController(); render();
-    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Juicebox' },
+    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
       user: { id: decode(view.registration.userHandle), name: view.passkeyName, displayName: view.passkeyName },
       challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' }, attestation: 'none', timeout: 90000 }, signal: native.signal });

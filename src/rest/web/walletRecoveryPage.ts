@@ -1,11 +1,12 @@
+import { BRAND_ICON } from '../../branding.js';
 import { walletSignupCss } from './walletSignupPage.js';
 
 export function walletRecoveryPage(options: { base?: string } = {}) {
   const base = options.base ?? '/wallet';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer"><title>Get back into your account | Juicebox</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Get back into your account | Signa</title>
 <link rel="stylesheet" href="${base}/assets/wallet-recovery.css"><script type="module" src="${base}/assets/wallet-recovery.js"></script></head>
-<body><main><a class="brand" id="wallet-back" href="${base || '/'}">JUICEBOX CENTER</a>
+<body><main><a class="brand" id="wallet-back" href="${base || '/'}">${BRAND_ICON} SIGNA</a>
 <h1>Get back into your account</h1>
 <p>Replace a lost passkey with your backup file, your backup password, or the wallet you chose at signup. Your account address stays the same.</p>
 <p id="wallet-status" role="status" aria-live="polite" aria-atomic="true">Checking…</p>
@@ -19,7 +20,7 @@ export function walletRecoveryPage(options: { base?: string } = {}) {
 <p class="hint">It stays in this tab.</p></section>
 <form id="recovery-form" hidden><div id="recovery-wallet-box"><label>Account address<input id="recovery-wallet" placeholder="0x…" maxlength="42" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
 <p class="hint">The account to get back into. It's in your backup file.</p></div>
-<label>New passkey name<input id="passkey-name" value="Juicebox account" maxlength="120" autocomplete="off" required></label>
+<label>New passkey name<input id="passkey-name" maxlength="120" autocomplete="off" required></label>
 <button type="submit" id="recovery-begin">Continue</button></form>
 <section id="recovery-details" hidden aria-label="Recovery details"><dl><dt>New passkey name</dt><dd id="recovery-name"></dd>
 <dt>Account address</dt><dd id="recovery-address"></dd><dt>Backup key</dt><dd id="recovery-owner"></dd>
@@ -39,7 +40,7 @@ export function walletRecoveryPage(options: { base?: string } = {}) {
 <p class="hint">Use the replacement passkey and your backup. The reference is public and cannot approve anything on its own.</p>
 <label>Recovery reference<input id="recovery-id" maxlength="36" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
 <button type="button" id="recovery-resume" class="link">Resume</button></details></section>
-<a id="recovery-signin" href="${base || '/'}" hidden>Sign in</a>
+<a id="recovery-signin" href="${base || '/'}" hidden>Signa in</a>
 <noscript><p>Enable JavaScript to get back into your account.</p></noscript></main></body></html>`;
 }
 

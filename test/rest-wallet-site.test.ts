@@ -162,7 +162,7 @@ describe('dedicated Center wallet HTTP journey',()=>{
     expect((await app.fetch(new Request(origin+'/create'))).status).toBe(200);
     expect((await app.fetch(new Request(origin+'/assets/wallet-signup.js'))).status).toBe(200);
     const icon=await app.fetch(new Request(origin+'/assets/favicon.svg'));
-    expect(icon.status).toBe(200);expect(icon.headers.get('content-type')).toBe('image/svg+xml');expect(await icon.text()).toContain('⚡');
+    expect(icon.status).toBe(200);expect(icon.headers.get('content-type')).toBe('image/svg+xml');expect(await icon.text()).toContain('🚬');
     expect((await app.fetch(new Request(origin+'/config'))).status).toBe(200);
     const moved=await app.fetch(new Request(origin+'/wallet/create?intent=abc',{headers:{'sec-fetch-mode':'navigate'}}));
     expect(moved.status).toBe(301);expect(moved.headers.get('location')).toBe(origin+'/create?intent=abc');
@@ -192,7 +192,7 @@ describe('dedicated Center wallet HTTP journey',()=>{
   });
   it('serves a dedicated passkey page with self-only scripts',async()=>{
     const {app}=setup();const response=await app.fetch(new Request(origin+'/wallet'));
-    expect(response.status).toBe(200);expect(await response.text()).toContain('>Sign in</button>');
+    expect(response.status).toBe(200);expect(await response.text()).toContain('>Signa in</button>');
     expect(response.headers.get('content-security-policy')).toContain("script-src 'self';");
     expect(response.headers.get('content-security-policy')).not.toMatch(/unsafe/);
     const script=await app.fetch(new Request(origin+'/wallet/assets/wallet.js'));

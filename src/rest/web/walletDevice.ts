@@ -1,3 +1,5 @@
+import { nativePasskeyError } from './walletPasskeyError.js';
+import { defaultPasskeyName } from './passkeyName.js';
 import { base } from './walletBase.js';
 import { getAddress, hashTypedData, isAddress, type TypedDataDefinition } from 'viem';
 import type { WalletDeviceView } from '../wallet/deviceService.js';
@@ -55,9 +57,10 @@ async function run(action: () => Promise<void>) {
   busy = true; render();
   try { await action(); }
   catch (error) {
-    message(error instanceof DOMException && native && (error.name === 'AbortError' || (error.name === 'NotAllowedError' && native.signal.aborted)) ? 'Passkey prompt cancelled. You can try again.'
-      : error instanceof DOMException && native ? `The passkey prompt did not complete (${error.name}${error.message ? ': ' + error.message : ''}). If your passkey manager just saved this passkey, wait a moment and try again.`
-      : error instanceof Error ? error.message : 'Adding the device is unavailable. Check again.', true);
+    if (error instanceof DOMException && native) {
+      const feedback = nativePasskeyError(error, native.signal.aborted);
+      message(feedback.message, feedback.state === 'error');
+    } else message(error instanceof Error ? error.message : 'Adding the device is unavailable. Check again.', true);
   } finally { native = null; busy = false; if (!disposed) render(); }
 }
 async function assertion(challenge: string, rpId: string) {
@@ -74,10 +77,8 @@ async function advance() {
   if (!view) return;
   if (view.phase === 'awaiting_registration' && view.registration) {
     message('Create the passkey in the prompt.'); native = new AbortController(); render();
-    // A name that tells passkeys apart later, like the signup's: the site, then when it was made here.
-    const now = new Date(), passkeyName = view.passkeyName
-      ?? `${location.hostname} ${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ${now.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
-    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Juicebox' },
+    const passkeyName = view.passkeyName ?? defaultPasskeyName();
+    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
       user: { id: decode(view.registration.userHandle), name: passkeyName, displayName: passkeyName },
       challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },

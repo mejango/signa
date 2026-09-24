@@ -150,6 +150,29 @@ describe('central payment review browser, virtual authenticator', () => {
     await page.locator('#payment-approve').click(); await approved(); expect(approvals()).toHaveLength(1);
   });
 
+  it('offers a read-only retry after a browser blocks the native prompt, then requires explicit approval', async () => {
+    await load();
+    await page.evaluate(() => {
+      const original = navigator.credentials.get;
+      navigator.credentials.get = async () => {
+        navigator.credentials.get = original;
+        throw new DOMException('Browser diagnostic: https://www.w3.org/TR/webauthn-2/', 'SecurityError');
+      };
+    });
+    await page.locator('#payment-approve').click(); await status('error');
+    expect(await page.locator('#payment-status').textContent()).toBe('This browser blocked the passkey request. Open the original secure account page and try again.');
+    expect(await page.locator('#payment-retry').isVisible()).toBe(true);
+    expect(approvals()).toHaveLength(0); expect(review.status).toBe('pending');
+    const reads = requests.filter(request => request.path === `/wallet/payment-reviews/${reviewId}`).length;
+    await page.locator('#payment-retry').click(); await status('ready');
+    expect(requests.filter(request => request.path === `/wallet/payment-reviews/${reviewId}`)).toHaveLength(reads + 1);
+    expect(approvals()).toHaveLength(0); expect(review.status).toBe('pending');
+    expect(await page.evaluate(() => (window as any).passkeyRequests)).toEqual([]);
+    expect(await page.locator('#payment-approve').isVisible()).toBe(true);
+    await page.locator('#payment-approve').click(); await approved();
+    expect(approvals()).toHaveLength(1); expect(errors).toEqual([]);
+  });
+
   it('recovers a committed approval after a truncated response without a second prompt or mutation', async () => {
     await load(); dropApproval = true; await page.locator('#payment-approve').click(); await status('unknown');
     expect(await page.locator('#payment-approve').isVisible()).toBe(false);

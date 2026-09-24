@@ -105,10 +105,32 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       await contains('Check the original recovery');
       await page.getByRole('button', { name: 'Check again', exact: true }).click();
       await contains('Create your replacement passkey'); expect(begins).toBe(1);
-      await page.getByRole('button', { name: 'Create replacement passkey', exact: true }).click();
+      // Browser diagnostics can include long URLs and cannot distinguish a dismissed prompt
+      // from an unavailable passkey. Keep retries explicit and the current recovery intact.
+      for (const [name, text, state] of [
+        ['NotAllowedError', 'We couldn’t finish with your passkey.', 'ready'],
+        ['SecurityError', 'This browser blocked the passkey request.', 'error'],
+        ['NotSupportedError', 'This browser or passkey manager cannot complete this request.', 'error'],
+      ] as const) {
+        await page.evaluate(name => {
+          const original = navigator.credentials.create;
+          navigator.credentials.create = async () => {
+            navigator.credentials.create = original;
+            throw new DOMException('Browser diagnostic: https://www.w3.org/TR/webauthn-2/#sctn-privacy-considerations-client', name);
+          };
+        }, name);
+        await page.locator('#recovery-next').click(); await contains(text);
+        expect(await page.locator('#wallet-status').getAttribute('data-state')).toBe(state);
+        expect(await page.locator('#wallet-status').textContent()).not.toMatch(/Browser diagnostic|https:|NotAllowedError|SecurityError|NotSupportedError/);
+        expect(await page.locator('#recovery-next').isEnabled()).toBe(true);
+        expect(begins).toBe(1); expect(registrations).toHaveLength(0);
+      }
+      await page.locator('#recovery-next').click();
       await page.getByRole('button', { name: 'Cancel prompt' }).click(); await contains('cancelled');
+      expect(await page.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
+      expect(registrations).toHaveLength(0);
       await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: true });
-      await page.getByRole('button', { name: 'Create replacement passkey', exact: true }).click();
+      await page.locator('#recovery-next').click();
       await contains('Check the original recovery');
       await page.getByRole('button', { name: 'Check again', exact: true }).click(); await contains('Prove access');
       expect(registrations).toHaveLength(2); expect(registrations[0]).toBe(registrations[1]);

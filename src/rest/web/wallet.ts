@@ -1,3 +1,4 @@
+import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
 import { qrSvg } from "./qr.js";
 import { checkedRedirect, framed, listenForTheme } from "./walletFramed.js";
@@ -158,8 +159,9 @@ async function run(action: () => Promise<void>) {
       sessionKnown = false;
     } else if (error instanceof HttpFailure && error.code === 'WALLET_HANDOFF_UNCLAIMED') {
       setStatus('error', 'This connection belongs to another tab or has expired. Return to the app and connect again.');
-    } else if (error instanceof DOMException && ["NotAllowedError", "AbortError"].includes(error.name) && nativePrompt) {
-      setStatus("ready", "Sign-in cancelled. You can try your passkey again.");
+    } else if (error instanceof DOMException && nativePrompt) {
+      const feedback = nativePasskeyError(error, nativePrompt.signal.aborted);
+      setStatus(feedback.state, feedback.message);
     } else if (error instanceof InvalidResponse) {
       setStatus("error", "This wallet request could not be verified. Return to the app and start again.");
       // An unverified result never makes a previously unknown session safe to replace.
@@ -253,7 +255,7 @@ async function login() {
   if (framed && intent) return framedSignIn();
   if (pending) return completeLogin();
   if (!window.isSecureContext || !navigator.credentials?.get) {
-    setStatus("error", "This browser cannot use passkeys here. Open Center in a browser that supports passkeys."); return;
+    setStatus("error", "This browser cannot use passkeys here. Open Signa in a browser that supports passkeys."); return;
   }
   setStatus("checking", "Preparing your passkey sign-in…");
   const begun = await request(`${base}/login/begin`, {}), publicKey = record(begun.publicKey);
@@ -301,7 +303,7 @@ async function framedSignIn() {
   if (!intent) throw new InvalidResponse();
   if (frameTooSmall() || !signInVisible) { setStatus("ready", "Open this sign-in as a page of its own to continue."); return; }
   if (!window.isSecureContext || !navigator.credentials?.get) {
-    setStatus("error", "This browser cannot use passkeys here. Open Center in a browser that supports passkeys."); return;
+    setStatus("error", "This browser cannot use passkeys here. Open Signa in a browser that supports passkeys."); return;
   }
   future(intent.expiresAtMs);
   setStatus("checking", "Preparing your passkey sign-in…");
@@ -321,7 +323,7 @@ async function framedSignIn() {
     credentialId: encode(credential.rawId), userHandle: assertion.userHandle ? encode(assertion.userHandle) : null,
     authenticatorData: encode(assertion.authenticatorData), clientDataJSON: encode(assertion.clientDataJSON), signature: encode(assertion.signature) } },
     undefined, 100_000);
-  setStatus("returning", "Returning to your Juicebox app…");
+  setStatus("returning", "Returning to your app…");
   location.replace(appReturn(result));
 }
 /** The app's return, checked; anything else is an unverifiable response, never a navigation. */
@@ -332,7 +334,7 @@ async function issue() {
   nextRetry = issue;
   if (!intent || !session) throw new InvalidResponse();
   future(intent.expiresAtMs); future(session.expiresAtMs);
-  setStatus("returning", "Returning to your Juicebox app…");
+  setStatus("returning", "Returning to your app…");
   // Issuing needs fresh on-chain authority; after idle that is a hosted refresh of ~25 s.
   const result = await readyRequest(`${base}/authorize/issue`, { intentId: intent.id }, csrf, undefined, 90, 1000);
   location.replace(appReturn(result));

@@ -112,9 +112,9 @@ export async function exerciseRecoveryBrowser(options: {
   await page.setViewportSize({ width: 320, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: new URL('recovery-mobile.png', out).pathname, fullPage: true });
-  await page.getByRole('link', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('link', { name: 'Signa in', exact: true }).click();
   // A direct landing visit lands on the signup page; its "log in" link, or the finished signup's button, performs the sign-in.
-  await page.getByRole('link', { name: 'log in' }).or(page.getByRole('button', { name: 'Log in', exact: true })).click();
+  await page.getByRole('link', { name: 'Signa in' }).or(page.getByRole('button', { name: 'Signa in', exact: true })).click();
   await contains('You are signed in');
   expect((await page.locator('#wallet-address').textContent())!.toLowerCase()).toBe(kit.walletAddress.toLowerCase());
   expect(await page.locator('#wallet-passkey').textContent()).toBe('Juicebox replacement');

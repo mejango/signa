@@ -94,7 +94,7 @@ describe("Signa wallet API documentation", () => {
     expect(html).toContain(`npm install ${origin}/api/client/juicebox-center-client-0.1.0.tgz`);
     expect(html).toContain('href="https://juicebox.center/api"');
     expect(html).toContain('href="https://juicebox.center/api/docs/client"');
-    expect(html).toContain('rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg"');
+    expect(html).toContain('rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg?v=signa"');
     for (const text of ["/api/v1/accounts/me", "/api/v1/user-operations", "Request body", "Response 201", "&lt;img"])
       expect(html).toContain(text);
     for (const text of ["<img", "Choose a data source", 'href="/api/v1/catalog/', 'class="route">/api/v1/projects/', 'href="/"', "·"])

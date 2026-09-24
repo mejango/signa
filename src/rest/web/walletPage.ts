@@ -1,10 +1,11 @@
+import { BRAND_ICON, BRAND_CSS } from '../../branding.js';
 /** Dedicated credential surface. All behavior and styles are served as same-origin assets. */
 export function walletPage(signup = false, recovery = false, base = '/wallet'): string {
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer"><title>Your account | Juicebox</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Your account | Signa</title>
 <link rel="stylesheet" href="${base}/assets/wallet.css"><script type="module" src="${base}/assets/wallet.js"></script></head>
-<body><main><a class="brand" href="${base || '/'}">JUICEBOX CENTER</a>
+<body><main><a class="brand" href="${base || '/'}">${BRAND_ICON} SIGNA</a>
 <h1>Your account</h1>
 <p id="wallet-destination" hidden></p>
 <p id="wallet-status" role="status" aria-live="polite" aria-atomic="true" data-state="loading">Checking your wallet…</p>
@@ -18,12 +19,12 @@ export function walletPage(signup = false, recovery = false, base = '/wallet'): 
 <p id="wallet-device-hint">Open this link on the other device. It creates its own passkey for this account; you approve it here.</p>
 <div id="wallet-device-code" class="qr"></div><p><a id="wallet-device-link" target="_blank" rel="noopener"></a></p>
 <div class="actions"><button id="wallet-device-approve" type="button" hidden>Approve this device</button></div></section></section>
-<div class="actions"><button id="wallet-signin" type="button" hidden>Sign in</button>
+<div class="actions"><button id="wallet-signin" type="button" hidden>Signa in</button>
 <button id="wallet-retry" type="button" hidden>Retry</button>
 <button id="wallet-device-cancel" class="link" type="button" hidden>Close</button>
 <button id="wallet-cancel" type="button" class="link" hidden>Cancel</button>
 <button id="wallet-logout" type="button" class="link" hidden>Sign out</button></div>
-<div id="wallet-links">${signup ? `<a id="wallet-create" href="${base}/create" hidden>Sign up</a>` : ''}
+<div id="wallet-links">${signup ? `<a id="wallet-create" href="${base}/create" hidden>Signa up</a>` : ''}
 ${recovery ? `<a id="wallet-recover" href="${base}/recover" hidden>Lost your account?</a>` : ''}</div>
 <p id="wallet-open-row"><a id="wallet-open" href="${base || '/'}" hidden>Open as a page</a></p>
 <noscript><p>Enable JavaScript to sign in with your passkey.</p></noscript>
@@ -31,7 +32,8 @@ ${recovery ? `<a id="wallet-recover" href="${base}/recover" hidden>Lost your acc
 }
 
 export function walletCss(): string {
-  return `:root{--wallet-font:ui-monospace,SFMono-Regular,Consolas,monospace;--wallet-bg:#f5f4ee;--wallet-fg:#172019;--wallet-muted:#4b5a4e;--wallet-line:#172019;--wallet-accent:#172019;--wallet-accent-fg:#fff;--wallet-radius:0;--wallet-inset:calc(1.6rem - 1px + 1.75rem);color-scheme:light;font-family:var(--wallet-font);color:var(--wallet-fg);background:var(--wallet-bg)}
+  return `${BRAND_CSS}
+:root{--wallet-font:ui-monospace,SFMono-Regular,Consolas,monospace;--wallet-bg:#f5f4ee;--wallet-fg:#172019;--wallet-muted:#4b5a4e;--wallet-line:#172019;--wallet-accent:#172019;--wallet-accent-fg:#fff;--wallet-radius:0;--wallet-inset:calc(1.6rem - 1px + 1.75rem);color-scheme:light;font-family:var(--wallet-font);color:var(--wallet-fg);background:var(--wallet-bg)}
 *{box-sizing:border-box}body{margin:0}main{width:min(100%,38rem);margin:clamp(1rem,10vh,6rem) auto;padding:1.5rem}
 html.framed body{visibility:hidden}html.framed.themed body{visibility:visible}html.framed main{position:relative;margin:0 auto;padding:1.25rem var(--wallet-inset)}html.framed .brand{display:none}html.framed h1{margin-top:.5rem;padding-right:2rem;font-family:var(--wallet-heading-font,var(--wallet-font))}html.framed #wallet-status{min-height:0;margin:1rem 0}html.framed #wallet-status::before{left:calc(-1 * var(--wallet-inset));width:var(--wallet-inset)}html.framed #wallet-links{margin-top:1rem}
 [hidden]{display:none!important}.brand{color:inherit;font-size:.8rem;letter-spacing:.06em}h1{font-size:clamp(1.6rem,6vw,2.2rem);line-height:1.15;margin:2.5rem 0 1rem}

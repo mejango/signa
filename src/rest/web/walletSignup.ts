@@ -1,3 +1,5 @@
+import { nativePasskeyError } from './walletPasskeyError.js';
+import { defaultPasskeyName } from './passkeyName.js';
 import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'viem';
 import type { createLocalWalletSignup } from '../wallet/signup.js';
 import { base } from './walletBase.js';
@@ -142,10 +144,7 @@ function render() {
   if (stranded) message('');
   form.hidden = !known || (!!view && !stranded) || loggingIn; details.hidden = !view || stranded;
   // A default name that tells passkeys apart later: the site, then when it was made.
-  if (!form.hidden && !name.value) {
-    const now = new Date();
-    name.value = `${location.hostname} ${now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} ${now.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`;
-  }
+  if (!form.hidden && !name.value) name.value = defaultPasskeyName();
   el<HTMLFieldSetElement>('recovery-method').disabled = engaged; // Inside the form: gone once signup begins.
   const showKit = kitPhase && mode() === 'kit';
   el('recovery-kit').hidden = !showKit;
@@ -169,7 +168,7 @@ function render() {
   el('signup-address').textContent = view?.walletAddress ?? 'Not created yet';
   const label = view?.phase === 'awaiting_registration' ? 'Create passkey'
     : view?.phase === 'awaiting_possession' || view?.phase === 'awaiting_deployment_approval' ? 'Create account'
-    : view?.phase === 'awaiting_activation' ? 'Continue' : view?.phase === 'deploying' && mode() === 'kit' ? 'Continue' : view?.phase === 'ready_to_sign_in' ? 'Log in' : view?.phase === 'expired' ? 'Sign up' : null;
+    : view?.phase === 'awaiting_activation' ? 'Continue' : view?.phase === 'deploying' && mode() === 'kit' ? 'Continue' : view?.phase === 'ready_to_sign_in' ? 'Signa in' : view?.phase === 'expired' ? 'Signa up' : null;
   next.hidden = !label || !!pending || stranded; next.textContent = label; next.disabled = engaged || view?.phase === 'deploying';
   if (view && ['awaiting_possession', 'awaiting_deployment_approval', 'awaiting_activation'].includes(view.phase)
     && kitMode() && kitSavedWallet !== view.walletAddress) next.disabled = true;
@@ -212,14 +211,12 @@ async function run(action: () => Promise<void>, quiet = false) {
       pending = null;
       try { accept(await request('state')); } catch { /* Resume with a fresh proof if the cookie is no longer valid. */ }
     }
-    message(error instanceof DOMException && native && (error.name === 'AbortError' || (error.name === 'NotAllowedError' && native.signal.aborted))
-      ? 'Passkey prompt cancelled. You can try again.'
-      // A browser (or a framing app) that does not let a passkey be made inside another app's page.
-      : error instanceof DOMException && native && inFrame() && error.name === 'NotAllowedError' && view?.phase === 'awaiting_registration'
-      ? 'This browser will not create a passkey inside another app. Open Fullscreen below to sign up on a page of its own.'
-      : error instanceof DOMException && native
-      ? `The passkey prompt did not complete (${error.name}${error.message ? ': ' + error.message : ''}). If your passkey manager just saved this passkey, wait a moment and try again.`
-      : error instanceof DOMException && error.name === 'AbortError'
+    if (error instanceof DOMException && native) {
+      const feedback = nativePasskeyError(error, native.signal.aborted);
+      const fullscreen = inFrame() && error.name === 'NotAllowedError' && !native.signal.aborted && view?.phase === 'awaiting_registration'
+        ? ' You can also open Fullscreen below to try on a page of its own.' : '';
+      message(feedback.message + fullscreen, feedback.state === 'error');
+    } else message(error instanceof DOMException && error.name === 'AbortError'
       ? 'The account service took too long to answer. Try again.'
       : error instanceof Error ? error.message : 'Signup is unavailable. Check the original signup again.', true);
   } finally { native = null; busy = false; engaged = false; if (!disposed) render(); }
@@ -259,7 +256,7 @@ async function advance() {
     csrf = '';
   } else if (view.phase === 'awaiting_registration' && view.registration) {
     message('Create the passkey in the prompt.'); native = new AbortController(); render();
-    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Juicebox' },
+    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
       user: { id: decode(view.registration.userHandle), name: view.passkeyName, displayName: view.passkeyName },
       challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
@@ -338,7 +335,7 @@ form.addEventListener('submit', event => { event.preventDefault(); void run(asyn
   if (view?.phase === 'awaiting_registration') await advance();
 }); });
 el('recovery-method').addEventListener('change', render);
-const backupFileName = 'juicebox-account-backup.json';
+const backupFileName = 'signa-account-backup.json';
 el('recovery-download').addEventListener('click', () => { void run(async () => {
   if (!recoverySecret) throw new Error('Restore your backup password first.');
   const encoded = serializeWalletRecoveryKit(recoverySecret, kitIdentity());
@@ -353,7 +350,7 @@ el('recovery-share').addEventListener('click', () => { void run(async () => {
   if (!recoverySecret) throw new Error('Restore your backup password first.');
   const file = new File([serializeWalletRecoveryKit(recoverySecret, kitIdentity())], backupFileName, { type: 'application/json' });
   if (!navigator.canShare({ files: [file] })) throw new Error('This device cannot share files. Save the backup file instead.');
-  try { await navigator.share({ files: [file], title: 'Juicebox account backup' }); }
+  try { await navigator.share({ files: [file], title: 'Signa account backup' }); }
   catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw new Error('Sharing cancelled. Save the backup file, or share again.');
     throw new Error('Your browser would not open its share sheet. Save the backup file instead.');
