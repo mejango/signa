@@ -256,7 +256,7 @@ async function advance() {
     if (inFrame()) { view = null; flowToken = ''; } else await send('restart', {});
     csrf = '';
   } else if (view.phase === 'awaiting_registration' && view.registration) {
-    message('Create the passkey in the prompt.'); native = new AbortController(); render();
+    message('Use Face ID, Touch ID, a screen lock, or a security key.'); native = new AbortController(); render();
     const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
       user: { id: decode(view.registration.userHandle), name: view.passkeyName, displayName: view.passkeyName },
       challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],

@@ -76,7 +76,7 @@ async function assertion(challenge: string, rpId: string) {
 async function advance() {
   if (!view) return;
   if (view.phase === 'awaiting_registration' && view.registration) {
-    message('Create the passkey in the prompt.'); native = new AbortController(); render();
+    message('Use Face ID, Touch ID, a screen lock, or a security key.'); native = new AbortController(); render();
     const passkeyName = view.passkeyName ?? defaultPasskeyName();
     const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
       user: { id: decode(view.registration.userHandle), name: passkeyName, displayName: passkeyName },

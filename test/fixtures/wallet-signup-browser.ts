@@ -160,7 +160,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     await page.getByRole('button', { name: 'Cancel prompt' }).click();
     await contains('cancelled');
     // Starting over forgets the continuation and shows the clean form again.
-    await page.getByRole('button', { name: 'Start over' }).click();
+    await page.getByRole('button', { name: 'Reset signup' }).click();
     await expect.poll(() => page.getByLabel('Passkey name').isVisible()).toBe(true);
     expect((await context.cookies()).some(item => item.name === walletSignupCookie)).toBe(false);
     await fillForm();
@@ -217,7 +217,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     // Nothing to press while creation runs: the events stream (or the poll behind it) carries the
     // view, so the kit appears without another click. A restart here would orphan a paid creation.
     expect(await page.getByRole('button', { name: 'Check signup' }).isVisible()).toBe(false);
-    expect(await page.getByRole('button', { name: 'Start over' }).isVisible()).toBe(false);
+    expect(await page.getByRole('button', { name: 'Reset signup' }).isVisible()).toBe(false);
     const cookie = (await context.cookies()).find(item => item.name === walletSignupCookie)!;
     const flow = (await flows.authenticate(cookie.value))!, deploymentId = flow.deploymentId!;
     await signup.tick();
@@ -242,7 +242,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       // After a reload, continue requires the saved backup for this exact account.
       expect(await page.locator('#recovery-restore-box').isVisible()).toBe(true);
-      expect(await page.getByRole('link', { name: 'start over' }).isVisible()).toBe(true);
+      expect(await page.getByRole('link', { name: 'reset signup' }).isVisible()).toBe(true);
       expect(await page.locator('#signup-recovery-label').textContent()).toBe('Backup password address');
       expect((await page.locator('#signup-recovery').textContent())?.toLowerCase()).toBe(String(kit.recoveryOwner).toLowerCase());
       expect(await page.getByRole('button', { name: 'Continue', exact: true }).isDisabled()).toBe(true);
