@@ -28,7 +28,7 @@ const steps: Record<WalletRecoveryView['phase'], string> = {
   awaiting_rotation_approval: 'Review and approve replacement of the lost passkey.', rotating: 'Replacing your passkey. Check again for the transaction results.',
   rotation_failed: 'The replacement did not complete. Check again before approving a new attempt.',
   awaiting_activation: 'Your replacement passkey is in place. Continue to finish setting up your account.',
-  preparing_sign_in: 'Preparing your login. This can take up to a minute…',
+  preparing_sign_in: 'Preparing to sign in. This can take up to a minute…',
   ready_to_sign_in: 'Your replacement passkey is ready. Sign in with it.', expired: 'This unfinished recovery expired. Its replacement passkey is not active.',
 };
 // While work is in flight the status line's mark spins (Croptop's text ticker) instead of showing the lightning.

@@ -6,7 +6,7 @@ export function walletPaymentPage(base = '/wallet'): string {
 <meta name="referrer" content="no-referrer"><title>Review payment | Signa</title>
 <link rel="stylesheet" href="${base}/assets/wallet.css"><link rel="stylesheet" href="${base}/assets/wallet-payment.css">
 <script type="module" src="${base}/assets/wallet-payment.js"></script></head>
-<body><main><a class="brand" href="${base || '/'}">${BRAND_ICON} SIGNA</a><h1>Review payment</h1>
+<body><main><a class="brand" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a><h1>Review payment</h1>
 <p id="payment-status" role="status" aria-live="polite" aria-atomic="true" data-state="loading">Checking this payment…</p>
 <section id="payment-review" aria-label="Payment details" hidden>
 <p id="payment-amount" class="amount"></p>

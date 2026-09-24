@@ -70,7 +70,7 @@ describe("served Center signup page", () => {
       await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your passkey.');
       expect(await signup.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
       expect(await signup.locator('#wallet-status').textContent()).not.toMatch(/NotAllowedError|https:/);
-      await signup.getByRole('button', { name: 'Create passkey', exact: true }).click();
+      await signup.getByRole('button', { name: 'Signa up', exact: true }).click();
       await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your passkey.');
       expect(begins).toBe(1);
     } finally { await context.close(); }
@@ -100,12 +100,12 @@ describe("served Center signup page", () => {
     await page.setViewportSize({ width: 1200, height: 900 });
   });
 
-  it("hides the signup form while a log-in is in progress, and offers it again after a failure", async () => {
+  it("hides the signup form while sign-in is in progress, and offers it again after a failure", async () => {
     await page.goto(`${origin}/wallet`);
     await expect.poll(() => page.locator("#signup-form").isVisible()).toBe(true);
     await page.locator("#signup-resume").click();
     await expect.poll(() => page.locator("#signup-form").isHidden()).toBe(true);
-    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("Logging in");
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("Signing in");
     expect(await page.locator("#signup-form").isHidden()).toBe(true);
     expect(await page.locator("#signup-resume").isHidden()).toBe(true);
     // On a phone every line of text shares one left edge and the status mark (a ::before

@@ -170,11 +170,11 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     await contains('cancelled');
     // A begun signup without a passkey yet still offers "log in" for someone who already has an account.
     expect(await page.getByRole('link', { name: 'Signa in' }).isVisible()).toBe(true);
-    await page.getByRole('button', { name: 'Create passkey', exact: true }).click();
+    await page.getByRole('button', { name: 'Signa up', exact: true }).click();
     await page.getByRole('button', { name: 'Cancel prompt' }).click();
     await contains('cancelled');
     await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: true });
-    await page.getByRole('button', { name: 'Create passkey', exact: true }).click();
+    await page.getByRole('button', { name: 'Signa up', exact: true }).click();
     let encoded = '';
     if (kitMode) {
       await contains('Check the original signup');

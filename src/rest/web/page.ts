@@ -9,7 +9,7 @@ export function accountsPage(options: { scriptPath?: string; stylePath?: string;
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
 <title>Accounts | Signa</title><link rel="icon" type="image/svg+xml" href="${escapeHtml(options.faviconPath ?? "/favicon.svg")}"><link rel="stylesheet" href="${escapeHtml(options.stylePath ?? "/assets/accounts.css")}"><script type="module" src="${escapeHtml(options.scriptPath ?? "/assets/accounts.js")}"></script></head>
 <body data-audience="${escapeHtml(options.audience ?? "")}"><main>
-<header><a href="${escapeHtml(referenceOrigin)}/api">${BRAND_ICON} SIGNA</a><span>V6 / ACCOUNTS</span></header>
+<header><a class="brand" href="${escapeHtml(referenceOrigin)}/api">${BRAND_ICON} <span class="brand-label">SIGNA</span></a><span>V6 / ACCOUNTS</span></header>
 <h1>Your account.<br>Your bots.</h1>
 <p class="lede">Sign in, choose what your app can do, and download its API connection. Your account stays in control of transaction approvals.</p>
 <nav class="section-nav" aria-label="Account sections"><a href="#wallet-heading">Signa in</a><a href="#bots-heading">API access</a><a href="#smart-heading">Optional transaction wallet</a><a id="session-nav" href="#session-heading" hidden>Bot permissions</a><a href="${escapeHtml(referenceOrigin)}/api">API docs</a></nav>

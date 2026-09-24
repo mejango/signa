@@ -6,7 +6,7 @@ export function walletRecoveryPage(options: { base?: string } = {}) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>Get back into your account | Signa</title>
 <link rel="stylesheet" href="${base}/assets/wallet-recovery.css"><script type="module" src="${base}/assets/wallet-recovery.js"></script></head>
-<body><main><a class="brand" id="wallet-back" href="${base || '/'}">${BRAND_ICON} SIGNA</a>
+<body><main><a class="brand" id="wallet-back" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a>
 <h1>Get back into your account</h1>
 <p>Replace a lost passkey with your backup file, your backup password, or the wallet you chose at signup. Your account address stays the same.</p>
 <p id="wallet-status" role="status" aria-live="polite" aria-atomic="true">Checking…</p>

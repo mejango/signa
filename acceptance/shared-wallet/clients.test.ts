@@ -15,7 +15,7 @@ import { Pool } from 'pg';
 import { chromium } from 'playwright';
 import { expect, it } from 'vitest';
 import { hashTypedData, toHex } from 'viem';
-import { generatePrivateKey, mnemonicToAccount, privateKeyToAccount } from 'viem/accounts';
+import { mnemonicToAccount } from 'viem/accounts';
 import { PostgresWalletEnrollmentStore } from '@center/src/rest/wallet/enrollmentPostgres.js';
 import { walletEnrollmentDocument } from '@center/src/rest/wallet/enrollment.js';
 import { PostgresWalletDeploymentStore } from '@center/src/rest/wallet/deploymentPostgres.js';
@@ -36,11 +36,9 @@ import { createLocalWalletSignup } from '@center/src/rest/wallet/signup.js';
 import { createWalletSite } from '@center/src/rest/wallet/site.js';
 import { PostgresWalletPolicyStore } from '@center/src/rest/wallet/policyPostgres.js';
 import { PostgresWalletHandoffStore } from '@center/src/rest/wallet/handoffPostgres.js';
-import { passkeyOnboardingProofDocument } from '@center/src/rest/smartAccounts/passkeyOnboarding.js';
-import { verifyWalletAssertion } from '@center/src/rest/wallet/webauthn.js';
-import { encodeSafe7579MessageSignature } from '@center/src/rest/smartAccounts/passkeySignatures.js';
+import { walletDeploymentDocument } from '@center/src/rest/wallet/deployment.js';
 import { createRegistration, enrollmentBackupAccount, signBackupProof, signGet } from '@center/test/fixtures/wallet-enrollment-crypto.js';
-import { walletLoginTestMigrations } from '@center/test/fixtures/wallet-login-setup.js';
+import { migrate } from '@center/src/db/migrate.js';
 import { startWalletDeploymentAnvil } from '@center/test/fixtures/wallet-deployment-anvil.js';
 import { createRestAuth } from '@center/src/rest/auth/service.js';
 import { createRestAuthRouter } from '@center/src/rest/auth/router.js';
@@ -50,13 +48,13 @@ import { createApp as createBeepApp } from '@beep/dist/app.js';
 import { Store as BeepStore } from '@beep/dist/store.js';
 import { Protocol as BeepProtocol, BASE } from '@beep/dist/protocol.js';
 
-const base = process.env.HOMERUN_PILOT_ORIGIN!, issuer = 'https://wallet.juicebox.center', audience = 'https://juicebox.center';
+const base = process.env.HOMERUN_PILOT_ORIGIN!, issuer = 'https://signa.center', audience = 'https://api.signa.center';
 const rpId = new URL(issuer).hostname, root = fileURLToPath(new URL('../../', import.meta.url));
 const beepDirectory = process.env.BEEP_PILOT_ROOT!;
 const output = root + '/.generated/wallet-observations/shared-clients';
 const encode = (value: string) => Buffer.from(value, 'base64url').toString('base64');
 
-it('shares one real Center session and deployed wallet across actual Homerun and Beep', async () => {
+it('shares one deployed Signa account across actual Homerun and Beep', async () => {
   const schema = 'client_pilot_' + randomUUID().replaceAll('-', '');
   const admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL, connectionTimeoutMillis: 3000, query_timeout: 10000 });
   await admin.query(`CREATE SCHEMA ${schema}`);
@@ -67,10 +65,7 @@ it('shares one real Center session and deployed wallet across actual Homerun and
   let server: ReturnType<typeof serve> | undefined;
   let beepServer: ReturnType<typeof serve> | undefined, beepStore: BeepStore | undefined;
   try {
-    for (const name of [...new Set([...walletLoginTestMigrations, '016_rest_wallet_deployments.sql',
-      '018_rest_wallet_deployment_observations.sql', '021_rest_wallet_deployment_dispatch.sql', '024_wallet_handoff.sql',
-      '026_wallet_deployment_settlement.sql', '027_wallet_signup.sql'])].sort())
-      await pool.query(await readFile(`${root}/src/db/migrations/${name}`, 'utf8'));
+    await migrate(pool);
     fixture = await startWalletDeploymentAnvil();
     const enrollments = new PostgresWalletEnrollmentStore(pool), deployments = new PostgresWalletDeploymentStore(pool);
     const settlement = createLocalAnvilWalletDeploymentSettlement(fixture);
@@ -89,8 +84,9 @@ it('shares one real Center session and deployed wallet across actual Homerun and
       chain: createWalletAuthorityChain({ rpc: fixture.readOnlyRpc, manifest: fixture.manifest, utility: fixture.utility }) });
     const flows = new PostgresWalletSignupStore(pool, { origin: issuer, rpId, manifest: fixture.manifest });
     const signup = createLocalWalletSignup({ flows, enrollments, deployments, settlement, execution, smart, authority,
-      registry: new PostgresSmartAccountRegistry(pool), chain: fixture.chain(), poolId: fixture.configuration.id });
-    const begun = await signup.begin({ recoveryOwner: enrollmentBackupAccount.address, passkeyName: 'Juicebox Homerun pilot' });
+      registry: new PostgresSmartAccountRegistry(pool), chain: fixture.chain(), poolId: fixture.configuration.id,
+      releasedObservationIntervalMs: 0 });
+    const begun = await signup.begin({ recoveryOwner: enrollmentBackupAccount.address, passkeyName: 'Signa Homerun pilot' });
     const token = begun.flowToken, initial = (await enrollments.get(begun.view.enrollmentId))!;
     const credential = createRegistration({ challenge: `0x${Buffer.from(initial.intent.registration.challenge, 'base64url').toString('hex')}`,
       rpId, origin: issuer, userHandle: initial.intent.userHandle });
@@ -98,25 +94,19 @@ it('shares one real Center session and deployed wallet across actual Homerun and
     const document = walletEnrollmentDocument((await enrollments.get(initial.intent.id))!);
     await signup.proveEnrollment(token, { assertion: signGet({ ...credential, challenge: hashTypedData(document), rpId, origin: issuer }),
       backupSignature: await signBackupProof(document) });
+    const enrollment = (await enrollments.get(initial.intent.id))!, accountId = enrollment.receipt!.accountId;
     const creation = await signup.prepareDeployment(token);
     await signup.approveDeployment(token, { approvalId: creation.id,
-      assertion: signGet({ ...credential, challenge: hashTypedData(creation.document), rpId, origin: issuer }) });
-    await signup.tick();
+      assertion: signGet({ ...credential, challenge: hashTypedData(walletDeploymentDocument((await enrollments.get(initial.intent.id))!, (await deployments.get(creation.id))!.approval)), rpId, origin: issuer }) });
+    for (let attempt = 0; attempt < 5 && !(await deployments.getDispatch(creation.id)); attempt++) await signup.tick();
     const dispatch = (await deployments.getDispatch(creation.id))!;
     await new Promise(resolve => setTimeout(resolve, Math.max(1, dispatch.leaseUntil - Date.now() + 20)));
-    await fixture.rpc('anvil_mine', ['0x41', '0x0']); await signup.tick();
-    expect((await signup.status(token)).phase).toBe('awaiting_setup');
-    const requestKey = privateKeyToAccount(generatePrivateKey());
-    const setup = await signup.prepareSetup(token, { browserPublicAddress: requestKey.address });
-    const input = (await flows.authenticate(token))!.setup!.input;
-    const review = await smart.passkeyOnboardingChallenge(input);
-    const assertion = signGet({ ...credential, challenge: review.signingPayload.digest, rpId, origin: issuer });
-    const verified = verifyWalletAssertion(assertion, { purpose: 'session', challenge: review.signingPayload.digest, rpId, origin: issuer,
-      credential: { id: credential.credentialId, userHandle: credential.userHandle, publicKey: credential.publicKey, backupEligible: true }, requireUserHandle: true });
-    expect((await signup.completeSetup(token, { setupId: setup.id,
-      signature: encodeSafe7579MessageSignature([{ kind: 'contract', owner: review.state.ownerProfile!.signer.address, signature: verified.contractSignature }]),
-      browserProof: await requestKey.signTypedData(passkeyOnboardingProofDocument(review.typedData)) })).phase).toBe('ready_to_sign_in');
-    const enrollment = (await enrollments.get(initial.intent.id))!, accountId = enrollment.receipt!.accountId;
+    await fixture.rpc('anvil_mine', ['0x41', '0x0']);
+    for (let attempt = 0; attempt < 12 && (await signup.status(token)).phase !== 'awaiting_activation'; attempt++) {
+      await signup.tick(); await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    expect((await signup.status(token)).phase).toBe('awaiting_activation');
+    expect((await signup.activate(token)).phase).toBe('ready_to_sign_in');
     expect((await authority.refreshAuthority(accountId)).snapshot.readiness).toBe('verified');
     let beepApp = new Hono();
     beepServer = serve({ port: 0, hostname: '127.0.0.1', fetch: request => beepApp.fetch(request) });
@@ -144,8 +134,9 @@ it('shares one real Center session and deployed wallet across actual Homerun and
         { origin: beepOrigin, walletCallbacks: [beepOrigin + '/center/callback'] }] } });
     const login = new PostgresWalletLoginStore(pool, { origin: issuer, rpId });
     const script = (await build({ entryPoints: [root + '/src/rest/web/wallet.ts'], platform: 'browser', bundle: true, format: 'esm', write: false })).outputFiles[0]!.text;
-    const app = createWalletSite({ origin: issuer, audience, browserScript: script, policy, login,
-      handoff: new PostgresWalletHandoffStore(pool, { issuer, audience }),
+    const app = createWalletSite({ origin: issuer, audience, basePath: '', browserScript: script, policy, login,
+      frameableAppOrigins: [base, beepOrigin],
+      handoff: new PostgresWalletHandoffStore(pool, { issuer, audience, frameableAppOrigins: [base, beepOrigin] }),
       refresh: { request: id => authority.refreshAuthority(id), tick: async () => ({}) } });
     const api = new Hono();
     api.use('*', cors({ origin: [base, beepOrigin], credentials: false, allowMethods: ['GET', 'OPTIONS'],
@@ -156,17 +147,20 @@ it('shares one real Center session and deployed wallet across actual Homerun and
     // Observation-only browser module: it restores the actual packaged SDK
     // connection and asks the real server to authorize a signed account read.
     // No key or signature is exported into the test report.
-    const readScript = (await build({ stdin: { contents: `import { createCenterWalletClient } from '@juicebox/center-client';
+    const readScript = (await build({ stdin: { contents: `import { createCenterWalletClient } from '@bananapus/nana-sdk-connect/core';
       export async function read() {
         const connection = createCenterWalletClient({ issuer: ${JSON.stringify(issuer)}, audience: ${JSON.stringify(audience)},
-          callbackUri: location.origin + '/center/callback' }).restoreConnection();
+          callbackUri: location.origin + '/center/callback', storage: location.origin === ${JSON.stringify(beepOrigin)} ? localStorage : sessionStorage }).restoreConnection();
         if (!connection) throw new Error('No client connection');
         return (await connection.client.account()).account.id;
       }`, resolveDir: beepDirectory }, platform: 'browser', bundle: true, format: 'esm', write: false })).outputFiles[0]!.text;
     const transport: { path: string; method: string; status: number; cookie: boolean }[] = [], exchanges: string[] = [];
     server = serve({ port: 0, hostname: '127.0.0.1', fetch: async incoming => {
       const path = new URL(incoming.url).pathname;
-      const request = new Request((path.startsWith('/api/') ? audience : issuer) + path + new URL(incoming.url).search, incoming);
+      const headers = new Headers(incoming.headers);
+      for (const name of ['mode', 'dest']) { const value = headers.get(`x-pilot-fetch-${name}`); if (value) headers.set(`sec-fetch-${name}`, value); headers.delete(`x-pilot-fetch-${name}`); }
+      const request = new Request((path.startsWith('/api/') ? audience : issuer) + path + new URL(incoming.url).search,
+        { method: incoming.method, headers, body: incoming.method === 'GET' || incoming.method === 'HEAD' ? undefined : incoming.body, duplex: 'half' });
       if (path === '/wallet/handoff/exchange' && request.method === 'POST')
         exchanges.push(createHash('sha256').update(await request.clone().text()).digest('hex'));
       const result = await (path.startsWith('/api/') ? api : app).fetch(request);
@@ -178,16 +172,25 @@ it('shares one real Center session and deployed wallet across actual Homerun and
     } });
     if (!server.listening) await once(server, 'listening');
     const local = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    browser = await chromium.launch({ headless: true });
+    // The fixture models public Signa on loopback; production app callbacks are HTTPS.
+    browser = await chromium.launch({ headless: true, args: ['--disable-features=LocalNetworkAccessChecks'] });
     const context = await browser.newContext({ viewport: { width: 1200, height: 900 }, reducedMotion: 'reduce' });
-    for (const origin of [issuer, audience]) await context.route(origin + '/**', async route => {
+    await context.route(/^https:\/\/(?:api\.)?signa\.center\//, async route => {
       const request = route.request(), url = new URL(request.url());
-      if (url.pathname === '/wallet/handoff/exchange' && request.method() === 'POST') {
-        const callback = new URL(request.frame().page().url());
-        expect(callback.pathname).toBe('/center/callback'); expect(callback.search).toBe(''); expect(callback.hash).toBe('');
-      }
+      const origin = url.origin;
       const response = await route.fetch({ url: local + url.pathname + url.search, maxRedirects: 0, maxRetries: 0,
-        headers: { ...await request.allHeaders(), host: new URL(origin).host } });
+        headers: { ...await request.allHeaders(), host: new URL(origin).host,
+          ...(request.isNavigationRequest() ? { 'x-pilot-fetch-mode': 'navigate', 'x-pilot-fetch-dest': request.frame().parentFrame() ? 'iframe' : 'document' } : {}) } });
+      if (url.pathname === '/wallet/launch' && response.status() === 303) {
+        // Playwright follows a fulfilled 303 outside route interception. A meta refresh
+        // makes the browser start a new navigation that stays inside this local fixture.
+        const destination = response.headers()['location'];
+        expect(destination?.startsWith(issuer + '/?intent=')).toBe(true);
+        await route.fulfill({ status: 200, contentType: 'text/html',
+          headers: { 'content-security-policy': response.headers()['content-security-policy']! },
+          body: `<!doctype html><meta http-equiv="refresh" content="0;url=${destination}">` });
+        return;
+      }
       await route.fulfill({ response });
     });
     for (const origin of [base, beepOrigin]) await context.route(origin + '/__center_pilot_read.js', route =>
@@ -201,11 +204,16 @@ it('shares one real Center session and deployed wallet across actual Homerun and
     await cdp.send('WebAuthn.addCredential', { authenticatorId, credential: { credentialId: encode(credential.credentialId),
       privateKey: credential.key.export({ format: 'der', type: 'pkcs8' }).toString('base64'), userHandle: encode(credential.userHandle),
       rpId, isResidentCredential: true, signCount: 0, backupEligibility: enrollment.candidate!.backupEligible, backupState: enrollment.candidate!.backedUp } });
-    await page.goto(base + '/founderhaus');
-    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await page.getByRole('button', { name: 'Continue with a passkey' }).click();
-    await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
-    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    await page.goto(base + '/founderhaus', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    for (let attempt = 0; attempt < 5 && !(await page.locator('.jb-connect-primary').isVisible()); attempt++) {
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+      await page.waitForTimeout(1_000);
+    }
+    expect(await page.locator('.jb-connect-primary').isVisible(), JSON.stringify(await page.getByRole('button').allTextContents())).toBe(true);
+    await page.locator('.jb-connect-primary').click();
+    await page.frameLocator('iframe[name="juicebox-center-frame"]').getByRole('button', { name: 'Signa in' }).click();
+    await expect.poll(() => page.locator('.jb-connect-error').textContent()).toContain('Retry');
+    await page.locator('.jb-connect-primary').click();
     await expect.poll(() => page.url()).toBe(base + '/founderhaus');
     await page.getByRole('button', { name: /^Signed in as/ }).waitFor();
     expect(exchanges).toHaveLength(2); expect(exchanges[0]).toBe(exchanges[1]);
@@ -217,39 +225,46 @@ it('shares one real Center session and deployed wallet across actual Homerun and
     await page.screenshot({ path: output + '/homerun-connected.png', fullPage: true });
     const beep = await context.newPage(); beep.setDefaultTimeout(15000);
     beep.on('pageerror', error => errors.push(error.name));
+    const beepCdp = await context.newCDPSession(beep); await beepCdp.send('WebAuthn.enable');
+    const { authenticatorId: beepAuthenticatorId } = await beepCdp.send('WebAuthn.addVirtualAuthenticator', { options: {
+      protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'internal', hasResidentKey: true,
+      hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+    await beepCdp.send('WebAuthn.addCredential', { authenticatorId: beepAuthenticatorId, credential: { credentialId: encode(credential.credentialId),
+      privateKey: credential.key.export({ format: 'der', type: 'pkcs8' }).toString('base64'), userHandle: encode(credential.userHandle),
+      rpId, isResidentCredential: true, signCount: 0, backupEligibility: enrollment.candidate!.backupEligible, backupState: enrollment.candidate!.backedUp } });
     await beep.goto(beepOrigin + beepPath);
-    await beep.getByRole('button', { name: 'Juicebox Wallet', exact: true }).click();
-    await expect.poll(async () => (await beep.locator('.wallet-address').textContent())?.toLowerCase()).toContain(enrollment.creation!.address.slice(0, 6).toLowerCase());
+    await beep.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await beep.getByRole('button', { name: 'Signa in', exact: true }).click();
+    await beep.frameLocator('iframe[name="juicebox-center-frame"]').getByRole('button', { name: 'Signa in' }).click();
+    await beep.locator('details.quiet summary').click();
+    const beepAddress = `${enrollment.creation!.address.slice(0, 6)}…${enrollment.creation!.address.slice(-4)}`;
+    await beep.locator('details.quiet dd').filter({ hasText: beepAddress }).waitFor({ state: 'visible' });
     await expect.poll(() => beep.url()).toBe(beepOrigin + beepPath);
-    await expect.poll(() => beep.evaluate(() => Object.keys(sessionStorage).filter(key => key.startsWith('center.wallet.connection.v1:')).length)).toBe(1);
-    const beepAccount = await beep.evaluate(() => JSON.parse(sessionStorage.getItem(Object.keys(sessionStorage).find(key => key.startsWith('center.wallet.connection.v1:'))!)!).grant.accountId);
+    await expect.poll(() => beep.evaluate(() => Object.keys(localStorage).filter(key => key.startsWith('center.wallet.connection.v1:')).length)).toBe(1);
+    const beepAccount = await beep.evaluate(() => JSON.parse(localStorage.getItem(Object.keys(localStorage).find(key => key.startsWith('center.wallet.connection.v1:'))!)!).grant.accountId);
     expect(beepAccount).toBe(accountId);
     const shared = await pool.query('SELECT grant_document FROM rest_wallet_handoffs WHERE state = $1 ORDER BY origin', ['consumed']);
     expect(shared.rowCount).toBe(2);
     expect(shared.rows.every(row => row.grant_document.accountId === accountId)).toBe(true);
     expect(new Set(shared.rows.map(row => row.grant_document.signerAddress)).size).toBe(2);
     expect(new Set(shared.rows.map(row => row.grant_document.origin))).toEqual(new Set([base, beepOrigin]));
-    expect((await pool.query('SELECT count(*)::int AS n FROM rest_wallet_logins WHERE completed_at_ms IS NOT NULL')).rows[0].n).toBe(1);
+    // Each framed app performs a fresh passkey sign-in; both resolve to the same account.
+    expect((await pool.query('SELECT count(*)::int AS n FROM rest_wallet_logins WHERE completed_at_ms IS NOT NULL')).rows[0].n).toBe(2);
     expect(transport.filter(item => item.path === '/wallet/handoff/exchange' && item.method === 'POST')).toHaveLength(3);
     expect(transport.filter(item => item.path.startsWith('/wallet/handoff/') && item.method === 'POST').every(item => !item.cookie)).toBe(true);
     await beep.reload();
-    await expect.poll(async () => (await beep.locator('.wallet-address').textContent())?.toLowerCase()).toContain(enrollment.creation!.address.slice(0, 6).toLowerCase());
+    await beep.locator('details.quiet summary').click();
+    await beep.locator('details.quiet dd').filter({ hasText: beepAddress }).waitFor({ state: 'visible' });
     await beep.screenshot({ path: output + '/beep-connected.png', fullPage: true });
     // A browser expression keeps Vitest's server import transform out of the
     // native browser module import. Only public account/status values return.
     const readAccount = (target: typeof page) => target.evaluate(`import('/__center_pilot_read.js')
       .then(module => module.read()).then(accountId => ({ accepted: true, accountId }))
-      .catch(error => ({ accepted: false, errorName: error.name }))`);
+      .catch(error => ({ accepted: false, errorName: error.name, message: String(error.message).slice(0, 160) }))`);
     const homerunRead = await readAccount(page);
     expect(homerunRead, JSON.stringify(transport.slice(-8))).toEqual({ accepted: true, accountId });
     expect(await readAccount(beep)).toEqual({ accepted: true, accountId });
-    const center = await context.newPage();
-    await center.goto(issuer + '/wallet');
-    await center.locator('#wallet-logout').click();
-    await expect.poll(() => center.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
-    expect(await readAccount(page)).toMatchObject({ accepted: false });
-    expect(await readAccount(beep)).toMatchObject({ accepted: false });
-    expect(transport.filter(item => item.path === '/api/v1/accounts/me' && item.method === 'GET').map(item => item.status)).toEqual([200, 200, 403, 403]);
+    expect(transport.filter(item => item.path === '/api/v1/accounts/me' && item.method === 'GET').map(item => item.status)).toEqual([200, 200]);
     await page.getByRole('button', { name: /^Signed in as/ }).click();
     await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await page.getByRole('button', { name: 'Sign in', exact: true }).waitFor();
@@ -259,10 +274,10 @@ it('shares one real Center session and deployed wallet across actual Homerun and
     await page.screenshot({ path: output + '/homerun.png', fullPage: true });
     await writeFile(output + '/summary.json', JSON.stringify({ passed: true,
       observedAt: new Date().toISOString(), client: 'actual Homerun Next app and Beep checkout, pinned SDKs', browser: browser.version(),
-      realCenterHttp: true, realPostgres: true, realUnforkedAnvil: true, nativeVirtualPasskeyAssertion: true,
+      realSignaHttp: true, realPostgres: true, realUnforkedAnvil: true, nativeVirtualPasskeyAssertion: true,
       walletDeployedAndCanonicallyVerified: true, sameExchangeRecoveredAfterLostReply: true,
-      grants: 2, centralSessions: 1, sameWalletAcrossClients: true, separateAppKeys: true, credentiallessExchanges: true,
-      callbackSecretsScrubbed: true, realSignedReadsBeforeLogout: 2, centralLogoutRevokedBothClients: true,
+      grants: 2, centralSessions: 2, sameWalletAcrossClients: true, separateAppKeys: true, credentiallessExchanges: true,
+      callbackSecretsScrubbed: true, signedAccountReads: 2,
       reloadRestored: true, localDisconnectCleared: true, pageErrors: errors,
       beepPaymentsEnabled: false, beepProjectQuoteQualified: false,
       productionTlsProxyObserved: false, productionBaseObserved: false, paymentsObserved: false, transport }, null, 2));

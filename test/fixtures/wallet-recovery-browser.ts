@@ -98,7 +98,7 @@ export async function exerciseRecoveryBrowser(options: {
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await contains('could not be confirmed');
   await page.getByRole('button', { name: 'Check again' }).click();
-  await contains('Preparing your login');
+  await contains('Preparing to sign in');
   expect(await page.locator('#wallet-status').getAttribute('data-state')).toBe('busy');
   options.hold.release();
   await contains('Your replacement passkey is ready');

@@ -65,8 +65,8 @@ const steps: Record<View['phase'], string> = {
   awaiting_deployment_approval: 'Your passkey is ready. Approve creation of your account.',
   deploying: 'Creating your account…',
   deployment_failed: 'Account creation did not complete. Keep this signup for recovery; do not send funds.',
-  awaiting_activation: 'Your account is ready.', preparing_sign_in: 'Finishing your login…',
-  ready_to_sign_in: 'Your account is ready. Log in with your passkey.',
+  awaiting_activation: 'Your account is ready.', preparing_sign_in: 'Finishing sign in…',
+  ready_to_sign_in: 'Your account is ready. Sign in with your passkey.',
   expired: "This recent signup wasn't completed in time. Try again.",
 };
 // While work is in flight the status line's mark spins (Croptop's text ticker) instead of showing the lightning.
@@ -127,7 +127,7 @@ function accept(result: { view: View | null; csrfToken?: string; flowToken?: str
   // Flashblocks: the receipt arrives before the block; the page says so, and waits for the block.
   if (view?.phase === 'deploying') view.preconfirmed ? messageLinked('Almost', ' there…' + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''))
     : messageLinked('Creating', steps.deploying.slice('Creating'.length) + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''));
-  else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' ? recoverySecret ? ' Now, save your backup password.' : '' : ' Continue to log in.' : '')
+  else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' ? recoverySecret ? ' Now, save your backup password.' : '' : ' Continue to sign in.' : '')
     : 'Name your passkey and pick a way back in.');
   if (view?.phase === 'ready_to_sign_in' && kitSavedWallet === view.walletAddress) recoverySecret = null;
 }
@@ -166,7 +166,7 @@ function render() {
   el('signup-recovery').textContent = mode() === 'wallet' ? view?.recoveryOwner ?? ''
     : kitPhase ? recoverySecret ? '' : view?.recoveryOwner ?? '' : 'A backup password you save before creating the account';
   el('signup-address').textContent = view?.walletAddress ?? 'Not created yet';
-  const label = view?.phase === 'awaiting_registration' ? 'Create passkey'
+  const label = view?.phase === 'awaiting_registration' ? 'Signa up'
     : view?.phase === 'awaiting_possession' || view?.phase === 'awaiting_deployment_approval' ? 'Create account'
     : view?.phase === 'awaiting_activation' ? 'Continue' : view?.phase === 'deploying' && mode() === 'kit' ? 'Continue' : view?.phase === 'ready_to_sign_in' ? 'Signa in' : view?.phase === 'expired' ? 'Signa up' : null;
   next.hidden = !label || !!pending || stranded; next.textContent = label; next.disabled = engaged || view?.phase === 'deploying';
@@ -190,7 +190,7 @@ async function send(path: string, body: unknown, proof = csrf) {
   const result = await request(path, body, proof); accept(result); pending = null;
   // A replayed activation (its first reply lost) may have signed the account in: the session
   // cookie is set, so this page is done.
-  if (result?.signedIn) { sessionTried = true; message('Logging in…'); location.replace((base || '/') + location.search); }
+  if (result?.signedIn) { sessionTried = true; message('Signing in…'); location.replace((base || '/') + location.search); }
   // A framed activation that signed the account in answers with the app's return: the frame goes there.
   if (typeof result?.redirectUri === 'string') { sessionTried = true; message('Returning to your app…'); location.replace(checkedRedirect(result, intentView(), location.origin)); }
 }
@@ -318,7 +318,7 @@ async function approve(backupSignature?: Hex) {
 let approvedHere = false, sessionTried = false;
 async function session(): Promise<boolean> {
   if (!approvedHere || sessionTried) return false;
-  sessionTried = true; message('Logging in…');
+  sessionTried = true; message('Signing in…');
   try {
     const result = await request('session', {});
     location.replace(inFrame() ? checkedRedirect(result, intentView(), location.origin) : (base || '/') + location.search); return true;
@@ -415,26 +415,26 @@ async function login() {
 }
 async function loginFlow() {
   if (inFrame()) return framedLogin();
-  message('Logging in…');
+  message('Signing in…');
   const begun = await walletRequest(`${base}/login/begin`, {}), publicKey = begun.publicKey;
   if (publicKey?.rpId !== location.hostname || publicKey.userVerification !== 'required' || typeof begun.loginId !== 'string' || typeof begun.csrfToken !== 'string') throw new Error('The account host changed.');
   const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new Error('Invalid passkey challenge.');
-  message('Log in with the prompt.');
+  message('Sign in with the prompt.');
   const proof = await assertion('0x' + Array.from(challenge, byte => byte.toString(16).padStart(2, '0')).join(''), publicKey.rpId);
-  message('Logging in…');
+  message('Signing in…');
   const result = await walletRequest(`${base}/login/complete`, { loginId: begun.loginId, assertion: proof }, begun.csrfToken, 100000);
   if (result?.session?.loginId !== begun.loginId) throw new Error('Sign-in could not be confirmed.');
   location.replace((base || '/') + location.search);
 }
 /** Inside the frame: the passkey sign-in the wallet landing page runs framed (the intent admits it, no cookie), then the app's return. */
 async function framedLogin() {
-  message('Logging in…');
+  message('Signing in…');
   const begun = await walletRequest(`${base}/authorize/${intentId}/begin`, {}), publicKey = begun.publicKey;
   if (publicKey?.rpId !== location.hostname || publicKey.userVerification !== 'required' || typeof begun.loginId !== 'string' || typeof begun.flowToken !== 'string') throw new Error('The account host changed.');
   const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new Error('Invalid passkey challenge.');
-  message('Log in with the prompt.');
+  message('Sign in with the prompt.');
   const proof = await assertion('0x' + Array.from(challenge, byte => byte.toString(16).padStart(2, '0')).join(''), publicKey.rpId);
-  message('Logging in…');
+  message('Signing in…');
   const result = await walletRequest(`${base}/authorize/${intentId}/approve`, { loginId: begun.loginId, flowToken: begun.flowToken, assertion: proof }, undefined, 100000);
   message('Returning to your app…');
   location.replace(checkedRedirect(result, intentView(), location.origin));

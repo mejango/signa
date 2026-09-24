@@ -4,11 +4,11 @@ Run this separately from `npm run check`: it requires built Beep assets and an
 already-running local Homerun Next preview. Missing configuration fails the run;
 the ordinary release gate keeps all its required suites.
 
-The test uses the actual clients and their installed Center SDKs, genuine HTTP
+The test uses the actual clients and their installed wallet SDKs, genuine HTTP
 handlers, PostgreSQL, Beep's SQLite store, a virtual passkey authenticator, and a
 fresh unforked Anvil wallet deployment. A browser-only route bridges the configured
-Center HTTPS names to a local HTTP listener. No request is sent to the production
-Center issuer or API. The test starts no production signer and uses only public
+Signa HTTPS names to a local HTTP listener. No request is sent to the production
+Signa issuer or API. The test starts no production signer and uses only public
 fixture keys and synthetic Anvil balances.
 
 Prepare both client checkouts with their supported Node versions and dependencies.
@@ -17,17 +17,17 @@ separate `NEXT_DIST_DIR` build with these public settings:
 
 ```sh
 NEXT_PUBLIC_CENTER_WALLET_ENABLED=true
-NEXT_PUBLIC_CENTER_WALLET_ISSUER=https://wallet.juicebox.center
-NEXT_PUBLIC_CENTER_WALLET_AUDIENCE=https://juicebox.center
-NEXT_PUBLIC_CENTER_WALLET_MANIFEST_ID=center-passkey-local-pilot
-NEXT_PUBLIC_CENTER_WALLET_MANIFEST_REVISION=0x1111111111111111111111111111111111111111111111111111111111111111
+NEXT_PUBLIC_CENTER_WALLET_ISSUER=https://signa.center
+NEXT_PUBLIC_CENTER_WALLET_AUDIENCE=https://api.signa.center
+NEXT_PUBLIC_CENTER_WALLET_MANIFEST_ID=wallet-dispatch-unforked-anvil
+NEXT_PUBLIC_CENTER_WALLET_MANIFEST_REVISION=0x5fb10c62fa993223a3f6aa8d323cdf99ecd9c33b70ba37f61b8502363903be04
 NEXT_PUBLIC_CENTER_WALLET_MAXIMUM_NETWORK_FEE_WEI=100000000000000
 ```
 
 These manifest values enable the local **connection** preview. They are not
 production payment pins. Keep production client configuration unchanged.
 
-From Center, with Node 22.16+ and `anvil` on PATH:
+From Signa, with Node 22.16+ and `anvil` on PATH:
 
 ```sh
 TEST_DATABASE_URL=postgresql://... \
@@ -42,10 +42,12 @@ Anvil, browser and HTTP listeners. It leaves the pre-existing Homerun preview al
 Next may append temporary build-directory types to its tsconfig; preserve unrelated
 work when removing those generated entries afterward.
 
-The test verifies one Center session and the same deployed wallet across both
+The test verifies two framed Signa sign-ins and the same deployed account across both
 clients, distinct app signing keys, cookie-free handoff exchanges, callback secret
 scrubbing, exact recovery of a committed exchange after its reply is lost, reload,
-real signed account reads, and revocation of both clients after central logout.
+and real signed account reads. Framed sign-in does not give the client a central
+session cookie, so this pilot does not exercise central logout; Signa's dedicated
+logout tests cover revocation.
 Screenshots and a sanitized report are written to
 `.generated/wallet-observations/shared-clients/`.
 
