@@ -38,6 +38,7 @@ let loggingIn = false;
 let pending: { path: string; body: unknown; csrf: string } | null = null;
 let disposed = false, pollCount = 0;
 let recoverySecret: WalletRecoverySecret | null = null, kitSavedWallet: string | null = null;
+let approvedHere = false, sessionTried = false, activationTried = false;
 const downloadUrls = new Set<string>();
 // The choice outlives the form: a resumed signup reads it back by enrollment.
 type RecoveryChoice = 'kit' | 'wallet';
@@ -133,11 +134,14 @@ function accept(result: { view: View | null; csrfToken?: string; flowToken?: str
 }
 function render() {
   spin(); stream();
+  if (view?.phase === 'awaiting_activation' && approvedHere && kitSavedWallet === view.walletAddress && !activationTried && !busy && !pending) {
+    activationTried = true; void run(advance);
+  }
   if (view?.phase === 'ready_to_sign_in' && approvedHere && !sessionTried && !busy) void run(async () => { if (!(await session())) render(); });
   form.querySelector('button')!.disabled = engaged;
   name.disabled = engaged;
-  // Registration fixes the complete recovery identity. Save it before approving creation;
-  // after a reload, reopen the same backup before continuing.
+  // Registration fixes the complete recovery identity. A resumed or cancelled approval
+  // can still save or reopen its backup; activation waits for that backup.
   const kitPhase = !!view?.walletAddress && !!view.initializerHash && view.phase !== 'expired';
   const stranded = kitMode() && !recoverySecret && view?.phase === 'awaiting_registration';
   // A stranded attempt that never created a passkey lost nothing worth mentioning: show the clean form.
@@ -170,7 +174,7 @@ function render() {
     : view?.phase === 'awaiting_possession' || view?.phase === 'awaiting_deployment_approval' ? 'Create account'
     : view?.phase === 'awaiting_activation' ? 'Continue' : view?.phase === 'deploying' && mode() === 'kit' ? 'Continue' : view?.phase === 'ready_to_sign_in' ? 'Signa in' : view?.phase === 'expired' ? 'Signa up' : null;
   next.hidden = !label || !!pending || stranded; next.textContent = label; next.disabled = engaged || view?.phase === 'deploying';
-  if (view && ['awaiting_possession', 'awaiting_deployment_approval', 'awaiting_activation'].includes(view.phase)
+  if (view && view.phase === 'awaiting_activation'
     && kitMode() && kitSavedWallet !== view.walletAddress) next.disabled = true;
   el<HTMLButtonElement>('recovery-show').disabled = engaged; el<HTMLButtonElement>('recovery-copy').disabled = engaged;
   // "log in" resumes with a passkey; a finished wallet lands at sign-in. Once the state is known (or its load failed),
@@ -245,12 +249,9 @@ async function assertion(challenge: string, rpId: string) {
 }
 async function advance() {
   if (!view) return;
-  if (['awaiting_possession', 'awaiting_deployment_approval', 'awaiting_activation'].includes(view.phase)) {
-    if (kitMode()) {
-      if (!view.walletAddress || kitSavedWallet !== view.walletAddress)
-        throw new Error('Save your complete backup file, or reopen the saved file, before continuing.');
-    } else if (view.phase === 'awaiting_deployment_approval') await recoveryOwner(view.recoveryOwner);
-  }
+  if (view.phase === 'awaiting_activation' && kitMode() && (!view.walletAddress || kitSavedWallet !== view.walletAddress))
+    throw new Error('Save your complete backup file, or reopen the saved file, before continuing.');
+  if (view.phase === 'awaiting_deployment_approval' && !kitMode()) await recoveryOwner(view.recoveryOwner);
   if (view.phase === 'expired') {
     if (inFrame()) { view = null; flowToken = ''; } else await send('restart', {});
     csrf = '';
@@ -265,9 +266,9 @@ async function advance() {
     native = null;
     await send('register', { type: 'public-key', credentialId: encode(value.rawId), rawId: encode(value.rawId),
       clientDataJSON: encode(value.response.clientDataJSON), attestationObject: encode(value.response.attestationObject) });
-    // Existing-wallet signup keeps its single approval prompt. Kit users first save the
-    // complete backup, which now includes the address determined by this registration.
-    if (current()?.phase === 'awaiting_possession' && !kitMode()) await advance();
+    // The same signup continues into its fresh passkey approval. A cancelled or uncertain
+    // prompt leaves the explicit Create account button as a retry.
+    if (current()?.phase === 'awaiting_possession') await advance();
   } else if (view.phase === 'awaiting_possession' && view.possession) {
     // The recovery owner signs the enrollment document; the single passkey prompt then approves
     // creation, which also proves possession of the new passkey.
@@ -315,7 +316,6 @@ async function approve(backupSignature?: Hex) {
 }
 // The approval's passkey signature signs the new account in once it is ready: no login prompt. Only
 // when that is not on offer (a resumed signup, a restarted server) does the login button appear.
-let approvedHere = false, sessionTried = false;
 async function session(): Promise<boolean> {
   if (!approvedHere || sessionTried) return false;
   sessionTried = true; message('Signing in…');

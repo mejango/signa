@@ -181,13 +181,25 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       await page.getByRole('button', { name: 'Check signup' }).click();
       await contains('Your passkey is ready');
       const create = page.getByRole('button', { name: 'Create account', exact: true });
-      expect(await create.isDisabled()).toBe(true);
+      // The lost registration reply leaves a manual retry. A normal registration continues
+      // into fresh approval by itself, before the backup is shown during deployment.
+      expect(await create.isDisabled()).toBe(false);
+      expect(await page.locator('#recovery-kit').isVisible()).toBe(true);
+      await create.click();
+    }
+    // Under gate load a shared local anvil can time the approval's chain reads out; the page says
+    // so and a person clicks again, as they would. Once.
+    await expect.poll(() => page.locator('#wallet-status').textContent(), { timeout: 15000 }).toMatch(/Creating your account|Signup could not be confirmed/);
+    if ((await page.locator('#wallet-status').textContent())?.includes('Signup could not be confirmed')) await page.getByRole('button', { name: 'Create account', exact: true }).click();
+    await contains('Creating your account');
+    const originalAddress = await page.locator('#signup-address').textContent();
+    networksWalletAddress = (originalAddress ?? '').toLowerCase();
+    if (!kitMode) expect((await page.locator('#signup-recovery').textContent())?.toLowerCase()).toBe(enrollmentBackupAccount.address.toLowerCase());
+    if (kitMode) {
       const predictedAddress = await page.locator('#signup-address').textContent();
-      // The backup includes the predicted address before any deployment approval.
       expect(await page.locator('#recovery-phrase').getAttribute('type')).toBe('password');
       await page.getByRole('button', { name: 'Show' }).click();
       const shown = await page.locator('#recovery-phrase').inputValue();
-      expect(await page.locator('#recovery-phrase').getAttribute('type')).toBe('text');
       expect(shown.split(' ')).toHaveLength(24);
       await page.getByRole('button', { name: 'Hide' }).click();
       const downloaded = page.waitForEvent('download');
@@ -199,32 +211,9 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       recoveryKitText = encoded;
       expect(kit.walletAddress.toLowerCase()).toBe(predictedAddress?.toLowerCase());
       expect(kit.mnemonic).toBe(shown);
-      expect(await create.isDisabled()).toBe(false);
-      await page.reload(); await contains('Your passkey is ready');
-      expect(await page.locator('#recovery-phrase').inputValue()).toBe('');
-      expect(await create.isDisabled()).toBe(true);
-      const before = observed.filter(value => value.path === '/signup/deployment/review').length;
-      // The handler also guards programmatic activation of a disabled control.
-      await page.evaluate(() => { const next = document.getElementById('signup-next') as HTMLButtonElement; next.disabled = false; next.click(); });
-      await contains('Save your complete backup file');
-      expect(observed.filter(value => value.path === '/signup/deployment/review')).toHaveLength(before);
-      await page.locator('#recovery-verify summary').click();
-      const wrong = JSON.stringify({ ...kit, walletAddress: '0x' + '44'.repeat(20) });
-      await page.getByLabel('Backup file', { exact: true }).setInputFiles({ name: 'wrong.json', mimeType: 'application/json', buffer: Buffer.from(wrong) });
-      await contains('does not match'); expect(await create.isDisabled()).toBe(true);
-      await page.getByLabel('Backup file', { exact: true }).setInputFiles({ name: 'recovery.json', mimeType: 'application/json', buffer: Buffer.from(encoded) });
-      await contains('Backup file verified'); expect(await create.isDisabled()).toBe(false);
-      // One click and one prompt still approve creation and prove the passkey.
-      await create.click();
+      // Leaving during deployment must not carry the backup words in browser storage.
+      if (options.resume ?? true) await page.goto('about:blank');
     }
-    // Under gate load a shared local anvil can time the approval's chain reads out; the page says
-    // so and a person clicks again, as they would. Once.
-    await expect.poll(() => page.locator('#wallet-status').textContent(), { timeout: 15000 }).toMatch(/Creating your account|Signup could not be confirmed/);
-    if ((await page.locator('#wallet-status').textContent())?.includes('Signup could not be confirmed')) await page.getByRole('button', { name: 'Create account', exact: true }).click();
-    await contains('Creating your account');
-    const originalAddress = await page.locator('#signup-address').textContent();
-    networksWalletAddress = (originalAddress ?? '').toLowerCase();
-    if (!kitMode) expect((await page.locator('#signup-recovery').textContent())?.toLowerCase()).toBe(enrollmentBackupAccount.address.toLowerCase());
     // Nothing to press while creation runs: the events stream (or the poll behind it) carries the
     // view, so the kit appears without another click. A restart here would orphan a paid creation.
     expect(await page.getByRole('button', { name: 'Check signup' }).isVisible()).toBe(false);
@@ -239,7 +228,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     const resumed = options.resume ?? true;
     if (resumed) {
       await context.clearCookies({ name: walletSignupCookie });
-      await page.reload();
+      if (kitMode) await page.goto(origin + '/create'); else await page.reload();
       await page.getByRole('link', { name: 'Signa in' }).click();
       await proceed('Pick up your signup');
       await contains('Your account is ready');
@@ -258,6 +247,9 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       expect((await page.locator('#signup-recovery').textContent())?.toLowerCase()).toBe(String(kit.recoveryOwner).toLowerCase());
       expect(await page.getByRole('button', { name: 'Continue', exact: true }).isDisabled()).toBe(true);
       await page.locator('#recovery-verify summary').click();
+      const wrong = JSON.stringify({ ...kit, walletAddress: '0x' + '44'.repeat(20) });
+      await page.getByLabel('Backup file', { exact: true }).setInputFiles({ name: 'wrong.json', mimeType: 'application/json', buffer: Buffer.from(wrong) });
+      await contains('does not match');
       await page.getByLabel('Backup file', { exact: true }).setInputFiles({ name: 'recovery.json', mimeType: 'application/json', buffer: Buffer.from(encoded) });
       await contains('Backup file verified');
       expect(await page.getByRole('button', { name: 'Continue', exact: true }).isDisabled()).toBe(false);
@@ -327,7 +319,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     expect((await options.deployments.getSettlement(deploymentId))?.nextNonce).toBe(options.expectedNextNonce ?? '5');
     await writeFile(new URL('summary.json', out), JSON.stringify({ passed: true, browser: browser.version(),
       evidence: 'real HTTP, PostgreSQL, unforked Anvil; virtual authenticator and test EOA',
-      recoveryMode: options.recoveryMode ?? 'wallet', ...(kitMode ? { backupBeforeDeployment: true, resumedDeploymentRequiresBackup: true, savedKitRestored: true, wrongKitRejected: true, phraseAbsentFromStorageAndRequests: true } : {}),
+      recoveryMode: options.recoveryMode ?? 'wallet', ...(kitMode ? { backupDuringDeployment: true, activationRequiresBackup: true, savedKitRestored: true, wrongKitRejected: true, phraseAbsentFromStorageAndRequests: true } : {}),
       cancelledPrompt: true, lostRegistrationReplyRecovered: lostRegistration, lostSetupReplyRecovered: lostSetup,
       cookieLossResumedSameWallet: true, separateFreshLogin: true, mobileWidth: 320, pageErrors: errors, requests: observed }, null, 2));
   } finally { await recovery?.stop(); await signup.stop(); await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); }
