@@ -8,8 +8,8 @@ export function walletSignupPage(options: { base?: string } = {}) {
 <body><main><a class="brand" id="wallet-back" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a>
 <h1>Your account</h1>
 <p id="wallet-status" role="status" aria-live="polite" aria-atomic="true">Checking your signup…</p>
-<form id="signup-form" hidden><label>Passkey name<input id="passkey-name" maxlength="120" autocomplete="off" required></label>
-<fieldset id="recovery-method"><legend>If you lose this passkey, get back in with</legend>
+<form id="signup-form" hidden><label><span id="signup-key-label">Device key name</span><input id="passkey-name" maxlength="120" autocomplete="off" required></label>
+<fieldset id="recovery-method"><legend id="signup-recovery-prompt">If you lose access to this device, get back in with</legend>
 <label class="choice"><input type="radio" name="recovery-method" value="kit" checked>A backup password made for you</label>
 <label class="choice"><input type="radio" name="recovery-method" value="wallet">A wallet you already have</label></fieldset>
 <button type="submit" id="signup-begin">Signa up</button></form>

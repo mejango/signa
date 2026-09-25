@@ -267,6 +267,8 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     authenticated = false;
     // An app return without a session is where the other ways in are offered.
     await page.goto(`${origin}/wallet/ways?intent=${intentId}`); await status("ready");
+    expect(await page.locator('#wallet-signin').textContent()).toMatch(/^Continue with (Face ID|Touch ID|Windows Hello|your device)$/);
+    expect(await page.locator('#wallet-status').textContent()).toContain('Face ID, Touch ID');
     const links = await page.evaluate(() => [...document.querySelectorAll("#wallet-links a")].map(a => ({
       text: a.textContent!.trim(), color: getComputedStyle(a).color, size: parseFloat(getComputedStyle(a).fontSize) })));
     expect(links.map(link => link.text)).toEqual(["Signa up", "Lost your account?"]);
@@ -288,6 +290,8 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.frames().some(frame => frame.url() === framedUrl)).toBe(true);
     const frame = page.frames().find(frame => frame.url() === framedUrl)!;
     await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("ready");
+    expect(await frame.locator('#wallet-status').textContent()).toBe('Powered by Signa');
+    expect(await frame.locator('h1').evaluate(heading => getComputedStyle(heading).clipPath)).toBe('inset(50%)');
     const headingFont = () => frame.locator("h1").evaluate(heading => getComputedStyle(heading).fontFamily);
     const originalFont = await headingFont();
     await frame.evaluate(() => window.addEventListener("message", () => {

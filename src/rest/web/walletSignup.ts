@@ -12,6 +12,11 @@ type View = Awaited<ReturnType<Signup['status']>>;
 type Ethereum = { request(input: { method: string; params?: unknown[] }): Promise<unknown> };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const form = el<HTMLFormElement>('signup-form'), name = el<HTMLInputElement>('passkey-name');
+const deviceMethod = /iPhone/.test(navigator.userAgent) ? 'Face ID' : /Macintosh|iPad/.test(navigator.userAgent) ? 'Touch ID'
+  : /Windows/.test(navigator.userAgent) ? 'Windows Hello' : 'device';
+el('signup-key-label').textContent = deviceMethod === 'device' ? 'Device key name' : `${deviceMethod} key name`;
+el('signup-recovery-prompt').textContent = deviceMethod === 'device'
+  ? 'If you lose access to this device, get back in with' : `If you lose this ${deviceMethod}, get back in with`;
 const next = el<HTMLButtonElement>('signup-next'), resume = el<HTMLAnchorElement>('signup-resume');
 const check = el<HTMLButtonElement>('signup-check'), cancel = el<HTMLButtonElement>('signup-cancel');
 const status = el('wallet-status'), details = el('signup-details'), restart = el<HTMLButtonElement>('signup-restart');
@@ -129,7 +134,7 @@ function accept(result: { view: View | null; csrfToken?: string; flowToken?: str
   if (view?.phase === 'deploying') view.preconfirmed ? messageLinked('Almost', ' there…' + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''))
     : messageLinked('Creating', steps.deploying.slice('Creating'.length) + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''));
   else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' && recoverySecret ? ' Save your backup password, or continue to sign in.' : ' Continue to sign in.' : '')
-    : 'Name your passkey and pick a way back in.');
+    : inFrame() ? 'Powered by Signa' : 'Name your device key and pick a way back in.');
   if (view?.phase === 'ready_to_sign_in' && kitSavedWallet === view.walletAddress) recoverySecret = null;
 }
 function render() {

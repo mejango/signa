@@ -23,6 +23,11 @@ type DeviceView = { id: string; phase: string; passkeyName: string | null; devic
 const deviceAdd = element<HTMLButtonElement>("wallet-device-add"), devicePanel = element("wallet-device"), deviceApprove = element<HTMLButtonElement>("wallet-device-approve");
 let device: { view: DeviceView; link: string } | null = null, deviceTimer: ReturnType<typeof setInterval> | null = null;
 const signIn = element<HTMLButtonElement>("wallet-signin"), retry = element<HTMLButtonElement>("wallet-retry");
+const deviceSignInLabel = /iPhone/.test(navigator.userAgent) ? "Continue with Face ID"
+  : /Macintosh|iPad/.test(navigator.userAgent) ? "Continue with Touch ID"
+  : /Windows/.test(navigator.userAgent) ? "Continue with Windows Hello"
+  : "Continue with your device";
+signIn.textContent = deviceSignInLabel;
 const cancel = element<HTMLButtonElement>("wallet-cancel"), signOut = element<HTMLButtonElement>("wallet-logout");
 let configuration: Configuration, intent: Intent | null = null, session: Session | null = null, framerOrigin: string | null = null;
 let sessionKnown = false, busy = false, csrf = "", pending: Completion | null = null;
@@ -229,7 +234,7 @@ async function load() {
     listenForTheme(framerOrigin!);
     // No cookie reaches a cross-site frame, so there is no session to read; the sign-in below carries its own proof.
     ahead?.catch(() => undefined); ahead = null; session = null; sessionKnown = true;
-    setStatus("ready", "Sign in with your passkey."); return;
+    setStatus("ready", "Powered by Signa"); return;
   }
   await readSession();
 }
@@ -248,7 +253,7 @@ async function continueSession() {
   else if (session && intent) await issue();
   // A direct visit without a session or an app return belongs on the signup page, which also logs in.
   else if (!session && !intent && !paymentReviewId && document.getElementById("wallet-create")) location.replace(`${base}/create`);
-  else setStatus(session ? "signed-in" : "ready", session ? "You are signed in." : "Sign in with an existing account.");
+  else setStatus(session ? "signed-in" : "ready", session ? "You are signed in." : "Use Face ID, Touch ID, a screen lock, or a security key.");
 }
 async function login() {
   nextRetry = login;
