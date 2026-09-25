@@ -148,7 +148,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
   try {
     await page.goto(origin + '/');
     const fillForm = async () => {
-      await page.getByLabel('Passkey name').fill('Juicebox test');
+      await page.locator('#passkey-name').fill('Juicebox test');
       if (!kitMode) await page.getByLabel('A wallet you already have').check();
     };
     await fillForm();
@@ -161,7 +161,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     await contains('cancelled');
     // Starting over forgets the continuation and shows the clean form again.
     await page.getByRole('button', { name: 'Reset signup' }).click();
-    await expect.poll(() => page.getByLabel('Passkey name').isVisible()).toBe(true);
+    await expect.poll(() => page.locator('#passkey-name').isVisible()).toBe(true);
     expect((await context.cookies()).some(item => item.name === walletSignupCookie)).toBe(false);
     await fillForm();
     await page.getByRole('button', { name: 'Signa up' }).click();

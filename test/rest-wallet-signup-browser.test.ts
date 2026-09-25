@@ -46,7 +46,8 @@ describe("served Center signup page", () => {
     try {
       await signup.clock.setFixedTime(new Date('2026-09-24T20:26:00Z'));
       await signup.goto(`${origin}/wallet`);
-      const name = signup.getByLabel('Passkey name', { exact: true });
+      const name = signup.locator('#passkey-name');
+      expect(await signup.locator('#signup-key-label').textContent()).toMatch(/^(Face ID|Touch ID|Windows Hello|Device) key name$/);
       await expect.poll(() => name.inputValue()).toBe('localhost | 5:26 PM Sep 24, 2026');
       await name.fill('My phone');
       await signup.getByLabel('A wallet you already have', { exact: true }).check();
