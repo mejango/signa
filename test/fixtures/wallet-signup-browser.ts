@@ -240,12 +240,12 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       expect(await page.locator('#recovery-phrase').inputValue()).toBe('');
       await page.setViewportSize({ width: 320, height: 844 });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      // After a reload, continue requires the saved backup for this exact account.
+      // After a reload, reopening the saved backup is optional; Continue stays available.
       expect(await page.locator('#recovery-restore-box').isVisible()).toBe(true);
       expect(await page.getByRole('link', { name: 'reset signup' }).isVisible()).toBe(true);
       expect(await page.locator('#signup-recovery-label').textContent()).toBe('Backup password address');
       expect((await page.locator('#signup-recovery').textContent())?.toLowerCase()).toBe(String(kit.recoveryOwner).toLowerCase());
-      expect(await page.getByRole('button', { name: 'Continue', exact: true }).isDisabled()).toBe(true);
+      expect(await page.getByRole('button', { name: 'Continue', exact: true }).isDisabled()).toBe(false);
       await page.locator('#recovery-verify summary').click();
       const wrong = JSON.stringify({ ...kit, walletAddress: '0x' + '44'.repeat(20) });
       await page.getByLabel('Backup file', { exact: true }).setInputFiles({ name: 'wrong.json', mimeType: 'application/json', buffer: Buffer.from(wrong) });

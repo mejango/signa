@@ -128,7 +128,7 @@ function accept(result: { view: View | null; csrfToken?: string; flowToken?: str
   // Flashblocks: the receipt arrives before the block; the page says so, and waits for the block.
   if (view?.phase === 'deploying') view.preconfirmed ? messageLinked('Almost', ' there…' + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''))
     : messageLinked('Creating', steps.deploying.slice('Creating'.length) + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''));
-  else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' ? recoverySecret ? ' Now, save your backup password.' : '' : ' Continue to sign in.' : '')
+  else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' && recoverySecret ? ' Save your backup password, or continue to sign in.' : ' Continue to sign in.' : '')
     : 'Name your passkey and pick a way back in.');
   if (view?.phase === 'ready_to_sign_in' && kitSavedWallet === view.walletAddress) recoverySecret = null;
 }
@@ -141,7 +141,7 @@ function render() {
   form.querySelector('button')!.disabled = engaged;
   name.disabled = engaged;
   // Registration fixes the complete recovery identity. A resumed or cancelled approval
-  // can still save or reopen its backup; activation waits for that backup.
+  // can still save or reopen its backup; only a saved backup triggers automatic activation.
   const kitPhase = !!view?.walletAddress && !!view.initializerHash && view.phase !== 'expired';
   const stranded = kitMode() && !recoverySecret && view?.phase === 'awaiting_registration';
   // A stranded attempt that never created a passkey lost nothing worth mentioning: show the clean form.
@@ -175,8 +175,6 @@ function render() {
     : view?.phase === 'awaiting_activation' ? 'Continue' : view?.phase === 'deploying' && mode() === 'kit' ? 'Continue' : view?.phase === 'ready_to_sign_in' ? 'Signa in' : view?.phase === 'expired' ? 'Signa up' : null;
   next.hidden = !label || !!pending || stranded; next.textContent = label; next.disabled = engaged || view?.phase === 'deploying';
   el('recovery-then').hidden = !showKit || !recoverySecret || label !== 'Create account' || next.hidden;
-  if (view && view.phase === 'awaiting_activation'
-    && kitMode() && kitSavedWallet !== view.walletAddress) next.disabled = true;
   el<HTMLButtonElement>('recovery-show').disabled = engaged; el<HTMLButtonElement>('recovery-copy').disabled = engaged;
   // "log in" resumes with a passkey; a finished wallet lands at sign-in. Once the state is known (or its load failed),
   // it stays offered unless a signup with a passkey is under way, so a returning user is never without a way in.
@@ -250,8 +248,6 @@ async function assertion(challenge: string, rpId: string) {
 }
 async function advance() {
   if (!view) return;
-  if (view.phase === 'awaiting_activation' && kitMode() && (!view.walletAddress || kitSavedWallet !== view.walletAddress))
-    throw new Error('Save your complete backup file, or reopen the saved file, before continuing.');
   if (view.phase === 'awaiting_deployment_approval' && !kitMode()) await recoveryOwner(view.recoveryOwner);
   if (view.phase === 'expired') {
     if (inFrame()) { view = null; flowToken = ''; } else await send('restart', {});

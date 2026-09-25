@@ -76,6 +76,26 @@ describe("served Center signup page", () => {
     } finally { await context.close(); }
   });
 
+  it("lets a resumed signup continue without reopening its backup file", async () => {
+    const context = await browser.newContext(), signup = await context.newPage();
+    const enrollmentId = 'resumed-kit', view = { phase: 'awaiting_activation', enrollmentId,
+      origin, rpId: 'localhost', walletAddress: `0x${'11'.repeat(20)}`,
+      recoveryOwner: `0x${'22'.repeat(20)}`, initializerHash: `0x${'33'.repeat(32)}` };
+    let activations = 0;
+    try {
+      await signup.addInitScript(id => localStorage.setItem(`center:signup:kit:${id}`, 'kit'), enrollmentId);
+      await signup.route('**/wallet/signup/state', route => route.fulfill({ json: { view } }));
+      await signup.route('**/wallet/signup/activate', route => { activations++; return route.fulfill({ json: { view } }); });
+      await signup.goto(`${origin}/wallet`);
+      const continueButton = signup.getByRole('button', { name: 'Continue', exact: true });
+      await expect.poll(() => continueButton.isVisible()).toBe(true);
+      expect(await signup.locator('#recovery-restore-box').isVisible()).toBe(true);
+      expect(await continueButton.isEnabled()).toBe(true);
+      await continueButton.click();
+      await expect.poll(() => activations).toBe(1);
+    } finally { await context.close(); }
+  });
+
   it("shows one filled button at a time, with clear space between buttons, on a phone", async () => {
     await page.setViewportSize({ width: 393, height: 852 });
     await page.goto(`${origin}/wallet`);
