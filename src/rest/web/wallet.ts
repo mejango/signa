@@ -1,7 +1,7 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
 import { qrSvg } from "./qr.js";
-import { checkedRedirect, framed, listenForTheme } from "./walletFramed.js";
+import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
 /** No credentials, assertions, CSRF values or handoff codes are persisted by this page. */
 type Json = Record<string, unknown>;
 type Configuration = { issuer: string; audience: string; rpId: string };
@@ -86,7 +86,7 @@ function token(value: unknown): string {
   if (decode(value).length !== 32) throw new InvalidResponse();
   return value as string;
 }
-function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; }
+function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; if (state === 'brand') signaBrandLink(status); }
 function render() {
   signIn.hidden = !sessionKnown || !!session || !!pending || !!retryAction;
   signIn.disabled = busy || frameTooSmall() || !signInVisible;

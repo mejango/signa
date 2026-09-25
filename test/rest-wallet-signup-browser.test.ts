@@ -53,6 +53,10 @@ describe("served Center signup page", () => {
     const frame = page.frameLocator('iframe');
     await expect.poll(() => page.locator('html').getAttribute('data-frame-page')).toBe('signup');
     await expect.poll(() => frame.locator('#wallet-status').textContent()).toBe('Signa');
+    const brandLink = frame.locator('#wallet-status a');
+    expect(await brandLink.getAttribute('href')).toBe('https://signa.center');
+    expect(await brandLink.getAttribute('target')).toBe('_blank');
+    expect(await brandLink.evaluate(node => getComputedStyle(node).textDecorationLine)).toBe('none');
     const status = await frame.locator('#wallet-status').boundingBox(), links = await frame.locator('#signup-links').boundingBox();
     expect(status && links && status.y > links.y + links.height).toBe(true);
     expect(await frame.locator('#wallet-status').evaluate(node => getComputedStyle(node).fontWeight)).toBe('400');

@@ -3,7 +3,7 @@ import { defaultPasskeyName } from './passkeyName.js';
 import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'viem';
 import type { createLocalWalletSignup } from '../wallet/signup.js';
 import { base } from './walletBase.js';
-import { checkedRedirect, framed, listenForTheme } from './walletFramed.js';
+import { checkedRedirect, framed, listenForTheme, signaBrandLink } from './walletFramed.js';
 import { createWalletRecoverySecret, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit,
   type WalletRecoveryKitIdentity, type WalletRecoverySecret } from './walletRecoveryKit.js';
 
@@ -79,7 +79,7 @@ const steps: Record<View['phase'], string> = {
 // A native prompt waiting on the user is not work in flight, so the mark holds still for it.
 const polling = () => view?.phase === 'deploying' || view?.phase === 'preparing_sign_in';
 const waiting = () => (busy && !native) || polling();
-function message(value: string, error = false) { status.textContent = value; status.dataset.state = error ? 'error' : waiting() ? 'busy' : 'ready'; status.toggleAttribute('data-brand', inFrame() && value === 'Signa'); }
+function message(value: string, error = false) { status.textContent = value; status.dataset.state = error ? 'error' : waiting() ? 'busy' : 'ready'; status.toggleAttribute('data-brand', inFrame() && value === 'Signa'); if (status.hasAttribute('data-brand')) signaBrandLink(status); }
 /** The first word links to the creation transaction on Basescan when the signup has one. */
 function messageLinked(word: string, rest: string) {
   const hash = view?.transactionHash;

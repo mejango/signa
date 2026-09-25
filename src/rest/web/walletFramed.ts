@@ -8,6 +8,14 @@
  * last theme applied in this frame paints the next page in it at once, and an app that never answers
  * still gets its page shortly after load. */
 export const framed = window.self !== window.top;
+export function signaBrandLink(status: HTMLElement) {
+  const link = document.createElement('a');
+  link.href = 'https://signa.center';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = 'Signa';
+  status.replaceChildren(link);
+}
 const themeTokens: Record<string, RegExp> = {
   background: /^#[0-9a-f]{3,8}$/i, foreground: /^#[0-9a-f]{3,8}$/i, muted: /^#[0-9a-f]{3,8}$/i, line: /^#[0-9a-f]{3,8}$/i,
   accent: /^#[0-9a-f]{3,8}$/i, accentForeground: /^#[0-9a-f]{3,8}$/i,
