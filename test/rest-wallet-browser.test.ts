@@ -290,7 +290,10 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.frames().some(frame => frame.url() === framedUrl)).toBe(true);
     const frame = page.frames().find(frame => frame.url() === framedUrl)!;
     await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("ready");
-    expect(await frame.locator('#wallet-status').textContent()).toBe('Powered by Signa');
+    expect(await frame.locator('#wallet-status').textContent()).toBe('Using Signa');
+    expect(await frame.locator('#wallet-signin').textContent()).toBe('Signa in');
+    const statusBox = await frame.locator('#wallet-status').boundingBox(), fullScreenBox = await frame.locator('#wallet-open').boundingBox();
+    expect(statusBox && fullScreenBox && Math.abs(statusBox.y + statusBox.height / 2 - fullScreenBox.y - fullScreenBox.height / 2)).toBeLessThan(4);
     expect(await frame.locator('h1').evaluate(heading => getComputedStyle(heading).clipPath)).toBe('inset(50%)');
     const headingFont = () => frame.locator("h1").evaluate(heading => getComputedStyle(heading).fontFamily);
     const originalFont = await headingFont();
@@ -406,6 +409,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   it("cancels a pending native prompt without sending a completion and permits a new click", async () => {
     await loadAndEnroll(); await cdp.send("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId, enabled: false });
     await page.locator("#wallet-signin").click(); await status("authenticating");
+    expect(await page.locator("#wallet-status").textContent()).toMatch(/^Use (Face ID|Touch ID|Windows Hello|your device) to sign in\.$/);
     await page.locator("#wallet-cancel").click(); await status("ready");
     expect(completions).toBe(0);
     await cdp.send("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId, enabled: true });

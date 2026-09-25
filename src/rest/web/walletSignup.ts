@@ -134,7 +134,7 @@ function accept(result: { view: View | null; csrfToken?: string; flowToken?: str
   if (view?.phase === 'deploying') view.preconfirmed ? messageLinked('Almost', ' there…' + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''))
     : messageLinked('Creating', steps.deploying.slice('Creating'.length) + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''));
   else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' && recoverySecret ? ' Save your backup password, or continue to sign in.' : ' Continue to sign in.' : '')
-    : inFrame() ? 'Powered by Signa' : 'Name your device key and pick a way back in.');
+    : inFrame() ? 'Using Signa' : 'Name your device key and pick a way back in.');
   if (view?.phase === 'ready_to_sign_in' && kitSavedWallet === view.walletAddress) recoverySecret = null;
 }
 function render() {

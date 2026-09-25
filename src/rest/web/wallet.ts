@@ -27,7 +27,8 @@ const deviceSignInLabel = /iPhone/.test(navigator.userAgent) ? "Continue with Fa
   : /Macintosh|iPad/.test(navigator.userAgent) ? "Continue with Touch ID"
   : /Windows/.test(navigator.userAgent) ? "Continue with Windows Hello"
   : "Continue with your device";
-signIn.textContent = deviceSignInLabel;
+const deviceSignInPrompt = deviceSignInLabel.replace("Continue with", "Use") + " to sign in.";
+signIn.textContent = framed ? "Signa in" : deviceSignInLabel;
 const cancel = element<HTMLButtonElement>("wallet-cancel"), signOut = element<HTMLButtonElement>("wallet-logout");
 let configuration: Configuration, intent: Intent | null = null, session: Session | null = null, framerOrigin: string | null = null;
 let sessionKnown = false, busy = false, csrf = "", pending: Completion | null = null;
@@ -87,10 +88,11 @@ function token(value: unknown): string {
 }
 function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; }
 function render() {
-  signIn.hidden = !sessionKnown || !!session || !!pending;
+  signIn.hidden = !sessionKnown || !!session || !!pending || !!retryAction;
   signIn.disabled = busy || frameTooSmall() || !signInVisible;
   if (openAsPage) openAsPage.hidden = !framed || !intent;
   retry.hidden = !retryAction || busy;
+  retry.textContent = retryAction === load || retryAction === readSession ? "Check account" : "Retry";
   // A page that is leaving for an app shows nothing it has not shown yet.
   const leaving = !!intent && busy;
   signOut.hidden = !session || leaving; signOut.disabled = busy;
@@ -234,7 +236,7 @@ async function load() {
     listenForTheme(framerOrigin!);
     // No cookie reaches a cross-site frame, so there is no session to read; the sign-in below carries its own proof.
     ahead?.catch(() => undefined); ahead = null; session = null; sessionKnown = true;
-    setStatus("ready", "Powered by Signa"); return;
+    setStatus("ready", "Using Signa"); return;
   }
   await readSession();
 }
@@ -262,13 +264,13 @@ async function login() {
   if (!window.isSecureContext || !navigator.credentials?.get) {
     setStatus("error", "This browser cannot use passkeys here. Open Signa in a browser that supports passkeys."); return;
   }
-  setStatus("checking", "Preparing your passkey sign-in…");
+  setStatus("checking", "Preparing your sign-in…");
   const begun = await request(`${base}/login/begin`, {}), publicKey = record(begun.publicKey);
   if (publicKey.rpId !== configuration.rpId || publicKey.userVerification !== "required" || publicKey.timeout !== 90_000) throw new InvalidResponse();
   const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new InvalidResponse();
   const loginId = string(begun.loginId, 36); future(begun.expiresAtMs);
   const flowCsrf = token(begun.csrfToken);
-  nativePrompt = new AbortController(); setStatus("authenticating", "Use your passkey to sign in."); render();
+  nativePrompt = new AbortController(); setStatus("authenticating", deviceSignInPrompt); render();
   const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge,
     userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
   if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
@@ -311,12 +313,12 @@ async function framedSignIn() {
     setStatus("error", "This browser cannot use passkeys here. Open Signa in a browser that supports passkeys."); return;
   }
   future(intent.expiresAtMs);
-  setStatus("checking", "Preparing your passkey sign-in…");
+  setStatus("checking", "Preparing your sign-in…");
   const begun = await request(`${base}/authorize/${intent.id}/begin`, {}), publicKey = record(begun.publicKey);
   if (publicKey.rpId !== configuration.rpId || publicKey.userVerification !== "required" || publicKey.timeout !== 90_000) throw new InvalidResponse();
   const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new InvalidResponse();
   const loginId = string(begun.loginId, 36), flowToken = token(begun.flowToken); future(begun.expiresAtMs);
-  nativePrompt = new AbortController(); setStatus("authenticating", "Use your passkey to sign in."); render();
+  nativePrompt = new AbortController(); setStatus("authenticating", deviceSignInPrompt); render();
   const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge,
     userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
   if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();

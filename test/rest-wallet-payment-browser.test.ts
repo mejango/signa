@@ -160,7 +160,7 @@ describe('central payment review browser, virtual authenticator', () => {
       };
     });
     await page.locator('#payment-approve').click(); await status('error');
-    expect(await page.locator('#payment-status').textContent()).toBe('This browser blocked the passkey request. Open the original secure account page and try again.');
+    expect(await page.locator('#payment-status').textContent()).toBe('This browser blocked the device request. Open the original secure account page and try again.');
     expect(await page.locator('#payment-retry').isVisible()).toBe(true);
     expect(approvals()).toHaveLength(0); expect(review.status).toBe('pending');
     const reads = requests.filter(request => request.path === `/wallet/payment-reviews/${reviewId}`).length;

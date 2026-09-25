@@ -68,11 +68,11 @@ describe("served Center signup page", () => {
         navigator.credentials.create = async () => { throw new DOMException('See https://www.w3.org/TR/webauthn-2/', 'NotAllowedError'); };
       });
       await signup.locator('#signup-begin').click();
-      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your passkey.');
+      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your device.');
       expect(await signup.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
       expect(await signup.locator('#wallet-status').textContent()).not.toMatch(/NotAllowedError|https:/);
       await signup.getByRole('button', { name: 'Signa up', exact: true }).click();
-      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your passkey.');
+      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your device.');
       expect(begins).toBe(1);
     } finally { await context.close(); }
   });
