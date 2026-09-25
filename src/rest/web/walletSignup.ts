@@ -159,7 +159,7 @@ function render() {
   el('recovery-restore-box').hidden = !showKit || !!recoverySecret;
   el('recovery-kit-note').hidden = !recoverySecret; el('recovery-warning').hidden = !recoverySecret; el<HTMLButtonElement>('recovery-download').hidden = !recoverySecret;
   el<HTMLButtonElement>('recovery-download').disabled = engaged;
-  el<HTMLButtonElement>('recovery-share').hidden = !recoverySecret || typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function';
+  el('recovery-share-option').hidden = !recoverySecret || typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function';
   el<HTMLButtonElement>('recovery-share').disabled = engaged;
   el<HTMLInputElement>('recovery-file').disabled = engaged;
   el<HTMLTextAreaElement>('recovery-words').disabled = engaged;
@@ -174,6 +174,7 @@ function render() {
     : view?.phase === 'awaiting_possession' || view?.phase === 'awaiting_deployment_approval' ? 'Create account'
     : view?.phase === 'awaiting_activation' ? 'Continue' : view?.phase === 'deploying' && mode() === 'kit' ? 'Continue' : view?.phase === 'ready_to_sign_in' ? 'Signa in' : view?.phase === 'expired' ? 'Signa up' : null;
   next.hidden = !label || !!pending || stranded; next.textContent = label; next.disabled = engaged || view?.phase === 'deploying';
+  el('recovery-then').hidden = !showKit || !recoverySecret || label !== 'Create account' || next.hidden;
   if (view && view.phase === 'awaiting_activation'
     && kitMode() && kitSavedWallet !== view.walletAddress) next.disabled = true;
   el<HTMLButtonElement>('recovery-show').disabled = engaged; el<HTMLButtonElement>('recovery-copy').disabled = engaged;
