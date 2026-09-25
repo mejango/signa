@@ -192,7 +192,7 @@ describe('dedicated Center wallet HTTP journey',()=>{
   });
   it('serves a dedicated passkey page with self-only scripts',async()=>{
     const {app}=setup();const response=await app.fetch(new Request(origin+'/wallet'));
-    expect(response.status).toBe(200);expect(await response.text()).toContain('>Continue with your device</button>');
+    expect(response.status).toBe(200);expect(await response.text()).toContain('>Signa in</button>');
     expect(response.headers.get('content-security-policy')).toContain("script-src 'self';");
     expect(response.headers.get('content-security-policy')).not.toMatch(/unsafe/);
     const script=await app.fetch(new Request(origin+'/wallet/assets/wallet.js'));

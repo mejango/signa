@@ -23,12 +23,12 @@ type DeviceView = { id: string; phase: string; passkeyName: string | null; devic
 const deviceAdd = element<HTMLButtonElement>("wallet-device-add"), devicePanel = element("wallet-device"), deviceApprove = element<HTMLButtonElement>("wallet-device-approve");
 let device: { view: DeviceView; link: string } | null = null, deviceTimer: ReturnType<typeof setInterval> | null = null;
 const signIn = element<HTMLButtonElement>("wallet-signin"), retry = element<HTMLButtonElement>("wallet-retry");
-const deviceSignInLabel = /iPhone/.test(navigator.userAgent) ? "Continue with Face ID"
-  : /Macintosh|iPad/.test(navigator.userAgent) ? "Continue with Touch ID"
-  : /Windows/.test(navigator.userAgent) ? "Continue with Windows Hello"
-  : "Continue with your device";
-const deviceSignInPrompt = deviceSignInLabel.replace("Continue with", "Use") + " to sign in.";
-signIn.textContent = framed ? "Signa in" : deviceSignInLabel;
+const deviceSignInLabel = /iPhone/.test(navigator.userAgent) ? "Face ID"
+  : /Macintosh|iPad/.test(navigator.userAgent) ? "Touch ID"
+  : /Windows/.test(navigator.userAgent) ? "Windows Hello"
+  : "your device";
+const deviceSignInPrompt = `Use ${deviceSignInLabel} to sign in.`;
+signIn.textContent = "Signa in";
 const cancel = element<HTMLButtonElement>("wallet-cancel"), signOut = element<HTMLButtonElement>("wallet-logout");
 let configuration: Configuration, intent: Intent | null = null, session: Session | null = null, framerOrigin: string | null = null;
 let sessionKnown = false, busy = false, csrf = "", pending: Completion | null = null;

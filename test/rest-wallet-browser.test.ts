@@ -267,8 +267,15 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     authenticated = false;
     // An app return without a session is where the other ways in are offered.
     await page.goto(`${origin}/wallet/ways?intent=${intentId}`); await status("ready");
-    expect(await page.locator('#wallet-signin').textContent()).toMatch(/^Continue with (Face ID|Touch ID|Windows Hello|your device)$/);
+    expect(await page.locator('#wallet-signin').textContent()).toBe('Signa in');
     expect(await page.locator('#wallet-status').textContent()).toContain('Face ID, Touch ID');
+    const brandLabel = await page.locator('.brand-label').boundingBox();
+    const brandIcon = await page.locator('.brand-icon').boundingBox();
+    const heading = await page.locator('h1').boundingBox();
+    expect(brandLabel && brandIcon && heading && Math.abs(brandLabel.x - heading.x)).toBeLessThan(1);
+    const statusMarkerX = await page.locator('#wallet-status').evaluate(node =>
+      node.getBoundingClientRect().x + parseFloat(getComputedStyle(node, '::before').left));
+    expect(Math.abs(brandIcon!.x - statusMarkerX)).toBeLessThan(4);
     const links = await page.evaluate(() => [...document.querySelectorAll("#wallet-links a")].map(a => ({
       text: a.textContent!.trim(), color: getComputedStyle(a).color, size: parseFloat(getComputedStyle(a).fontSize) })));
     expect(links.map(link => link.text)).toEqual(["Signa up", "Lost your account?"]);
