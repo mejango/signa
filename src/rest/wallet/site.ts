@@ -248,8 +248,10 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   const landing = async (c: Context) => {
     if (options.signup && !readWalletCookie(c.req.raw, walletSessionCookie) && new URL(c.req.url).search === '') return c.html(walletSignupPage({ base }));
     const intentId = c.req.query('intent');
-    if (intentId && handoff.frameOrigin && frameable.size) framedBy(c, await handoff.frameOrigin(intentId).catch(() => undefined));
-    return c.html(walletPage(!!options.signup, !!options.recovery, base));
+    const framer = intentId && handoff.frameOrigin && frameable.size ? await handoff.frameOrigin(intentId).catch(() => undefined) : undefined;
+    if (intentId) framedBy(c, framer);
+    return c.html(walletPage(!!options.signup, !!options.recovery, base,
+      c.req.header('Sec-Fetch-Dest') === 'iframe' && !!framer && frameable.has(framer)));
   };
   app.get(base || '/', landing);
   if (base) app.get(`${base}/`, landing);

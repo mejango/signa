@@ -68,8 +68,9 @@ export function mountWalletSignup(app: Hono, options: WalletSignupSiteOptions) {
   app.get(`${base}/create`, async c => {
     // The signup for an app's intent may be framed by that app, when it is admitted to (see the wallet landing).
     const intentId = c.req.query('intent');
-    if (intentId && options.framed) options.framed.framedBy(c, await options.framed.frameOrigin(intentId).catch(() => undefined));
-    return c.html(walletSignupPage({ base }));
+    const framer = intentId && options.framed ? await options.framed.frameOrigin(intentId).catch(() => undefined) : undefined;
+    if (intentId && options.framed) options.framed.framedBy(c, framer);
+    return c.html(walletSignupPage({ base, framed: c.req.header('Sec-Fetch-Dest') === 'iframe' && !!framer }));
   });
   app.get(`${base}/assets/wallet-signup.js`, c => c.body(options.browserScript, 200, { 'Content-Type': 'application/javascript; charset=utf-8' }));
   app.get(`${base}/assets/wallet-signup.css`, c => c.body(walletSignupCss(), 200, { 'Content-Type': 'text/css; charset=utf-8' }));

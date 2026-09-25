@@ -399,9 +399,11 @@ describe('sign-in framed by an admitted app',()=>{
   }
   it('lets exactly the intent\'s app origin frame the sign-in page, and nothing frame it otherwise',async()=>{
     const {app}=await framedSetup();
-    const framed=await app.fetch(new Request(origin+'/wallet?intent='+flow));
+    const framed=await app.fetch(new Request(origin+'/wallet?intent='+flow,{headers:{'Sec-Fetch-Dest':'iframe'}}));
     expect(framed.status).toBe(200);expect(framed.headers.get('content-security-policy')).toContain(`frame-ancestors ${appOrigin};`);
     expect(framed.headers.get('x-frame-options')).toBeNull();
+    expect(await framed.text()).toContain('<html lang="en" class="framed">');
+    expect(await (await app.fetch(new Request(origin+'/wallet?intent='+flow))).text()).not.toContain('class="framed"');
     for(const path of ['/wallet?intent='+token,'/wallet/authorize/'+flow]){
       const plain=await app.fetch(new Request(origin+path));
       expect(plain.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");expect(plain.headers.get('x-frame-options')).toBe('DENY');

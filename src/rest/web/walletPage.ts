@@ -1,8 +1,8 @@
 import { BRAND_ICON, BRAND_CSS } from '../../branding.js';
 /** Dedicated credential surface. All behavior and styles are served as same-origin assets. */
-export function walletPage(signup = false, recovery = false, base = '/wallet'): string {
+export function walletPage(signup = false, recovery = false, base = '/wallet', framed = false): string {
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"${framed ? ' class="framed"' : ''}><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>Your account | Signa</title>
 <link rel="stylesheet" href="${base}/assets/wallet.css"><script type="module" src="${base}/assets/wallet.js"></script></head>
 <body><main><a class="brand" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a>
