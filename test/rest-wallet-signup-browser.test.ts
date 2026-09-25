@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /** The served signup page in Chromium, with a modeled Center. */
 describe("served Center signup page", () => {
-  let server: Server, browser: Browser, page: Page, origin: string, script: string, pageHtml: string, css: string;
+  let server: Server, browser: Browser, page: Page, origin: string, script: string, pageHtml: string, framedHtml: string, css: string;
   let releaseLogin: (() => void) | null = null;
   const errors: string[] = [];
 
@@ -14,17 +14,19 @@ describe("served Center signup page", () => {
       bundle: true, platform: "browser", format: "esm", target: "es2022", write: false });
     script = built.outputFiles[0]!.text;
     const production = await import("../src/rest/web/walletSignupPage.js");
-    pageHtml = production.walletSignupPage(); css = production.walletSignupCss();
+    pageHtml = production.walletSignupPage(); framedHtml = production.walletSignupPage({ framed: true }); css = production.walletSignupCss();
     server = createServer(async (request, response) => {
       const path = new URL(request.url!, "http://localhost").pathname;
       const json = (value: unknown, status = 200) => {
         response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); response.end(JSON.stringify(value));
       };
-      if (path === "/wallet") { response.writeHead(200, { "content-type": "text/html" }); response.end(pageHtml); return; }
+      if (path === "/wallet") { response.writeHead(200, { "content-type": "text/html" }); response.end(request.headers['sec-fetch-dest'] === 'iframe' ? framedHtml : pageHtml); return; }
       if (path === "/wallet/assets/wallet-signup.js") { response.writeHead(200, { "content-type": "text/javascript" }); response.end(script); return; }
       if (path === "/wallet/assets/wallet-signup.css") { response.writeHead(200, { "content-type": "text/css" }); response.end(css); return; }
       if (path === "/wallet/config") return json({ version: "center-wallet-v1", issuer: origin, audience: `${origin}/v1`, rpId: "localhost" });
+      if (path.startsWith('/wallet/authorize/')) return json({ request: { callbackUri: `${origin}/app/callback`, state: 'state', origin } });
       if (path === "/wallet/signup/state") return json({ view: null });
+      if (path === "/wallet/signup/framed/state") return json({ view: null });
       if (path === "/wallet/login/begin") {
         // Hold the sign-in open: the page must not keep offering the signup form meanwhile.
         await new Promise<void>(resolve => { releaseLogin = resolve; });
@@ -39,6 +41,22 @@ describe("served Center signup page", () => {
     page.on("pageerror", error => errors.push(String(error)));
   });
   afterAll(async () => { await browser?.close(); await new Promise<void>(resolve => server?.close(() => resolve())); });
+
+  it('places the quiet Signa mark below the framed signup controls and announces the signup page', async () => {
+    await page.goto(`${origin}/wallet`);
+    await page.evaluate(() => {
+      window.addEventListener('message', event => {
+        if (event.data?.type === 'juicebox-center:page') document.documentElement.dataset.framePage = event.data.page;
+      });
+      const frame = document.createElement('iframe'); frame.src = '/wallet?intent=' + 'A'.repeat(43); document.body.append(frame);
+    });
+    const frame = page.frameLocator('iframe');
+    await expect.poll(() => page.locator('html').getAttribute('data-frame-page')).toBe('signup');
+    await expect.poll(() => frame.locator('#wallet-status').textContent()).toBe('Signa');
+    const status = await frame.locator('#wallet-status').boundingBox(), links = await frame.locator('#signup-links').boundingBox();
+    expect(status && links && status.y > links.y + links.height).toBe(true);
+    expect(await frame.locator('#wallet-status').evaluate(node => getComputedStyle(node).fontWeight)).toBe('400');
+  });
 
   it("keeps the local default and edited name, and guides a passkey retry within the same signup", async () => {
     const context = await browser.newContext({ locale: 'pt-BR', timezoneId: 'America/Sao_Paulo' });

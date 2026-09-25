@@ -234,9 +234,10 @@ async function load() {
   }
   if (framed && intent) {
     listenForTheme(framerOrigin!);
+    window.parent.postMessage({ type: 'juicebox-center:page', page: 'signin' }, framerOrigin!);
     // No cookie reaches a cross-site frame, so there is no session to read; the sign-in below carries its own proof.
     ahead?.catch(() => undefined); ahead = null; session = null; sessionKnown = true;
-    setStatus("ready", "Using Signa"); return;
+    setStatus("brand", "Signa"); return;
   }
   await readSession();
 }

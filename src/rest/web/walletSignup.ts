@@ -79,13 +79,13 @@ const steps: Record<View['phase'], string> = {
 // A native prompt waiting on the user is not work in flight, so the mark holds still for it.
 const polling = () => view?.phase === 'deploying' || view?.phase === 'preparing_sign_in';
 const waiting = () => (busy && !native) || polling();
-function message(value: string, error = false) { status.textContent = value; status.dataset.state = error ? 'error' : waiting() ? 'busy' : 'ready'; }
+function message(value: string, error = false) { status.textContent = value; status.dataset.state = error ? 'error' : waiting() ? 'busy' : 'ready'; status.toggleAttribute('data-brand', inFrame() && value === 'Signa'); }
 /** The first word links to the creation transaction on Basescan when the signup has one. */
 function messageLinked(word: string, rest: string) {
   const hash = view?.transactionHash;
   if (!hash) { message(word + rest); return; }
   const link = document.createElement('a'); link.href = 'https://basescan.org/tx/' + hash; link.target = '_blank'; link.rel = 'noopener'; link.textContent = word;
-  status.replaceChildren(link, document.createTextNode(rest)); status.dataset.state = waiting() ? 'busy' : 'ready';
+  status.replaceChildren(link, document.createTextNode(rest)); status.dataset.state = waiting() ? 'busy' : 'ready'; status.removeAttribute('data-brand');
 }
 function spin() { if (waiting()) { if (status.dataset.state !== 'error') status.dataset.state = 'busy'; } else if (status.dataset.state === 'busy') status.dataset.state = 'ready'; }
 function encode(value: ArrayBuffer) { return btoa(String.fromCharCode(...new Uint8Array(value))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', ''); }
@@ -134,7 +134,7 @@ function accept(result: { view: View | null; csrfToken?: string; flowToken?: str
   if (view?.phase === 'deploying') view.preconfirmed ? messageLinked('Almost', ' there…' + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''))
     : messageLinked('Creating', steps.deploying.slice('Creating'.length) + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''));
   else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' && recoverySecret ? ' Save your backup password, or continue to sign in.' : ' Continue to sign in.' : '')
-    : inFrame() ? 'Using Signa' : 'Name your device key and pick a way back in.');
+    : inFrame() ? 'Signa' : 'Name your device key and pick a way back in.');
   if (view?.phase === 'ready_to_sign_in' && kitSavedWallet === view.walletAddress) recoverySecret = null;
 }
 function render() {
@@ -497,6 +497,7 @@ void run(async () => {
     if (typeof callbackUri !== 'string' || typeof requested?.state !== 'string' || typeof requested?.origin !== 'string') throw new Error('Return to the original app to start this signup.');
     intentReturn = { callbackUri, state: requested.state };
     listenForTheme(requested.origin);
+    window.parent.postMessage({ type: 'juicebox-center:page', page: 'signup' }, requested.origin);
     // The ways out of the frame: "log in" stays in the frame; the page of its own opens on top.
     const fullscreen = el<HTMLAnchorElement>('signup-fullscreen'); fullscreen.href = `${base}/create${url.search}`; fullscreen.hidden = false;
   }

@@ -293,14 +293,21 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       await route.fulfill({ response, headers });
     });
     await page.goto(`${parent === "admitted" ? origin : otherOrigin}/app/callback`);
+    await page.evaluate(() => window.addEventListener('message', event => {
+      if (event.data?.type === 'juicebox-center:page') document.documentElement.dataset.framePage = event.data.page;
+    }));
     await page.evaluate(src => { const frame = document.createElement("iframe"); frame.src = src; document.body.append(frame); }, framedUrl);
     await expect.poll(() => page.frames().some(frame => frame.url() === framedUrl)).toBe(true);
     const frame = page.frames().find(frame => frame.url() === framedUrl)!;
-    await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("ready");
-    expect(await frame.locator('#wallet-status').textContent()).toBe('Using Signa');
+    await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("brand");
+    expect(await frame.locator('#wallet-status').textContent()).toBe('Signa');
+    if (parent === 'admitted') await expect.poll(() => page.locator('html').getAttribute('data-frame-page')).toBe('signin');
+    else expect(await page.locator('html').getAttribute('data-frame-page')).toBeNull();
     expect(await frame.locator('#wallet-signin').textContent()).toBe('Signa in');
     const statusBox = await frame.locator('#wallet-status').boundingBox(), fullScreenBox = await frame.locator('#wallet-open').boundingBox();
-    expect(statusBox && fullScreenBox && Math.abs(statusBox.y + statusBox.height / 2 - fullScreenBox.y - fullScreenBox.height / 2)).toBeLessThan(4);
+    const linksBox = await frame.locator('#wallet-links').boundingBox();
+    expect(statusBox && fullScreenBox && linksBox && statusBox.y > linksBox.y + linksBox.height && fullScreenBox.y < statusBox.y).toBe(true);
+    expect(await frame.locator('#wallet-status').evaluate(node => getComputedStyle(node).fontWeight)).toBe('400');
     expect(await frame.locator('h1').evaluate(heading => getComputedStyle(heading).clipPath)).toBe('inset(50%)');
     const headingFont = () => frame.locator("h1").evaluate(heading => getComputedStyle(heading).fontFamily);
     const originalFont = await headingFont();
@@ -321,7 +328,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(await frame.evaluate(() => JSON.parse(sessionStorage.getItem("center:frame-theme") ?? "{}")))
       .toEqual(parent === "admitted" ? { headingFont: '"Courier New", monospace', font: "serif" } : {});
     await frame.goto(framedUrl);
-    await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("ready");
+    await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("brand");
     expect(await headingFont()).toBe(parent === "admitted" ? '"Courier New", monospace' : originalFont);
     expect(await frame.locator("body").evaluate(body => getComputedStyle(body).fontFamily)).toBe(parent === "admitted" ? "serif" : originalFont);
     expect(errors).toEqual([]);
