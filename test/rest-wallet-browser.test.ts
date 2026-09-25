@@ -300,7 +300,8 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.frames().some(frame => frame.url() === framedUrl)).toBe(true);
     const frame = page.frames().find(frame => frame.url() === framedUrl)!;
     await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("brand");
-    expect(await frame.locator('#wallet-status').textContent()).toBe('Signa');
+    expect(await frame.locator('#wallet-status').textContent()).toBe('Powered by Signa');
+    expect(await frame.locator('#wallet-status').evaluate(node => getComputedStyle(node, '::before').content)).toBe('none');
     const brandLink = frame.locator('#wallet-status a');
     expect(await brandLink.getAttribute('href')).toBe('https://signa.center');
     expect(await brandLink.getAttribute('target')).toBe('_blank');

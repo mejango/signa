@@ -14,7 +14,7 @@ export function signaBrandLink(status: HTMLElement) {
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   link.textContent = 'Signa';
-  status.replaceChildren(link);
+  status.replaceChildren(document.createTextNode('Powered by '), link);
 }
 const themeTokens: Record<string, RegExp> = {
   background: /^#[0-9a-f]{3,8}$/i, foreground: /^#[0-9a-f]{3,8}$/i, muted: /^#[0-9a-f]{3,8}$/i, line: /^#[0-9a-f]{3,8}$/i,

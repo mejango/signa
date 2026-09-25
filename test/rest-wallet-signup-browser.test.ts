@@ -52,7 +52,8 @@ describe("served Center signup page", () => {
     });
     const frame = page.frameLocator('iframe');
     await expect.poll(() => page.locator('html').getAttribute('data-frame-page')).toBe('signup');
-    await expect.poll(() => frame.locator('#wallet-status').textContent()).toBe('Signa');
+    await expect.poll(() => frame.locator('#wallet-status').textContent()).toBe('Powered by Signa');
+    expect(await frame.locator('#wallet-status').evaluate(node => getComputedStyle(node, '::before').content)).toBe('none');
     const brandLink = frame.locator('#wallet-status a');
     expect(await brandLink.getAttribute('href')).toBe('https://signa.center');
     expect(await brandLink.getAttribute('target')).toBe('_blank');
