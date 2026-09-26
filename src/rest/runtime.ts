@@ -84,7 +84,7 @@ import { createWalletNetworks } from "./wallet/networks.js";
 import { PostgresWalletNetworksStore } from "./wallet/networksPostgres.js";
 import { PostgresWalletEnrollmentStore } from "./wallet/enrollmentPostgres.js";
 import { RelayrProvider } from "./sponsorship/provider.js";
-import type { createWalletOnramp } from "./wallet/onramp.js";
+import { createWalletOnramp, type WalletOnrampConfig } from "./wallet/onramp.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 
@@ -101,8 +101,8 @@ export interface RestWalletConfiguration {
   payments?: Omit<WalletV6UsdcPaymentConfig, 'chainId'>;
   /** Private key of the account that funds Relayr bundles for the account-on-more-chains feature. */
   networksPayerKey?: Hex;
-  /** Coinbase Onramp to the account's own address. */
-  onramp?: ReturnType<typeof createWalletOnramp>;
+  /** Coinbase Onramp to the account's own address (plain settings; the runtime builds the client). */
+  onramp?: Omit<WalletOnrampConfig, 'origin' | 'fetch'>;
   applePayDomainFile?: string;
 }
 export interface RestWalletRuntime {
@@ -585,7 +585,7 @@ export async function createRestRuntime(options: {
     ...(wallet.recovery ? { recovery: wallet.recovery, recoveryBrowserScript: assets.walletRecoveryScript } : {}),
     ...(wallet.devices ? { devices: wallet.devices, deviceBrowserScript: assets.walletDeviceScript } : {}),
     ...(wallet.networks ? { networks: wallet.networks } : {}),
-    ...(options.wallet?.onramp ? { onramp: options.wallet.onramp } : {}),
+    ...(walletConfiguration?.onramp ? { onramp: createWalletOnramp({ ...walletConfiguration.onramp, origin: wallet.origin }) } : {}),
     ...(options.wallet?.applePayDomainFile ? { applePayDomainFile: options.wallet.applePayDomainFile } : {}),
     onEvent: event => console.info(JSON.stringify({ service: "wallet", ...event })),
   }) : undefined;

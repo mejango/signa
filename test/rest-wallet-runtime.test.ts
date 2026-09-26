@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
 import type { Store } from '../src/store.js';
@@ -72,6 +73,17 @@ describe('explicit wallet runtime composition', () => {
     expect(absent.runtime.wallet).not.toHaveProperty('recovery');
     await expect(fixture(undefined, false, undefined, undefined, factory)).rejects.toMatchObject({ code: 'WALLET_RECOVERY_UNAVAILABLE' });
     expect(factory).toHaveBeenCalledOnce();
+  });
+  it('builds the onramp from plain settings on the wallet origin, so the configuration still clones', async () => {
+    const site = vi.spyOn(walletSite, 'createWalletSite');
+    const { privateKey } = generateKeyPairSync('ed25519'), jwk = privateKey.export({ format: 'jwk' });
+    const secret = Buffer.concat([Buffer.from(jwk.d!, 'base64url'), Buffer.from(jwk.x!, 'base64url')]).toString('base64');
+    const f = await fixture({ ...await walletConfiguration(), onramp: { keyId: 'fixture-key', secret, applePay: true } });
+    const onramp = site.mock.calls[0]![0].onramp!;
+    expect(onramp.applePay).toBe(true); expect(typeof onramp.session).toBe('function');
+    expect(f.query).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+    site.mockClear(); await fixture(await walletConfiguration());
+    expect(site.mock.calls[0]![0]).not.toHaveProperty('onramp');
   });
   it('installs signup only from an explicit local capability and stops its worker with the runtime', async () => {
     const site = vi.spyOn(walletSite, 'createWalletSite');

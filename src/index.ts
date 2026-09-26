@@ -16,7 +16,6 @@ import { readRestExecutionConfiguration } from "./rest/executionConfig.js";
 import { Metrics } from "./observability.js";
 import { createSignaApp, type SignaHttpRuntime } from "./signaApp.js";
 import { createSignaServer } from "./signaServer.js";
-import { createWalletOnramp } from "./rest/wallet/onramp.js";
 
 function positiveInteger(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
@@ -66,8 +65,8 @@ async function activate(): Promise<void> {
   const recoveryKey = signer("WALLET_RECOVERY_SIGNER_KEY");
   const networksPayerKey = signer("WALLET_NETWORKS_PAYER_KEY");
   const frameableAppOrigins = origins("WALLET_FRAMEABLE_APP_ORIGINS");
-  const onramp = configuredGroup(["CDP_API_KEY_ID", "CDP_API_KEY_SECRET"]) ? createWalletOnramp({ keyId: process.env.CDP_API_KEY_ID!,
-    secret: process.env.CDP_API_KEY_SECRET!, origin, applePay: flag("CDP_ONRAMP_APPLE_PAY", true), sandbox: flag("CDP_ONRAMP_SANDBOX") }) : undefined;
+  const onramp = configuredGroup(["CDP_API_KEY_ID", "CDP_API_KEY_SECRET"]) ? { keyId: process.env.CDP_API_KEY_ID!,
+    secret: process.env.CDP_API_KEY_SECRET!, applePay: flag("CDP_ONRAMP_APPLE_PAY", true), sandbox: flag("CDP_ONRAMP_SANDBOX") } : undefined;
   keepUpstreamConnections();
   const upstreams = dwellirRpcUpstreams(process.env.DWELLIR_API_KEY);
   const rpcSiteLimitPerMinute = positiveInteger("RPC_SITE_LIMIT_PER_MINUTE", 20_000);
