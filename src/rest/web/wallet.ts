@@ -103,7 +103,7 @@ function render() {
   // Signed in, the page is the account; the ways in belong to the signed-out page only.
   // The signed-out links belong to a page that knows there is no session, not to a check in progress or a failed one.
   const links = document.getElementById("wallet-links"); if (links) links.hidden = !!session || !sessionKnown;
-  renderNetworks(); renderDevice(); renderFunds();
+  renderNetworks(); renderDevice(); renderFunds(); renderBalance();
   passkey.textContent = session?.passkeyName ?? ""; passkey.hidden = passkeyLabel.hidden = !session?.passkeyName;
 }
 async function request(path: string, body?: unknown, csrfToken?: string, timeoutMs = 10_000): Promise<Json> {
@@ -155,6 +155,7 @@ function acceptSession(value: Json, required = false) {
   csrf = nextCsrf; sessionKnown = true;
   // A page about to leave for an app or a payment review does not need the networks list.
   if (!intent && !paymentReviewId) void refreshNetworks().catch(() => { /* The list stays at Base until the next load. */ });
+  if (!intent && !paymentReviewId) void refreshBalances();
   if (!intent && !paymentReviewId) void request(`${base}/onramp`).then(value => { fundsOffer = { applePay: value.applePay === true }; render(); })
     .catch(() => { /* No onramp configured: the link stays hidden. */ });
 }
@@ -456,6 +457,48 @@ if (networksAdd && networksForm) {
   for (const radio of networksForm.querySelectorAll<HTMLInputElement>("input[name=family]")) radio.addEventListener("change", () => { networksQuote = null; renderChoices(); render(); });
   element("wallet-networks-cancel").addEventListener("click", () => { networksOpen = false; networksQuote = null; render(); });
 }
+// The balance: ETH and USDC on every network the address can hold them, a mainnet dollar total that opens to
+// the per-network breakdown. A network that didn't answer is named, never counted as zero.
+type ChainBalance = { name: string; testnet: boolean; eth: string | null; usdc: string | null };
+let balances: { chains: ChainBalance[]; totalUsdCents: string | null } | null = null;
+function units(value: string, decimals: number, places: number): string {
+  const amount = BigInt(value), scale = 10n ** BigInt(decimals);
+  const fraction = (amount % scale).toString().padStart(decimals, "0").slice(0, places).replace(/0+$/, "");
+  return (amount / scale).toLocaleString("en-US") + (fraction ? `.${fraction}` : "");
+}
+function tokens(eth: bigint, usdc: bigint): string {
+  const parts = [usdc ? `${units(String(usdc), 6, 2)} USDC` : "", eth ? `${units(String(eth), 18, 6)} ETH` : ""].filter(Boolean);
+  return parts.join(", ") || "0";
+}
+function renderBalance() {
+  const shown = !!session && (!!balances || !!fundsOffer);
+  element("wallet-balance-label").hidden = element("wallet-balance-row").hidden = !shown;
+  element("wallet-balance").hidden = !balances;
+  if (!balances) return;
+  const mainnets = balances.chains.filter(chain => !chain.testnet && chain.eth !== null);
+  const sum = (key: "eth" | "usdc") => mainnets.reduce((total, chain) => total + BigInt(chain[key]!), 0n);
+  const cents = balances.totalUsdCents === null ? null : BigInt(balances.totalUsdCents);
+  element("wallet-balance-total").textContent = cents === null ? tokens(sum("eth"), sum("usdc"))
+    : `$${(cents / 100n).toLocaleString("en-US")}.${(cents % 100n).toString().padStart(2, "0")}`;
+  const lines = balances.chains.filter(chain => chain.eth !== null && (BigInt(chain.eth) || BigInt(chain.usdc!)))
+    .map(chain => `${chain.name}${chain.testnet ? " (testnet)" : ""}: ${tokens(BigInt(chain.eth!), BigInt(chain.usdc!))}`);
+  const unknown = balances.chains.filter(chain => chain.eth === null).map(chain => chain.name);
+  if (!lines.length) lines.push("Nothing on any network yet.");
+  if (unknown.length) lines.push(`Couldn't check ${unknown.join(", ")}.`);
+  element("wallet-balance-chains").replaceChildren(...lines.map(line => Object.assign(document.createElement("li"), { textContent: line })));
+}
+async function refreshBalances() {
+  try {
+    const value = record(await request(`${base}/balances`, undefined, undefined, 20_000));
+    const chains = (Array.isArray(value.chains) ? value.chains : []).map(item => {
+      const chain = record(item), amount = (v: unknown) => v === null ? null : /^[0-9]{1,78}$/.test(String(v)) ? String(v) : (() => { throw new InvalidResponse(); })();
+      return { name: string(chain.name, 40), testnet: chain.testnet === true, eth: amount(chain.eth), usdc: amount(chain.usdc) };
+    });
+    const total = value.totalUsdCents;
+    balances = { chains, totalUsdCents: typeof total === "string" && /^[0-9]{1,40}$/.test(total) ? total : null };
+    render();
+  } catch { /* The balance stays hidden until the next load. */ }
+}
 // Adding funds: Apple Pay (Coinbase's headless guest checkout, US cards) or a Coinbase account (hosted). Either
 // opens on Coinbase's page in a new window and buys USDC on Base for this account; the server names the address.
 // Apple Pay needs a verified email and US mobile: Coinbase sends and checks the codes, and only this device keeps
@@ -570,7 +613,7 @@ window.addEventListener("message", event => {
   let name: unknown;
   try { name = (typeof event.data === "string" ? JSON.parse(event.data) : event.data)?.eventName; } catch { return; }
   if (name === "onramp_api.commit_success") setStatus("checking", "Payment approved. Coinbase is sending the USDC…");
-  else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The USDC is in your account."); }
+  else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The USDC is in your account."); void refreshBalances(); }
   else if (name === "onramp_api.cancel") { closePayment(); setStatus("ready", "Apple Pay cancelled."); }
   else if (name === "onramp_api.load_error" || name === "onramp_api.commit_error" || name === "onramp_api.polling_error") {
     closePayment(); setStatus("error", "Coinbase couldn't complete the purchase. Try again, or use a Coinbase account.");
@@ -585,7 +628,7 @@ function watchOrder(orderId: string) {
     if (polls++ > 180) return stop();
     request(`${base}/onramp/status`, { orderId }, csrf).then(value => {
       const state = string(value.status, 40);
-      if (state === "completed") { stop(); closePayment(); setStatus("ready", "The USDC is in your account."); }
+      if (state === "completed") { stop(); closePayment(); setStatus("ready", "The USDC is in your account."); void refreshBalances(); }
       else if (state === "failed") { stop(); closePayment(); setStatus("error", "Coinbase couldn't complete the purchase."); }
       else if (state === "processing") setStatus("checking", "Payment received. Coinbase is sending the USDC…");
     }).catch(() => { /* The next poll reads again. */ });

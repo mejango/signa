@@ -20,6 +20,7 @@ import type { PostgresWalletPolicyStore } from './policyPostgres.js';
 import type { PostgresWalletPaymentReviewStore } from './paymentReviewsPostgres.js';
 import type { createWalletNetworks } from './networks.js';
 import type { createWalletOnramp } from './onramp.js';
+import type { createWalletBalances } from './balances.js';
 import { publicWalletPaymentCentralReview } from './paymentPublic.js';
 import { mountWalletSignup, type WalletSignupSiteOptions } from './signupSite.js';
 import { mountWalletRecovery, type WalletRecoverySiteOptions } from './recoverySite.js';
@@ -50,6 +51,8 @@ export interface WalletSiteOptions {
   payments?: Pick<PostgresWalletPaymentReviewStore, 'get' | 'approve' | 'cancel'> & Partial<Pick<PostgresWalletPaymentReviewStore, 'frameOrigin'>>;
   /** The account on more chains (quote, one passkey approval, Center-paid Relayr bundle, per-chain status). */
   networks?: Pick<ReturnType<typeof createWalletNetworks>, 'list' | 'quote' | 'approve' | 'status'>;
+  /** ETH and USDC on every chain the account's address can exist on, with a mainnet total in dollars. */
+  balances?: ReturnType<typeof createWalletBalances>;
   /** Coinbase Onramp to the account's own address: hosted checkout, and Apple Pay when Coinbase admits it. */
   onramp?: Pick<ReturnType<typeof createWalletOnramp>, 'applePay' | 'session' | 'verify' | 'confirm' | 'order' | 'status'>;
   /** The domain verification file Coinbase issues for the embedded Apple Pay button, served at Apple's well-known path. */
@@ -101,7 +104,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   });
   // The wallet's own paths under `base`. On the credential host nothing else may execute.
   const walletPrefixes = ['/assets/', '/authorize/', '/config', '/create', '/handoff/', '/launch', '/login/', '/logout', '/payment',
-    '/networks', '/onramp', '/payment-reviews/', '/recover', '/recovery/', '/session', '/signup/', '/add', '/devices/'];
+    '/networks', '/onramp', '/balances', '/payment-reviews/', '/recover', '/recovery/', '/session', '/signup/', '/add', '/devices/'];
   const applePayFile = '/.well-known/apple-developer-merchantid-domain-association';
   const isWalletPath = (path: string) => (path === applePayFile && !!options.applePayDomainFile) || path === (base || '/') || path === `${base}/` || walletPrefixes.some(prefix => path.startsWith(base + prefix));
   const legacyPrefix = '/wallet';
@@ -375,6 +378,12 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   // Money lands only at the signed-in account's own address; the body never names a destination.
   const onramp = () => { if (!options.onramp) reject(503, 'WALLET_ONRAMP_UNAVAILABLE'); return options.onramp; };
   const address = (session: WalletCentralSession) => session.accountId.slice('eip155:8453:'.length);
+  app.get(`${base}/balances`, async c => {
+    if (!options.balances) reject(503, 'WALLET_BALANCES_UNAVAILABLE');
+    const token = readWalletCookie(c.req.raw, walletSessionCookie), session = token ? await viewFor(token) : null;
+    if (!session) reject(403, 'WALLET_HTTP_SESSION');
+    return c.json(await options.balances.read(address(session)));
+  });
   app.get(`${base}/onramp`, async c => {
     const service = onramp(), token = readWalletCookie(c.req.raw, walletSessionCookie), session = token ? await viewFor(token) : null;
     if (!session) reject(403, 'WALLET_HTTP_SESSION');

@@ -238,6 +238,12 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
       if (onramp && path === "/wallet/onramp") return json({ applePay: true });
+      if (onramp && path === "/wallet/balances") return json({ ethUsd: "250000000000", totalUsdCents: "251234", complete: false, chains: [
+        { chainId: 8453, name: "Base", testnet: false, eth: "1000000000000000000", usdc: "0" },
+        { chainId: 10, name: "Optimism", testnet: false, eth: "0", usdc: "12345678" },
+        { chainId: 42161, name: "Arbitrum", testnet: false, eth: null, usdc: null },
+        { chainId: 84532, name: "Base Sepolia", testnet: true, eth: "0", usdc: "5000000" },
+        { chainId: 1, name: "Ethereum", testnet: false, eth: "0", usdc: "0" }] });
       if (onramp && path === "/wallet/onramp/verify") return json({ verificationId: vid(body.channel === "sms" ? 1 : 2) });
       if (onramp && path === "/wallet/onramp/confirm") return body.code === "123456" ? json({ verificationId: body.verificationId, verifiedAtMs: Date.now(), expiresAt: null })
         : json({ error: { code: "WALLET_ONRAMP_CODE_INVALID", message: "x" } }, 400);
@@ -419,6 +425,19 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.locator("#wallet-logout").click(); await status("ready");
     expect(requests.find(item => item.path === "/wallet/logout")!.headers["x-center-wallet-csrf"]).toBe(csrf);
+    expect(errors).toEqual([]);
+  });
+
+  it("shows the balance total and opens the per-network breakdown on click", async () => {
+    onramp = true;
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-balance-total").textContent()).toBe("$2,512.34");
+    expect(await page.locator("#wallet-balance-chains").isVisible()).toBe(false);
+    await page.locator("#wallet-balance-total").click();
+    expect(await page.locator("#wallet-balance-chains li").allTextContents()).toEqual([
+      "Base: 1 ETH", "Optimism: 12.34 USDC", "Base Sepolia (testnet): 5 USDC", "Couldn't check Arbitrum."]);
+    expect(await page.locator("#wallet-funds-open").isVisible()).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   });
 

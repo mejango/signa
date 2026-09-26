@@ -85,6 +85,7 @@ import { PostgresWalletNetworksStore } from "./wallet/networksPostgres.js";
 import { PostgresWalletEnrollmentStore } from "./wallet/enrollmentPostgres.js";
 import { RelayrProvider } from "./sponsorship/provider.js";
 import { createWalletOnramp, type WalletOnrampConfig } from "./wallet/onramp.js";
+import { createWalletBalances } from "./wallet/balances.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 
@@ -585,6 +586,7 @@ export async function createRestRuntime(options: {
     ...(wallet.recovery ? { recovery: wallet.recovery, recoveryBrowserScript: assets.walletRecoveryScript } : {}),
     ...(wallet.devices ? { devices: wallet.devices, deviceBrowserScript: assets.walletDeviceScript } : {}),
     ...(wallet.networks ? { networks: wallet.networks } : {}),
+    balances: createWalletBalances(rpc),
     ...(walletConfiguration?.onramp ? { onramp: createWalletOnramp({ ...walletConfiguration.onramp, origin: wallet.origin }) } : {}),
     ...(options.wallet?.applePayDomainFile ? { applePayDomainFile: options.wallet.applePayDomainFile } : {}),
     onEvent: event => console.info(JSON.stringify({ service: "wallet", ...event })),
