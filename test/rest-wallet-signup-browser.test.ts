@@ -63,6 +63,28 @@ describe("served Center signup page", () => {
     expect(await frame.locator('#wallet-status').evaluate(node => getComputedStyle(node).fontWeight)).toBe('400');
   });
 
+  it("rounds every framed control to the app's radius, checkboxes less, and leaves the unframed page square", async () => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/wallet`);
+    await page.evaluate(() => {
+      const frame = document.createElement('iframe'); frame.src = '/wallet?intent=' + 'A'.repeat(43); frame.style.cssText = 'width:350px;height:600px;border:0'; document.body.append(frame);
+    });
+    const frame = page.frameLocator('iframe');
+    await expect.poll(() => frame.locator('#signup-form').isVisible()).toBe(true);
+    await page.evaluate(origin => document.querySelector('iframe')!.contentWindow!.postMessage({ type: 'juicebox-center:theme', theme: { radius: '8px', inset: '32px' } }, origin), origin);
+    const radius = (selector: string) => frame.locator(selector).first().evaluate(node => getComputedStyle(node).borderRadius);
+    await expect.poll(() => radius('#passkey-name')).toBe('8px');
+    expect(await radius('#signup-begin')).toBe('8px');
+    expect(await radius('.choice input')).toBe('4px');
+    const name = (await frame.locator('#passkey-name').boundingBox())!, mark = (await frame.locator('#signup-fullscreen').boundingBox())!;
+    expect(name.y).toBeGreaterThanOrEqual(mark.y + mark.height);
+    expect((await frame.locator('#signup-begin').boundingBox())!.height).toBe(44);
+    await page.evaluate(() => document.querySelector('iframe')!.remove());
+    await expect.poll(() => page.locator('#signup-form').isVisible()).toBe(true);
+    for (const selector of ['#passkey-name', '#signup-begin', '.choice input']) expect(await page.locator(selector).first().evaluate(node => getComputedStyle(node).borderRadius)).toBe('0px');
+    await page.setViewportSize({ width: 1200, height: 900 });
+  });
+
   it("keeps the local default and edited name, and guides a passkey retry within the same signup", async () => {
     const context = await browser.newContext({ locale: 'pt-BR', timezoneId: 'America/Sao_Paulo' });
     const signup = await context.newPage();

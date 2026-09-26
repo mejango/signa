@@ -340,6 +340,37 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(errors).toEqual([]);
   });
 
+  it("takes the app's corner radius and keeps a narrow frame's button compact beside the fullscreen mark", async () => {
+    const framedUrl = `${origin}/wallet?intent=${intentId}`;
+    await page.route(framedUrl, async route => {
+      const response = await route.fetch(), headers = response.headers();
+      headers["content-security-policy"] = headers["content-security-policy"]!.replace("frame-ancestors 'none'", `frame-ancestors ${origin}`);
+      await route.fulfill({ response, headers });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`${origin}/app/callback`);
+    await page.evaluate(src => { const frame = document.createElement("iframe"); frame.src = src; frame.style.cssText = "width:350px;height:400px;border:0"; document.body.append(frame); }, framedUrl);
+    await expect.poll(() => page.frames().some(frame => frame.url() === framedUrl)).toBe(true);
+    const frame = page.frames().find(frame => frame.url() === framedUrl)!;
+    await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("brand");
+    await page.evaluate(origin => document.querySelector("iframe")!.contentWindow!.postMessage({ type: "juicebox-center:theme", theme: { radius: "8px", inset: "32px" } }, origin), origin);
+    await expect.poll(() => frame.locator("#wallet-signin").evaluate(node => getComputedStyle(node).borderRadius)).toBe("8px");
+    const signIn = (await frame.locator("#wallet-signin").boundingBox())!, mark = (await frame.locator("#wallet-open").boundingBox())!;
+    expect(await frame.locator("#wallet-signin").evaluate(node => node.getBoundingClientRect().left)).toBe(32);
+    expect(signIn.height).toBe(44);
+    expect(signIn.x + signIn.width).toBeLessThan(mark.x);
+    expect(await frame.locator("#wallet-signin").evaluate(node => getComputedStyle(node).padding)).toBe("10px 20px");
+    expect(await frame.locator("#wallet-links a").first().evaluate(node => getComputedStyle(node).borderRadius)).toBe("0px");
+    expect(errors).toEqual([]);
+  });
+
+  it("stretches the narrow unframed sign-in button with square corners", async () => {
+    await page.goto(`${origin}/wallet`); await status("ready");
+    const signIn = (await page.locator("#wallet-signin").boundingBox())!, actions = (await page.locator("#wallet-signin").locator("..").boundingBox())!;
+    expect(signIn.width).toBe(actions.width);
+    expect(await page.locator("#wallet-signin").evaluate(node => getComputedStyle(node).borderRadius)).toBe("0px");
+  });
+
   it("signs in only on a real click, sends canonical assertion bytes with CSRF, and logs out", async () => {
     await loadAndEnroll();
     expect(await page.evaluate(() => (window as any).passkeyRequests)).toBe(0);
