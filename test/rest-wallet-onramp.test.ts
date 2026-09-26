@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { cdpJwt, createWalletOnramp } from '../src/rest/wallet/onramp.js';
 
 const address = '0x00000000000000000000000000000000000000aa';
-const vid = 'onramp_verification_a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 function ed25519() {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   const jwk = privateKey.export({ format: 'jwk' });
@@ -81,51 +80,21 @@ describe('Apple Pay guest checkout', () => {
   it('stays off until enabled', async () => {
     const { calls, service } = onramp(() => [201, {}]);
     expect(service.applePay).toBe(false);
-    await expect(service.verify('a', { channel: 'sms', destination: '+12125551234' })).rejects.toMatchObject({ status: 503, code: 'WALLET_ONRAMP_APPLE_PAY_UNAVAILABLE' });
-    await expect(service.order(address, {})).rejects.toMatchObject({ code: 'WALLET_ONRAMP_APPLE_PAY_UNAVAILABLE' });
+    await expect(service.order(address, {})).rejects.toMatchObject({ status: 503, code: 'WALLET_ONRAMP_APPLE_PAY_UNAVAILABLE' });
     expect(calls).toHaveLength(0);
   });
-  it('sends US mobile and email codes through Coinbase, five per account per ten minutes', async () => {
-    const { calls, service } = onramp(() => [201, { verificationId: vid, otpExpiresAt: 'x' }], { applePay: true });
-    await expect(service.verify('a', { channel: 'sms', destination: '+442071234567' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
-    await expect(service.verify('a', { channel: 'email', destination: 'not an email' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
-    for (let i = 0; i < 5; i++) expect(await service.verify('a', { channel: i % 2 ? 'email' : 'sms', destination: i % 2 ? 'a@b.co' : '+12125551234' })).toEqual({ verificationId: vid });
-    await expect(service.verify('a', { channel: 'sms', destination: '+12125551234' })).rejects.toMatchObject({ status: 429, code: 'WALLET_ONRAMP_BUSY' });
-    await service.verify('b', { channel: 'sms', destination: '+12125551234' });
-    expect(calls).toHaveLength(6); expect(calls[0]!.body).toEqual({ channel: 'sms', destination: '+12125551234' });
-  });
-  it('accepts Coinbase sandbox test numbers only in sandbox', async () => {
-    const live = onramp(() => [201, { verificationId: vid }], { applePay: true });
-    await expect(live.service.verify('a', { channel: 'sms', destination: '+10005550100' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
-    const sandbox = onramp(() => [201, { verificationId: vid }], { applePay: true, sandbox: true });
-    expect(await sandbox.service.verify('a', { channel: 'sms', destination: '+10005550100' })).toEqual({ verificationId: vid });
-  });
-  it('submits a six-digit code and maps a wrong one', async () => {
-    let reply: [number, unknown] = [200, { verificationId: vid, verificationExpiresAt: '2026-11-25T00:00:00Z' }];
-    const { calls, service } = onramp(() => reply, { applePay: true });
-    await expect(service.confirm({ verificationId: vid, code: '12345' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
-    expect(await service.confirm({ verificationId: vid, code: '123456' })).toMatchObject({ verificationId: vid, expiresAt: '2026-11-25T00:00:00Z' });
-    expect(calls[0]!.url).toBe(`https://api.cdp.coinbase.com/platform/v2/onramp/verifications/${vid}/submit`);
-    reply = [400, { errorType: 'otp_verification_code_invalid' }];
-    await expect(service.confirm({ verificationId: vid, code: '123456' })).rejects.toMatchObject({ status: 400, code: 'WALLET_ONRAMP_CODE_INVALID' });
-  });
-  const input = { amount: '20', email: 'a@b.co', phoneNumber: '+12125551234', emailVerificationId: vid, smsVerificationId: vid, phoneVerifiedAtMs: Date.now() - 1000, agreed: true };
-  it('orders to the account with Coinbase-verified contacts and opens top-level (sandbox sheet in sandbox)', async () => {
+  const input = { amount: '20', agreed: true };
+  it('orders embedded checkout to the account: no email or phone leaves Signa (sandbox sheet in sandbox)', async () => {
     const { calls, service } = onramp(() => [201, { order: { orderId: 'order-1' }, paymentLink: { url: 'https://pay.coinbase.com/v2/api-onramp/apple-pay?x=1' }, userAuthToken: 'tok' }], { applePay: true, sandbox: true });
     const result = await service.order(address, input);
     expect(result).toEqual({ orderId: 'order-1', url: 'https://pay.coinbase.com/v2/api-onramp/apple-pay?x=1&useApplePaySandbox=true', userAuthToken: 'tok' });
-    expect(calls[0]!.body).toMatchObject({ paymentAmount: '20', paymentCurrency: 'USD', purchaseCurrency: 'USDC', paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY',
-      destinationAddress: address, destinationNetwork: 'base', partnerUserRef: expect.stringMatching(/^sandbox-[0-9a-f]{32}$/),
-      email: 'a@b.co', phoneNumber: '+12125551234', emailVerificationId: vid, smsVerificationId: vid });
-    expect(calls[0]!.body).not.toHaveProperty('domain');
-    await service.order(address, { ...input, embed: true });
-    expect(calls[1]!.body.domain).toBe('signa.center');
-    for (const bad of [{ agreed: false }, { phoneVerifiedAtMs: Date.now() - 61 * 86_400_000 }, { phoneVerifiedAtMs: Date.now() + 3_600_000 }, { smsVerificationId: 'x' }])
+    expect(calls[0]!.body).toEqual({ paymentAmount: '20', paymentCurrency: 'USD', purchaseCurrency: 'USDC', paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY',
+      destinationAddress: address, destinationNetwork: 'base', partnerUserRef: expect.stringMatching(/^sandbox-[0-9a-f]{32}$/) });
+    await service.order(address, { ...input, embed: true, asset: 'ETH', userAuthToken: 'tok' });
+    expect(calls[1]!.body).toMatchObject({ domain: 'signa.center', purchaseCurrency: 'ETH', userAuthToken: 'tok' });
+    for (const bad of [{ agreed: false }, { amount: '0' }, { userAuthToken: 'has spaces' }, { asset: 'BTC' }])
       await expect(service.order(address, { ...input, ...bad })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
-  });
-  it('asks to verify again when Coinbase no longer accepts the verification', async () => {
-    const { service } = onramp(() => [400, { errorType: 'otp_verification_destination_mismatch' }], { applePay: true });
-    await expect(service.order(address, input)).rejects.toMatchObject({ status: 409, code: 'WALLET_ONRAMP_VERIFY_AGAIN' });
+    expect(calls).toHaveLength(2);
   });
   it('reads an order only for the account it pays', async () => {
     const hash = `0x${'ab'.repeat(32)}`;

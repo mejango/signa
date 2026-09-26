@@ -4,9 +4,9 @@ import { RestError } from '../core.js';
 /** Coinbase Onramp for a Signa account: headless Apple Pay guest checkout (cards, US), and the hosted
  * checkout for people paying from a Coinbase account (Coinbase ended hosted guest checkout 2026-06-30).
  * Apple Pay embeds Coinbase's pay button in a frame on the wallet origin; the hosted checkout opens a window. Purchases land as USDC or ETH on Base at the account's own
- * address; the caller never names a destination. Signa stores nothing: Coinbase runs the one-time codes
- * and checks each order's email and phone against its own verification records, and the device keeps
- * the verification ids. Contact details never sign in, recover or otherwise act for the account. */
+ * address; the caller never names a destination. Apple Pay orders are Coinbase's embedded kind: Coinbase's
+ * frame collects and verifies the email and phone itself, so Signa never sees them. The only thing kept is
+ * Coinbase's reusable `userAuthToken` (no personal data), on the person's device. */
 export interface WalletOnrampConfig {
   keyId: string;
   /** Ed25519 (base64 of seed and public key, 64 bytes) or an EC private key in PEM. */
@@ -22,7 +22,6 @@ export interface WalletOnrampOrder { orderId: string; status: string; txHash: st
 
 const api = 'https://api.cdp.coinbase.com/platform/v2/onramp';
 const network = 'base';
-const phone = /^\+1[2-9][0-9]{9}$/, email = /^[^\s@<>()"',;:\\]{1,64}@[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63}){1,8}$/, verification = /^onramp_verification_[0-9a-f-]{36}$/;
 
 function invalid(): never { throw new RestError(400, 'WALLET_ONRAMP_INVALID', 'Onramp request fields are invalid.'); }
 function text(value: unknown, pattern: RegExp): string {
@@ -89,10 +88,6 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
   };
   // Coinbase's per-user key: stable per account, opaque, under its 50-character bound.
   const userRef = (address: string) => (config.sandbox ? 'sandbox-' : '') + createHash('sha256').update('signa-onramp-v1\0' + address.toLowerCase()).digest('hex').slice(0, 32);
-  // ponytail: per-process count; a shared limiter when Signa runs more than one instance.
-  const codesSent = new Map<string, number[]>();
-  // Coinbase's sandbox takes only +1000 test numbers; production needs a real US mobile number.
-  const mobile = config.sandbox ? /^\+1[0-9]{10}$/ : phone;
   const applePay = () => { if (!config.applePay) throw new RestError(503, 'WALLET_ONRAMP_APPLE_PAY_UNAVAILABLE', 'Apple Pay is not enabled.'); };
 
   return {
@@ -106,39 +101,15 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
       if (typeof url !== 'string' || !url.startsWith('https://pay.coinbase.com/')) throw new RestError(503, 'WALLET_ONRAMP_UNAVAILABLE', 'Coinbase returned no checkout URL.');
       return { url };
     },
-    /** Coinbase texts or emails a six-digit code. At most five sends per account per ten minutes. */
-    async verify(accountId: string, input: { channel?: unknown; destination?: unknown }) {
-      applePay();
-      const channel = text(input.channel, /^(sms|email)$/);
-      const destination = text(input.destination, channel === 'sms' ? mobile : email);
-      const now = Date.now(), recent = (codesSent.get(accountId) ?? []).filter(at => now - at < 600_000);
-      if (recent.length >= 5) throw new RestError(429, 'WALLET_ONRAMP_BUSY', 'Too many codes sent.');
-      codesSent.set(accountId, [...recent, now]);
-      const result = await call('POST', '/verifications', { channel, destination });
-      return { verificationId: text(result.verificationId, verification) };
-    },
-    async confirm(input: { verificationId?: unknown; code?: unknown }) {
-      applePay();
-      const id = text(input.verificationId, verification);
-      const result = await call('POST', `/verifications/${id}/submit`, { otpCode: text(input.code, /^[0-9]{6}$/) });
-      return { verificationId: text(result.verificationId, verification),
-        verifiedAtMs: Date.now(), expiresAt: typeof result.verificationExpiresAt === 'string' ? result.verificationExpiresAt : null };
-    },
     /** An Apple Pay order. `embed` renders Coinbase's pay button in a frame on the wallet origin (its registered
      * domain); otherwise the link opens top-level, as inside an app's frame where Apple checks the app's domain. */
     async order(address: string, input: Record<string, unknown>) {
       applePay();
       const amount = onrampAmount(input.amount);
-      const phoneVerifiedAtMs = Number(input.phoneVerifiedAtMs);
-      if (!Number.isSafeInteger(phoneVerifiedAtMs) || phoneVerifiedAtMs > Date.now() + 60_000 || Date.now() - phoneVerifiedAtMs > 60 * 86_400_000) invalid();
       if (input.agreed !== true) invalid();
       const token = input.userAuthToken === undefined || input.userAuthToken === null ? undefined : text(input.userAuthToken, /^[A-Za-z0-9._~+/=-]{1,2048}$/);
       const result = await call('POST', '/orders', { paymentAmount: amount, paymentCurrency: 'USD', purchaseCurrency: asset(input.asset),
         paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY', destinationAddress: address, destinationNetwork: network, partnerUserRef: userRef(address),
-        email: text(input.email, email), phoneNumber: text(input.phoneNumber, mobile),
-        emailVerificationId: text(input.emailVerificationId, verification),
-        smsVerificationId: text(input.smsVerificationId, verification),
-        phoneNumberVerifiedAt: new Date(phoneVerifiedAtMs).toISOString(), agreementAcceptedAt: new Date().toISOString(),
         ...(input.embed === true ? { domain } : {}),
         ...(token ? { userAuthToken: token } : {}) });
       const order = result.order as Record<string, unknown> | undefined, link = result.paymentLink as Record<string, unknown> | undefined;
