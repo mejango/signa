@@ -3,7 +3,7 @@ import { RestError } from '../core.js';
 
 /** Coinbase Onramp for a Signa account: headless Apple Pay guest checkout (cards, US), and the hosted
  * checkout for people paying from a Coinbase account (Coinbase ended hosted guest checkout 2026-06-30).
- * Apple Pay embeds Coinbase's pay button in a frame on the wallet origin; the hosted checkout opens a window. Purchases land as USDC on Base at the account's own
+ * Apple Pay embeds Coinbase's pay button in a frame on the wallet origin; the hosted checkout opens a window. Purchases land as USDC or ETH on Base at the account's own
  * address; the caller never names a destination. Signa stores nothing: Coinbase runs the one-time codes
  * and checks each order's email and phone against its own verification records, and the device keeps
  * the verification ids. Contact details never sign in, recover or otherwise act for the account. */
@@ -21,13 +21,17 @@ export interface WalletOnrampConfig {
 export interface WalletOnrampOrder { orderId: string; status: string; txHash: string | null }
 
 const api = 'https://api.cdp.coinbase.com/platform/v2/onramp';
-const network = 'base', asset = 'USDC';
+const network = 'base';
 const phone = /^\+1[2-9][0-9]{9}$/, email = /^[^\s@<>()"',;:\\]{1,64}@[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63}){1,8}$/, verification = /^onramp_verification_[0-9a-f-]{36}$/;
 
 function invalid(): never { throw new RestError(400, 'WALLET_ONRAMP_INVALID', 'Onramp request fields are invalid.'); }
 function text(value: unknown, pattern: RegExp): string {
   if (typeof value !== 'string' || !pattern.test(value)) invalid();
   return value;
+}
+/** What the account can buy on Base: USDC (the default) or ETH. */
+function asset(value: unknown): 'USDC' | 'ETH' {
+  return value === undefined || value === null ? 'USDC' : text(value, /^(USDC|ETH)$/) as 'USDC' | 'ETH';
 }
 /** Whole US dollars and cents, $1 to $10,000; Coinbase applies its own tighter limits per user. */
 export function onrampAmount(value: unknown): string {
@@ -87,14 +91,16 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
   const userRef = (address: string) => (config.sandbox ? 'sandbox-' : '') + createHash('sha256').update('signa-onramp-v1\0' + address.toLowerCase()).digest('hex').slice(0, 32);
   // ponytail: per-process count; a shared limiter when Signa runs more than one instance.
   const codesSent = new Map<string, number[]>();
+  // Coinbase's sandbox takes only +1000 test numbers; production needs a real US mobile number.
+  const mobile = config.sandbox ? /^\+1[0-9]{10}$/ : phone;
   const applePay = () => { if (!config.applePay) throw new RestError(503, 'WALLET_ONRAMP_APPLE_PAY_UNAVAILABLE', 'Apple Pay is not enabled.'); };
 
   return {
     applePay: config.applePay === true,
     /** A single-use Coinbase checkout URL for USDC on Base to this account. */
-    async session(address: string, input: { amount?: unknown }) {
+    async session(address: string, input: { amount?: unknown; asset?: unknown }) {
       const amount = input.amount === undefined || input.amount === null ? null : onrampAmount(input.amount);
-      const result = await call('POST', '/sessions', { destinationAddress: address, destinationNetwork: network, purchaseCurrency: asset,
+      const result = await call('POST', '/sessions', { destinationAddress: address, destinationNetwork: network, purchaseCurrency: asset(input.asset),
         partnerUserRef: userRef(address), ...(amount ? { paymentAmount: amount, paymentCurrency: 'USD' } : {}) });
       const url = (result.session as { onrampUrl?: unknown } | undefined)?.onrampUrl;
       if (typeof url !== 'string' || !url.startsWith('https://pay.coinbase.com/')) throw new RestError(503, 'WALLET_ONRAMP_UNAVAILABLE', 'Coinbase returned no checkout URL.');
@@ -104,7 +110,7 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
     async verify(accountId: string, input: { channel?: unknown; destination?: unknown }) {
       applePay();
       const channel = text(input.channel, /^(sms|email)$/);
-      const destination = text(input.destination, channel === 'sms' ? phone : email);
+      const destination = text(input.destination, channel === 'sms' ? mobile : email);
       const now = Date.now(), recent = (codesSent.get(accountId) ?? []).filter(at => now - at < 600_000);
       if (recent.length >= 5) throw new RestError(429, 'WALLET_ONRAMP_BUSY', 'Too many codes sent.');
       codesSent.set(accountId, [...recent, now]);
@@ -127,9 +133,9 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
       if (!Number.isSafeInteger(phoneVerifiedAtMs) || phoneVerifiedAtMs > Date.now() + 60_000 || Date.now() - phoneVerifiedAtMs > 60 * 86_400_000) invalid();
       if (input.agreed !== true) invalid();
       const token = input.userAuthToken === undefined || input.userAuthToken === null ? undefined : text(input.userAuthToken, /^[A-Za-z0-9._~+/=-]{1,2048}$/);
-      const result = await call('POST', '/orders', { paymentAmount: amount, paymentCurrency: 'USD', purchaseCurrency: asset,
+      const result = await call('POST', '/orders', { paymentAmount: amount, paymentCurrency: 'USD', purchaseCurrency: asset(input.asset),
         paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY', destinationAddress: address, destinationNetwork: network, partnerUserRef: userRef(address),
-        email: text(input.email, email), phoneNumber: text(input.phoneNumber, phone),
+        email: text(input.email, email), phoneNumber: text(input.phoneNumber, mobile),
         emailVerificationId: text(input.emailVerificationId, verification),
         smsVerificationId: text(input.smsVerificationId, verification),
         phoneNumberVerifiedAt: new Date(phoneVerifiedAtMs).toISOString(), agreementAcceptedAt: new Date().toISOString(),

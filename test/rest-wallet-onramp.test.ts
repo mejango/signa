@@ -57,6 +57,9 @@ describe('hosted onramp', () => {
     expect(decode(calls[0]!.auth.slice('Bearer '.length)).claims.uris).toEqual(['POST api.cdp.coinbase.com/platform/v2/onramp/sessions']);
     await service.session(address, {});
     expect(calls[1]!.body).not.toHaveProperty('paymentAmount');
+    await service.session(address, { asset: 'ETH' });
+    expect(calls[2]!.body.purchaseCurrency).toBe('ETH');
+    await expect(service.session(address, { asset: 'BTC' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
     expect(calls[1]!.body.partnerUserRef).toBe(calls[0]!.body.partnerUserRef);
   });
   it('rejects bad amounts before calling Coinbase and URLs that are not Coinbase checkout', async () => {
@@ -90,6 +93,12 @@ describe('Apple Pay guest checkout', () => {
     await expect(service.verify('a', { channel: 'sms', destination: '+12125551234' })).rejects.toMatchObject({ status: 429, code: 'WALLET_ONRAMP_BUSY' });
     await service.verify('b', { channel: 'sms', destination: '+12125551234' });
     expect(calls).toHaveLength(6); expect(calls[0]!.body).toEqual({ channel: 'sms', destination: '+12125551234' });
+  });
+  it('accepts Coinbase sandbox test numbers only in sandbox', async () => {
+    const live = onramp(() => [201, { verificationId: vid }], { applePay: true });
+    await expect(live.service.verify('a', { channel: 'sms', destination: '+10005550100' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
+    const sandbox = onramp(() => [201, { verificationId: vid }], { applePay: true, sandbox: true });
+    expect(await sandbox.service.verify('a', { channel: 'sms', destination: '+10005550100' })).toEqual({ verificationId: vid });
   });
   it('submits a six-digit code and maps a wrong one', async () => {
     let reply: [number, unknown] = [200, { verificationId: vid, verificationExpiresAt: '2026-11-25T00:00:00Z' }];

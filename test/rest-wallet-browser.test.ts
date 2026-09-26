@@ -469,23 +469,24 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("Payment approved");
     const order = requests.find(item => item.path === "/wallet/onramp/order")!;
     expect(order.headers["x-center-wallet-csrf"]).toBe(csrf);
-    expect(order.body).toMatchObject({ amount: "25", email: "a@b.co", phoneNumber: "+12125551234", smsVerificationId: vid(1), emailVerificationId: vid(2), agreed: true, embed: true });
+    expect(order.body).toMatchObject({ amount: "25", asset: "USDC", email: "a@b.co", phoneNumber: "+12125551234", smsVerificationId: vid(1), emailVerificationId: vid(2), agreed: true, embed: true });
     expect(order.body).not.toHaveProperty("destinationAddress");
     expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), `signa-onramp:eip155:8453:${walletAddress}`))
       .toMatchObject({ smsVerificationId: vid(1), emailVerificationId: vid(2), userAuthToken: "auth-token" });
     // The next purchase skips the codes and reuses Coinbase's returning-user token.
     await page.locator("#wallet-funds-open").click(); await page.locator("#wallet-funds-amount").fill("10");
+    await page.locator("input[name=asset][value=ETH]").check();
     await page.locator("#wallet-funds-agree").check();
     await page.locator("#wallet-funds-applepay").click();
     await expect.poll(() => requests.filter(item => item.path === "/wallet/onramp/order").length).toBe(2);
     await expect.poll(() => frame.isVisible()).toBe(true);
     expect(requests.filter(item => item.path === "/wallet/onramp/verify")).toHaveLength(2);
-    expect(requests.filter(item => item.path === "/wallet/onramp/order").at(-1)!.body).toMatchObject({ amount: "10", userAuthToken: "auth-token" });
+    expect(requests.filter(item => item.path === "/wallet/onramp/order").at(-1)!.body).toMatchObject({ amount: "10", asset: "ETH", userAuthToken: "auth-token" });
     // A Coinbase account opens the hosted checkout without any contact details.
     await page.locator("#wallet-funds-open").click();
     const [hosted] = await Promise.all([page.waitForEvent("popup"), page.locator("#wallet-funds-coinbase").click()]);
     await expect.poll(() => hosted.url()).toBe("https://pay.coinbase.com/buy?sessionToken=t");
-    expect(requests.find(item => item.path === "/wallet/onramp/session")!.body).toEqual({ amount: "10" });
+    expect(requests.find(item => item.path === "/wallet/onramp/session")!.body).toEqual({ asset: "ETH", amount: "10" });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   });
