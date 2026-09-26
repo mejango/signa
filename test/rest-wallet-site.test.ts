@@ -471,3 +471,25 @@ describe('sign-in framed by an admitted app',()=>{
     expect((options.login.complete as ReturnType<typeof vi.fn>).mock.calls[0]).toHaveLength(1);
   });
 });
+
+describe('onramp HTTP boundary',()=>{
+  const signedIn={cookie:`${walletSessionCookie}=${token}`,'x-center-wallet-csrf':walletCsrfToken(token)};
+  function onramp(){return {applePay:false,session:vi.fn(async()=>({url:'https://pay.coinbase.com/buy?sessionToken=t'})),verify:vi.fn(),confirm:vi.fn(),order:vi.fn(),status:vi.fn()};}
+  it('opens checkout only for the signed-in account, to its own address',async()=>{
+    const service=onramp();const {app}=setup({onramp:service as never});
+    const response=await app.fetch(request('/wallet/onramp/session',{amount:'20'},signedIn));
+    expect(response.status).toBe(200);expect(await response.json()).toEqual({url:'https://pay.coinbase.com/buy?sessionToken=t'});
+    expect(service.session).toHaveBeenCalledWith('0x0000000000000000000000000000000000000003',{amount:'20'});
+    expect((await app.fetch(request('/wallet/onramp/session',{},{cookie:signedIn.cookie}))).status).toBe(403);
+    expect((await app.fetch(request('/wallet/onramp/session',{}))).status).toBe(403);
+    expect((await app.fetch(request('/wallet/onramp/session',{destinationAddress:'0x00000000000000000000000000000000000000bb'},signedIn))).status).toBe(400);
+    expect(service.session).toHaveBeenCalledTimes(1);
+  });
+  it('reports what is offered to a signed-in account and is absent without configuration',async()=>{
+    const {app}=setup({onramp:onramp() as never});
+    const offered=await app.fetch(new Request(origin+'/wallet/onramp',{headers:{cookie:signedIn.cookie}}));
+    expect(await offered.json()).toEqual({applePay:false});
+    expect((await app.fetch(new Request(origin+'/wallet/onramp'))).status).toBe(403);
+    expect((await setup().app.fetch(request('/wallet/onramp/session',{},signedIn))).status).toBe(503);
+  });
+});

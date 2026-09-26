@@ -19,6 +19,7 @@ import type { PostgresWalletHandoffStore } from './handoffPostgres.js';
 import type { PostgresWalletPolicyStore } from './policyPostgres.js';
 import type { PostgresWalletPaymentReviewStore } from './paymentReviewsPostgres.js';
 import type { createWalletNetworks } from './networks.js';
+import type { createWalletOnramp } from './onramp.js';
 import { publicWalletPaymentCentralReview } from './paymentPublic.js';
 import { mountWalletSignup, type WalletSignupSiteOptions } from './signupSite.js';
 import { mountWalletRecovery, type WalletRecoverySiteOptions } from './recoverySite.js';
@@ -49,14 +50,16 @@ export interface WalletSiteOptions {
   payments?: Pick<PostgresWalletPaymentReviewStore, 'get' | 'approve' | 'cancel'> & Partial<Pick<PostgresWalletPaymentReviewStore, 'frameOrigin'>>;
   /** The account on more chains (quote, one passkey approval, Center-paid Relayr bundle, per-chain status). */
   networks?: Pick<ReturnType<typeof createWalletNetworks>, 'list' | 'quote' | 'approve' | 'status'>;
+  /** Coinbase Onramp to the account's own address: hosted checkout, and Apple Pay when Coinbase admits it. */
+  onramp?: Pick<ReturnType<typeof createWalletOnramp>, 'applePay' | 'session' | 'verify' | 'confirm' | 'order' | 'status'>;
   onEvent?: (event: { action: string; outcome: 'ok' | 'rejected' | 'unavailable'; code?: string; detail?: Record<string, unknown> }) => void;
 }
 
 function reject(status = 400, code = 'WALLET_HTTP_INVALID'): never {
   throw new RestError(status, code, 'Wallet request could not be completed.');
 }
-function fields(value: unknown, names: string[]): Record<string, unknown> {
-  try { return walletAppFields(value, names); } catch { return reject(); }
+function fields(value: unknown, names: string[], optional: string[] = []): Record<string, unknown> {
+  try { return walletAppFields(value, names, optional); } catch { return reject(); }
 }
 function publicSession(session: WalletCentralSession, passkeyName: string | null) {
   return { loginId: session.loginId, accountId: session.accountId, walletAddress: session.accountId.slice('eip155:8453:'.length),
@@ -96,7 +99,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   });
   // The wallet's own paths under `base`. On the credential host nothing else may execute.
   const walletPrefixes = ['/assets/', '/authorize/', '/config', '/create', '/handoff/', '/launch', '/login/', '/logout', '/payment',
-    '/networks', '/payment-reviews/', '/recover', '/recovery/', '/session', '/signup/', '/add', '/devices/'];
+    '/networks', '/onramp', '/payment-reviews/', '/recover', '/recovery/', '/session', '/signup/', '/add', '/devices/'];
   const isWalletPath = (path: string) => path === (base || '/') || path === `${base}/` || walletPrefixes.some(prefix => path.startsWith(base + prefix));
   const legacyPrefix = '/wallet';
   if (base === '') app.use('*', async (c, next) => {
@@ -365,6 +368,40 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
     const result = await service.approve(session, { bundleId: body.bundleId as string, assertion: assertion(body.assertion) });
     emit('networks_approve', 'ok');
     return c.json(result);
+  });
+  // Money lands only at the signed-in account's own address; the body never names a destination.
+  const onramp = () => { if (!options.onramp) reject(503, 'WALLET_ONRAMP_UNAVAILABLE'); return options.onramp; };
+  const address = (session: WalletCentralSession) => session.accountId.slice('eip155:8453:'.length);
+  app.get(`${base}/onramp`, async c => {
+    const service = onramp(), token = readWalletCookie(c.req.raw, walletSessionCookie), session = token ? await viewFor(token) : null;
+    if (!session) reject(403, 'WALLET_HTTP_SESSION');
+    return c.json({ applePay: service.applePay });
+  });
+  app.post(`${base}/onramp/session`, async c => {
+    const service = onramp(), session = await paymentSession(c, true);
+    const body = fields(await readWalletJson(c.req.raw), [], ['amount']);
+    const result = await service.session(address(session), body);
+    emit('onramp_session', 'ok'); return c.json(result);
+  });
+  app.post(`${base}/onramp/verify`, async c => {
+    const service = onramp(), session = await paymentSession(c, true);
+    const result = await service.verify(session.accountId, fields(await readWalletJson(c.req.raw), ['channel', 'destination']));
+    emit('onramp_verify', 'ok'); return c.json(result);
+  });
+  app.post(`${base}/onramp/confirm`, async c => {
+    const service = onramp(); await paymentSession(c, true);
+    const result = await service.confirm(fields(await readWalletJson(c.req.raw), ['verificationId', 'code']));
+    emit('onramp_confirm', 'ok'); return c.json(result);
+  });
+  app.post(`${base}/onramp/order`, async c => {
+    const service = onramp(), session = await paymentSession(c, true);
+    const body = fields(await readWalletJson(c.req.raw), ['amount', 'email', 'phoneNumber', 'emailVerificationId', 'smsVerificationId', 'phoneVerifiedAtMs', 'agreed'], ['userAuthToken']);
+    const result = await service.order(address(session), body);
+    emit('onramp_order', 'ok'); return c.json(result);
+  });
+  app.post(`${base}/onramp/status`, async c => {
+    const service = onramp(), session = await paymentSession(c, true);
+    return c.json(await service.status(address(session), fields(await readWalletJson(c.req.raw), ['orderId'])));
   });
   // The review id is the capability here: the app hands the customer its own link, and the approval
   // is a passkey signature over the review. No Center session is asked for on the way.
