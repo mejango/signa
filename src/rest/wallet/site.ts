@@ -54,7 +54,7 @@ export interface WalletSiteOptions {
   /** ETH and USDC on every chain the account's address can exist on, with a mainnet total in dollars. */
   balances?: ReturnType<typeof createWalletBalances>;
   /** Coinbase Onramp to the account's own address: hosted checkout, and Apple Pay when Coinbase admits it. */
-  onramp?: Pick<ReturnType<typeof createWalletOnramp>, 'applePay' | 'session' | 'verify' | 'confirm' | 'order' | 'status'>;
+  onramp?: Pick<ReturnType<typeof createWalletOnramp>, 'applePay' | 'session' | 'order' | 'status'>;
   /** The domain verification file Coinbase issues for the embedded Apple Pay button, served at Apple's well-known path. */
   applePayDomainFile?: string;
   onEvent?: (event: { action: string; outcome: 'ok' | 'rejected' | 'unavailable'; code?: string; detail?: Record<string, unknown> }) => void;
@@ -395,19 +395,9 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
     const result = await service.session(address(session), body);
     emit('onramp_session', 'ok'); return c.json(result);
   });
-  app.post(`${base}/onramp/verify`, async c => {
-    const service = onramp(), session = await paymentSession(c, true);
-    const result = await service.verify(session.accountId, fields(await readWalletJson(c.req.raw), ['channel', 'destination']));
-    emit('onramp_verify', 'ok'); return c.json(result);
-  });
-  app.post(`${base}/onramp/confirm`, async c => {
-    const service = onramp(); await paymentSession(c, true);
-    const result = await service.confirm(fields(await readWalletJson(c.req.raw), ['verificationId', 'code']));
-    emit('onramp_confirm', 'ok'); return c.json(result);
-  });
   app.post(`${base}/onramp/order`, async c => {
     const service = onramp(), session = await paymentSession(c, true);
-    const body = fields(await readWalletJson(c.req.raw), ['amount', 'email', 'phoneNumber', 'emailVerificationId', 'smsVerificationId', 'phoneVerifiedAtMs', 'agreed'], ['userAuthToken', 'embed', 'asset']);
+    const body = fields(await readWalletJson(c.req.raw), ['amount', 'agreed'], ['userAuthToken', 'embed', 'asset']);
     const result = await service.order(address(session), body);
     emit('onramp_order', 'ok'); return c.json(result);
   });

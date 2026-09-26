@@ -2,8 +2,8 @@ import { nativePasskeyError, takeSignInNotice } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
 import { qrSvg } from "./qr.js";
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
-/** No credentials, assertions, CSRF values or handoff codes are persisted by this page. It keeps only Apple Pay's
- * contact verification (email, mobile, Coinbase's verification ids), per account, on this device. */
+/** No credentials, assertions, CSRF values or handoff codes are persisted by this page. It keeps only Coinbase's
+ * returning-user token for Apple Pay (no personal data), per account, on this device. */
 type Json = Record<string, unknown>;
 type Configuration = { issuer: string; audience: string; rpId: string };
 type Session = { accountId: string; loginId: string; walletAddress: string; chainId: number; expiresAtMs: number; passkeyName: string | null };
@@ -501,32 +501,19 @@ async function refreshBalances() {
 }
 // Adding funds: Apple Pay (Coinbase's headless guest checkout, US cards) or a Coinbase account (hosted). Either
 // buys USDC or ETH on Base for this account; the server names the address.
-// Apple Pay needs a verified email and US mobile: Coinbase sends and checks the codes, and only this device keeps
-// the verification (never Signa's servers) for the 60 days Coinbase honors it.
-type Contact = { email: string; phoneNumber: string; emailVerificationId: string; smsVerificationId: string; phoneVerifiedAtMs: number; userAuthToken: string | null };
+// Apple Pay is Coinbase's embedded checkout: Coinbase's frame asks for and verifies the email and phone, so this
+// page never sees them. It keeps only Coinbase's returning-user token (no personal data), on this device.
 const funds = element<HTMLFormElement>("wallet-funds"), fundsOpenButton = element<HTMLButtonElement>("wallet-funds-open"), applePayButton = element<HTMLButtonElement>("wallet-funds-applepay");
 const fundsInput = (id: string) => element<HTMLInputElement>(`wallet-funds-${id}`);
-let fundsOffer: { applePay: boolean } | null = null, fundsShown = false, fundsStep: "amount" | "contact" | "codes" = "amount";
-let codesSent: Omit<Contact, "phoneVerifiedAtMs" | "userAuthToken"> | null = null, orderTimer: ReturnType<typeof setInterval> | null = null;
-const contactKey = () => `signa-onramp:${session?.accountId ?? ""}`;
-function savedContact(): Contact | null {
-  try {
-    const value = JSON.parse(localStorage.getItem(contactKey()) ?? "null");
-    if (value && typeof value.smsVerificationId === "string" && Date.now() - value.phoneVerifiedAtMs < 59 * 86_400_000) return value as Contact;
-  } catch { /* Storage unavailable: verify again. */ }
-  return null;
-}
-function saveContact(value: Contact | null) {
-  try { if (value) localStorage.setItem(contactKey(), JSON.stringify(value)); else localStorage.removeItem(contactKey()); } catch { /* Verify again next time. */ }
-}
+let fundsOffer: { applePay: boolean } | null = null, fundsShown = false, orderTimer: ReturnType<typeof setInterval> | null = null;
+const tokenKey = () => `signa-onramp-token:${session?.accountId ?? ""}`;
+function savedToken(): string | null { try { return localStorage.getItem(tokenKey()); } catch { return null; } }
+function saveToken(value: string) { try { localStorage.setItem(tokenKey(), value); } catch { /* Coinbase verifies again next time. */ } }
 function renderFunds() {
   fundsOpenButton.hidden = !session || !fundsOffer || fundsShown || busy;
   funds.hidden = !session || !fundsOffer || !fundsShown;
   applePayButton.hidden = !fundsOffer?.applePay;
-  element("wallet-funds-terms").hidden = !fundsOffer?.applePay || (fundsStep === "amount" && !savedContact());
-  element("wallet-funds-contact").hidden = fundsStep !== "contact";
-  element("wallet-funds-codes").hidden = fundsStep !== "codes";
-  applePayButton.textContent = fundsStep === "contact" ? "Send codes" : fundsStep === "codes" ? "Continue to Apple Pay" : "Apple Pay";
+  element("wallet-funds-terms").hidden = !fundsOffer?.applePay;
   for (const button of funds.querySelectorAll("button")) button.disabled = busy;
 }
 class FundsProblem extends Error {}
@@ -552,9 +539,7 @@ async function fundsAction(action: (opened: Window | null) => Promise<void>, ope
     opened?.close();
     if (error instanceof FundsProblem) { setStatus("error", error.message); return; }
     if (!(error instanceof HttpFailure)) throw error;
-    if (error.code === "WALLET_ONRAMP_VERIFY_AGAIN") { saveContact(null); fundsStep = "contact"; setStatus("error", "Verify your email and mobile number again."); }
-    else if (error.code === "WALLET_ONRAMP_CODE_INVALID") setStatus("error", "A code is wrong or expired. Check it, or cancel and send new codes.");
-    else if (error.code === "WALLET_ONRAMP_INVALID") setStatus("error", "Check the amount, email and US mobile number.");
+    if (error.code === "WALLET_ONRAMP_INVALID") setStatus("error", "Check the amount.");
     else if (error.code === "WALLET_ONRAMP_LIMIT") setStatus("error", "You've reached Coinbase's Apple Pay limit for now. Try a Coinbase account instead.");
     else if (error.code === "WALLET_ONRAMP_BUSY") setStatus("error", "Too many tries. Wait a few minutes and try again.");
     else if (error.status >= 500) setStatus("error", "Coinbase is unavailable right now. Try again shortly.");
@@ -567,34 +552,15 @@ async function fundsCoinbase(opened: Window | null) {
   openCheckout(opened, result.url);
   fundsShown = false; setStatus("ready", `Finish on Coinbase. The ${fundsAsset()} arrives in your account when Coinbase sends it.`);
 }
-function phoneNumber(value: string): string {
-  const digits = value.replace(/[^0-9]/g, "");
-  return digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits.startsWith("1") ? `+${digits}` : value.trim();
-}
-async function fundsSendCodes() {
-  const email = fundsInput("email").value.trim(), phone = phoneNumber(fundsInput("phone").value);
-  const sms = record(await request(`${base}/onramp/verify`, { channel: "sms", destination: phone }, csrf, 20_000));
-  const mail = record(await request(`${base}/onramp/verify`, { channel: "email", destination: email }, csrf, 20_000));
-  codesSent = { email, phoneNumber: phone, smsVerificationId: string(sms.verificationId, 80), emailVerificationId: string(mail.verificationId, 80) };
-  fundsStep = "codes"; setStatus("ready", "Enter the codes Coinbase sent.");
-}
 async function fundsApplePay(opened: Window | null) {
   const amount = fundsAmount(true)!;
   if (!element<HTMLInputElement>("wallet-funds-agree").checked) throw new FundsProblem("Agree to Coinbase's terms to use Apple Pay.");
-  let contact = savedContact();
-  if (!contact) {
-    if (!codesSent) throw new FundsProblem("Send the codes first.");
-    const sms = record(await request(`${base}/onramp/confirm`, { verificationId: codesSent.smsVerificationId, code: fundsInput("sms-code").value.trim() }, csrf, 20_000));
-    await request(`${base}/onramp/confirm`, { verificationId: codesSent.emailVerificationId, code: fundsInput("email-code").value.trim() }, csrf, 20_000);
-    contact = { ...codesSent, phoneVerifiedAtMs: Number(sms.verifiedAtMs), userAuthToken: null };
-    saveContact(contact); codesSent = null;
-  }
-  const { userAuthToken, ...fields } = contact;
-  const order = record(await request(`${base}/onramp/order`, { amount, asset: fundsAsset(), ...fields, agreed: true, embed: !opened, ...(userAuthToken ? { userAuthToken } : {}) }, csrf, 20_000));
-  if (typeof order.userAuthToken === "string") saveContact({ ...contact, userAuthToken: order.userAuthToken });
-  fundsShown = false; fundsStep = "amount";
-  if (opened) { openCheckout(opened, order.url); setStatus("checking", "Pay with Apple Pay in the Coinbase window."); }
-  else { embedPayment(order.url); setStatus("checking", "Tap the Apple Pay button to pay."); }
+  const userAuthToken = savedToken();
+  const order = record(await request(`${base}/onramp/order`, { amount, asset: fundsAsset(), agreed: true, embed: !opened, ...(userAuthToken ? { userAuthToken } : {}) }, csrf, 20_000));
+  if (typeof order.userAuthToken === "string" && order.userAuthToken.length <= 2048) saveToken(order.userAuthToken);
+  fundsShown = false;
+  if (opened) { openCheckout(opened, order.url); setStatus("checking", "Finish with Apple Pay in the Coinbase window."); }
+  else { embedPayment(order.url); setStatus("checking", "Finish with Coinbase below."); }
   watchOrder(string(order.orderId, 64));
 }
 // Coinbase's pay button in a frame on this page, as Coinbase requires. Apple checks the top page's registered
@@ -611,11 +577,17 @@ function embedPayment(value: unknown) {
 function closePayment() { payFrame.replaceChildren(); payFrame.hidden = true; }
 window.addEventListener("message", event => {
   if (event.origin !== "https://pay.coinbase.com" || payFrame.hidden) return;
-  let name: unknown;
-  try { name = (typeof event.data === "string" ? JSON.parse(event.data) : event.data)?.eventName; } catch { return; }
+  let name: unknown, code: unknown;
+  try { const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data; name = data?.eventName; code = data?.data?.errorCode; } catch { return; }
   if (name === "onramp_api.commit_success") setStatus("checking", "Payment approved. Coinbase is sending it to your account…");
   else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The funds are in your account."); void refreshBalances(); }
   else if (name === "onramp_api.cancel") { closePayment(); setStatus("ready", "Apple Pay cancelled."); }
+  else if (name === "onramp_api.verification_success") setStatus("checking", "Verified. Tap the Apple Pay button to pay.");
+  else if (name === "onramp_api.session_error") {
+    closePayment();
+    setStatus("error", code === "ERROR_CODE_GUEST_TRANSACTION_LIMIT" || code === "ERROR_CODE_GUEST_TRANSACTION_COUNT" || code === "ERROR_CODE_LIMITS_UPGRADE_BLOCKED"
+      ? "You've reached Coinbase's Apple Pay limit. Try a Coinbase account instead." : "Coinbase couldn't continue. Try again shortly.");
+  }
   else if (name === "onramp_api.load_error" || name === "onramp_api.commit_error" || name === "onramp_api.polling_error") {
     closePayment(); setStatus("error", "Coinbase couldn't complete the purchase. Try again, or use a Coinbase account.");
   }
@@ -635,18 +607,14 @@ function watchOrder(orderId: string) {
     }).catch(() => { /* The next poll reads again. */ });
   }, 5_000);
 }
-fundsOpenButton.addEventListener("click", () => { closePayment(); fundsShown = true; fundsStep = "amount"; render(); fundsInput("amount").focus(); });
-// Enter in any field continues the Apple Pay steps; the Coinbase account button is its own path.
+fundsOpenButton.addEventListener("click", () => { closePayment(); fundsShown = true; render(); fundsInput("amount").focus(); });
+// Enter in the amount means Apple Pay when it is offered; the Coinbase account button is its own path.
 funds.addEventListener("submit", event => {
   event.preventDefault();
-  if (!fundsOffer?.applePay) return void run(() => fundsAction(fundsCoinbase, true));
-  if (fundsStep === "codes" || (fundsStep === "amount" && savedContact())) return void run(() => fundsAction(fundsApplePay, framed));
-  if (fundsStep === "contact") return void run(() => fundsAction(fundsSendCodes, false));
-  try { fundsAmount(true); fundsStep = "contact"; render(); fundsInput("email").focus(); }
-  catch (error) { setStatus("error", (error as Error).message); }
+  void run(() => fundsOffer?.applePay ? fundsAction(fundsApplePay, framed) : fundsAction(fundsCoinbase, true));
 });
 element("wallet-funds-coinbase").addEventListener("click", () => void run(() => fundsAction(fundsCoinbase, true)));
-element("wallet-funds-cancel").addEventListener("click", () => { fundsShown = false; fundsStep = "amount"; codesSent = null; render(); });
+element("wallet-funds-cancel").addEventListener("click", () => { fundsShown = false; render(); });
 // The last hex characters of the new device's signer show on both pages, so a swapped device is visible before approval.
 // The mark spins only while the service works (adding, finishing); waiting on a person does not spin.
 const deviceWorking = (phase: string) => phase === "adding" || phase === "awaiting_activation";
