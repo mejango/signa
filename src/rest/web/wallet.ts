@@ -216,7 +216,6 @@ async function load() {
   if (framed) {
     // Signing up stays in the frame (Center admits the same app to frame it); recovery and the page of its own open on top.
     for (const link of [recover, openAsPage]) if (link) { link.target = "_top"; link.rel = "noopener"; }
-    if (recover) recover.textContent = "Recover";
     if (openAsPage) { openAsPage.textContent = "Fullscreen"; openAsPage.title = "Fullscreen"; document.getElementById("wallet-links")?.append(openAsPage); }
   }
   const rpId = string(config.rpId, 253);

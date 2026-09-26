@@ -25,7 +25,7 @@ export function walletPage(signup = false, recovery = false, base = '/wallet', f
 <button id="wallet-cancel" type="button" class="link" hidden>Cancel</button>
 <button id="wallet-logout" type="button" class="link" hidden>Sign out</button></div>
 <div id="wallet-links">${signup ? `<a id="wallet-create" href="${base}/create" hidden>Signa up</a>` : ''}
-${recovery ? `<a id="wallet-recover" href="${base}/recover" hidden>Lost your account?</a>` : ''}</div>
+${recovery ? `<a id="wallet-recover" href="${base}/recover" hidden>Recover</a>` : ''}</div>
 <p id="wallet-open-row"><a id="wallet-open" href="${base || '/'}" hidden>Open as a page</a></p>
 <noscript><p>Enable JavaScript to sign in with your passkey.</p></noscript>
 </main></body></html>`;

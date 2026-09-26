@@ -295,7 +295,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(brandIcon!.x).toBeGreaterThanOrEqual(0);
     const links = await page.evaluate(() => [...document.querySelectorAll("#wallet-links a")].map(a => ({
       text: a.textContent!.trim(), color: getComputedStyle(a).color, size: parseFloat(getComputedStyle(a).fontSize) })));
-    expect(links.map(link => link.text)).toEqual(["Signa up", "Lost your account?"]);
+    expect(links.map(link => link.text)).toEqual(["Signa up", "Recover"]);
     const body = parseFloat(await page.evaluate(() => getComputedStyle(document.body).fontSize));
     for (const link of links) { expect(link.color).not.toBe("rgb(0, 0, 238)"); expect(link.size).toBeLessThan(body); }
     expect(await page.evaluate(() => [...document.querySelectorAll("button")].filter(b => b.offsetParent !== null && getComputedStyle(b).backgroundColor !== "rgba(0, 0, 0, 0)").length)).toBe(1);
