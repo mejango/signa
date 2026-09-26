@@ -429,7 +429,11 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
     await expect.poll(() => page.locator("#wallet-balance-total").textContent()).toBe("$2,512.34");
     expect(await page.locator("#wallet-balance-chains").isVisible()).toBe(false);
+    // The total and Add funds share one line, like Networks and Add more.
+    const [total, add] = await Promise.all([page.locator("#wallet-balance-total").boundingBox(), page.locator("#wallet-funds-open").boundingBox()]);
+    expect(Math.abs(total!.y - add!.y)).toBeLessThan(4); expect(add!.x).toBeGreaterThan(total!.x + total!.width);
     await page.locator("#wallet-balance-total").click();
+    expect(await page.locator("#wallet-balance-total").getAttribute("aria-expanded")).toBe("true");
     expect(await page.locator("#wallet-balance-chains li").allTextContents()).toEqual([
       "Base: 1 ETH", "Optimism: 12.34 USDC", "Base Sepolia (testnet): 5 USDC", "Couldn't check Arbitrum."]);
     expect(await page.locator("#wallet-funds-open").isVisible()).toBe(true);
