@@ -14,7 +14,7 @@ const steps: Record<WalletDeviceView['phase'], string> = {
   awaiting_approval: 'Approve this device from the device you started on. It shows this device as TAG.', adding: 'Adding this device to your account…',
   addition_failed: 'Adding the device did not complete. Start again from your account.', awaiting_activation: 'Finishing…',
   ready: 'This device is added.', expired: 'This link expired. Start again from your account.' };
-let view: WalletDeviceView | null = null, busy = false, native: AbortController | null = null, disposed = false;
+let view: WalletDeviceView | null = null, busy = false, native: AbortController | null = null, disposed = false, alreadyHere = false;
 const linkToken = (() => { const value = location.hash.slice(1); return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null; })();
 const polling = () => view?.phase === 'awaiting_approval' || view?.phase === 'adding' || view?.phase === 'awaiting_activation';
 // The mark spins only while the service works; waiting for the other device's approval is not work in flight.
@@ -48,9 +48,9 @@ function render() {
   details.hidden = !view; intro.hidden = !!view && (phase === 'ready' || phase === 'expired');
   if (view) { el('device-address').textContent = getAddress(view.walletAddress); el('device-name').textContent = view.passkeyName ?? ''; }
   const label = phase === 'awaiting_registration' ? 'Create passkey' : phase === 'awaiting_possession' ? 'Confirm passkey' : '';
-  next.hidden = !label || busy; next.textContent = label; next.disabled = busy;
-  signIn.hidden = phase !== 'ready';
-  if (waiting() && status.dataset.state !== 'error') status.dataset.state = 'busy';
+  next.hidden = !label || busy || alreadyHere; next.textContent = label; next.disabled = busy;
+  signIn.hidden = phase !== 'ready' && !alreadyHere;
+  if (status.dataset.state !== 'error') status.dataset.state = waiting() ? 'busy' : 'ready';
 }
 async function run(action: () => Promise<void>) {
   if (busy || disposed) return;
@@ -78,11 +78,20 @@ async function advance() {
   if (view.phase === 'awaiting_registration' && view.registration) {
     message('Use Face ID, Touch ID, a screen lock, or a security key.'); native = new AbortController(); render();
     const passkeyName = view.passkeyName ?? defaultPasskeyName();
-    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
-      user: { id: decode(view.registration.userHandle), name: passkeyName, displayName: passkeyName },
-      challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
-      authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
-      attestation: 'none', timeout: 90000 }, signal: native.signal });
+    let value: Credential | null;
+    try {
+      value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
+        user: { id: decode(view.registration.userHandle), name: passkeyName, displayName: passkeyName },
+        challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+        // The account's passkeys share this user handle: a passkey manager that holds one would replace it.
+        excludeCredentials: view.registration.excludeCredentialIds.map(id => ({ type: 'public-key' as const, id: decode(id) })),
+        authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
+        attestation: 'none', timeout: 90000 }, signal: native.signal });
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'InvalidStateError')) throw error;
+      native = null; alreadyHere = true;
+      message('This device already has your account’s passkey. Sign in here instead.'); return;
+    }
     if (!(value instanceof PublicKeyCredential) || !(value.response instanceof AuthenticatorAttestationResponse)) throw new Error('The passkey response is unavailable.');
     native = null;
     accept(await request('register', { type: 'public-key', credentialId: encode(value.rawId), rawId: encode(value.rawId),
@@ -128,4 +137,10 @@ void run(async () => {
   if (!linkToken) throw new Error('Open this page from the link your account showed.');
   accept(await request('state', {}));
   if (view?.phase === 'awaiting_activation') await advance();
+  else if (view?.phase === 'awaiting_registration' || view?.phase === 'awaiting_possession') {
+    // Open the passkey prompt at once. A browser that wants a tap first, or a dismissed prompt,
+    // leaves the button for the user rather than an error.
+    try { await advance(); }
+    catch (error) { if (!(error instanceof DOMException && error.name === 'NotAllowedError') || !view) throw error; native = null; message(steps[view.phase]); }
+  }
 });

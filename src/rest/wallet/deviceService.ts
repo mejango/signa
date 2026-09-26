@@ -20,7 +20,9 @@ export type WalletDevicePhase = 'awaiting_registration' | 'awaiting_possession' 
 export interface WalletDeviceView {
   id: string; passkeyName: string | null; rpId: string; origin: string; expiresAtMs: number; walletAddress: Address; primarySigner: Address;
   deviceSigner: Address | null; phase: WalletDevicePhase; transactionHashes: Hex[];
-  registration: { challenge: string; userHandle: string } | null;
+  /** `excludeCredentialIds` are the account's passkeys: they share this user handle, so a passkey
+   * manager that already holds one would otherwise replace it with the new device's passkey. */
+  registration: { challenge: string; userHandle: string; excludeCredentialIds: string[] } | null;
   possession: { credentialId: string; document: ReturnType<typeof walletDeviceDocument>; challenge: Hex } | null;
 }
 export interface LocalWalletDeviceDependencies {
@@ -42,6 +44,10 @@ export function createLocalWalletDevices(options: LocalWalletDeviceDependencies)
   // Worker state sits ahead of the returned object: the runtime calls start() right after creation.
   let stopped = false, timer: ReturnType<typeof setTimeout> | null = null, running: Promise<void> | null = null;
   const controller = new AbortController();
+  async function accountCredentialIds(accountId: string) {
+    const context = await authority.loadContext(accountId);
+    return [context.credential.credentialId, ...(context.devices ?? []).map(device => device.credentialId)];
+  }
   async function view(record: WalletDeviceRecord): Promise<WalletDeviceView> {
     const { intent, candidate, proof, activation } = record;
     let phase: WalletDevicePhase, transactionHashes: Hex[] = [];
@@ -54,7 +60,7 @@ export function createLocalWalletDevices(options: LocalWalletDeviceDependencies)
     }
     return { id: intent.id, passkeyName: record.passkeyName, rpId: intent.rpId, origin: intent.origin, expiresAtMs: intent.expiresAtMs,
       walletAddress: getAddress(intent.accountId.slice(12)), primarySigner: intent.primarySigner, deviceSigner: candidate?.signerAddress ?? null, phase, transactionHashes,
-      registration: phase === 'awaiting_registration' ? { challenge: intent.registration.challenge, userHandle: intent.userHandle } : null,
+      registration: phase === 'awaiting_registration' ? { challenge: intent.registration.challenge, userHandle: intent.userHandle, excludeCredentialIds: await accountCredentialIds(intent.accountId) } : null,
       possession: phase === 'awaiting_possession' ? { credentialId: candidate!.credential.credentialId, document: walletDeviceDocument(candidate!), challenge: hashTypedData(walletDeviceDocument(candidate!)) } : null };
   }
   const owned = async (id: string, session: WalletCentralSession) => (await devices.get(id, session.accountId)) ?? unauthorized();

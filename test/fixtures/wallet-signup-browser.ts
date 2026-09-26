@@ -159,7 +159,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
     });
     await page.getByRole('button', { name: 'Signa up' }).click();
-    await contains('We couldn’t finish with your device');
+    await contains('The device prompt didn’t finish');
     expect(await page.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
     // Starting over forgets the continuation and shows the clean form again.
     await page.getByRole('button', { name: 'Reset signup' }).click();
@@ -172,7 +172,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
     });
     await page.getByRole('button', { name: 'Signa up' }).click();
-    await contains('We couldn’t finish with your device');
+    await contains('The device prompt didn’t finish');
     // A begun signup without a passkey yet still offers "log in" for someone who already has an account.
     expect(await page.getByRole('link', { name: 'Signa in' }).isVisible()).toBe(true);
     await page.evaluate(() => {
@@ -180,7 +180,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
     });
     await page.getByRole('button', { name: 'Signa up', exact: true }).click();
-    await contains('We couldn’t finish with your device');
+    await contains('The device prompt didn’t finish');
     await page.getByRole('button', { name: 'Signa up', exact: true }).click();
     let encoded = '';
     if (kitMode) {

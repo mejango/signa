@@ -468,6 +468,9 @@ function renderDevice() {
   const open = !!session && !!device;
   deviceAdd.hidden = !session || open || busy;
   devicePanel.hidden = !open;
+  // Approving the other device is the one thing on the page: the account details step aside.
+  const approving = open && device!.view.phase === "awaiting_approval";
+  element("wallet-details").hidden = element("wallet-device-title").hidden = approving;
   if (!open) { element<HTMLButtonElement>("wallet-device-cancel").hidden = true; retry.classList.remove("link"); if (deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; } return; }
   const phase = device!.view.phase;
   // The link instructions belong with the link; once the other device has its passkey, the status

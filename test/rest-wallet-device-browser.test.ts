@@ -19,7 +19,7 @@ describe("served device pages", () => {
   let phase = "awaiting_registration", approvals = 0, activations = 0;
   const view = () => ({ id: "11111111-1111-4111-8111-111111111111", passkeyName: "Test phone", rpId: "localhost", origin, expiresAtMs: Date.now() + 300_000,
     walletAddress, primarySigner: `0x${"04".repeat(20)}`, deviceSigner: phase === "awaiting_registration" ? null : `0x${"05".repeat(20)}`, phase, transactionHashes: [],
-    registration: phase === "awaiting_registration" ? { challenge: encode(Buffer.alloc(32, 13)), userHandle: encode(Buffer.alloc(32, 14)) } : null,
+    registration: phase === "awaiting_registration" ? { challenge: encode(Buffer.alloc(32, 13)), userHandle: encode(Buffer.alloc(32, 14)), excludeCredentialIds: [encode(Buffer.alloc(16, 7))] } : null,
     possession: phase === "awaiting_possession" ? { credentialId: "x", document: possessionDocument, challenge: hashTypedData(possessionDocument) } : null });
   const session = () => ({ accountId: `eip155:8453:${walletAddress}`, loginId: "22222222-2222-4222-8222-222222222222", walletAddress, chainId: 8453, expiresAtMs: Date.now() + 3_600_000, passkeyName: "Mac" });
 
@@ -68,6 +68,19 @@ describe("served device pages", () => {
     return cdp;
   }
 
+  it("does not replace the account's passkey on a device whose passkey manager already holds it", async () => {
+    // The account's passkey syncs to this device, so the new passkey would share its user handle and replace it.
+    const other = await browser.newContext(), devicePage = await other.newPage();
+    await withAuthenticator(other, devicePage, true);
+    await devicePage.goto(`${origin}/wallet/add#${link}`);
+    await expect.poll(() => devicePage.locator("#wallet-status").textContent()).toBe("This device already has your account’s passkey. Sign in here instead.");
+    expect(await devicePage.locator("#wallet-status").getAttribute("data-state")).toBe("ready");
+    expect(await devicePage.locator("#device-signin").isVisible()).toBe(true);
+    expect(await devicePage.locator("#device-next").isHidden()).toBe(true);
+    expect(requests.filter(item => item.path === "/wallet/devices/link/register")).toHaveLength(0);
+    await other.close();
+  });
+
   it("shows the link as a code on the account page, walks the other device through its passkey, and approves here", async () => {
     const account = await browser.newContext(), accountPage = await account.newPage();
     await withAuthenticator(account, accountPage, true);
@@ -83,8 +96,22 @@ describe("served device pages", () => {
     const other = await browser.newContext(), devicePage = await other.newPage();
     await withAuthenticator(other, devicePage, false);
     devicePage.on("pageerror", error => errors.push(String(error)));
+    // The page opens the passkey prompt by itself. A browser that wants a tap first refuses it with
+    // NotAllowedError; the button is then the way on, and the page waits without spinning.
+    await devicePage.addInitScript(() => {
+      const original = navigator.credentials.create.bind(navigator.credentials);
+      (window as any).autoPrompts = 0;
+      navigator.credentials.create = async (options?: CredentialCreationOptions) => {
+        if ((window as any).autoPrompts++ === 0) throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
+        return original(options);
+      };
+    });
     await devicePage.goto(`${origin}/wallet/add#${link}`);
-    await expect.poll(() => devicePage.locator("#device-next").textContent()).toBe("Create passkey");
+    await expect.poll(() => devicePage.locator("#device-next").isVisible()).toBe(true);
+    expect(await devicePage.evaluate(() => (window as any).autoPrompts)).toBe(1);
+    expect(await devicePage.locator("#device-next").textContent()).toBe("Create passkey");
+    expect(await devicePage.locator("#wallet-status").textContent()).toBe("Create a passkey on this device.");
+    expect(await devicePage.locator("#wallet-status").getAttribute("data-state")).toBe("ready");
     expect(await devicePage.locator("#device-address").textContent()).toContain("0x0303");
     await devicePage.locator("#device-next").click();
     await expect.poll(() => devicePage.locator("#wallet-status").textContent(), { timeout: 10_000 }).toContain("Approve this device from the device you started on. It shows this device as 050505.");
@@ -95,8 +122,12 @@ describe("served device pages", () => {
     await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible(), { timeout: 10_000 }).toBe(true);
     expect(await accountPage.locator("#wallet-device-code").isHidden()).toBe(true);
     expect(await accountPage.locator("#wallet-status").textContent()).toContain("if it shows 050505");
+    // The approval stands alone: the account details and the section heading step aside.
+    expect(await accountPage.locator("#wallet-details").isHidden()).toBe(true);
+    expect(await accountPage.locator("#wallet-device-title").isHidden()).toBe(true);
     await accountPage.locator("#wallet-device-approve").click();
     await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 15_000 }).toContain("The device is added");
+    expect(await accountPage.locator("#wallet-details").isVisible()).toBe(true);
     expect(approvals).toBe(1);
     const approval = requests.find(item => item.path.endsWith("/approve"))!;
     expect(approval.body.review.deviceId).toBe("11111111-1111-4111-8111-111111111111");

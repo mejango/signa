@@ -42,7 +42,7 @@ export async function exerciseRecoveryBrowser(options: {
     navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
   });
   await page.getByRole('button', { name: 'Create replacement passkey', exact: true }).click();
-  await contains('We couldn’t finish with your device');
+  await contains('The device prompt didn’t finish');
   await page.getByRole('button', { name: 'Create replacement passkey', exact: true }).click();
   await contains('could not be confirmed');
   await page.getByRole('button', { name: 'Check again' }).click();

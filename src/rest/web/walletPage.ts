@@ -9,13 +9,13 @@ export function walletPage(signup = false, recovery = false, base = '/wallet', f
 <h1>Your account</h1>
 <p id="wallet-destination" hidden></p>
 <p id="wallet-status" role="status" aria-live="polite" aria-atomic="true" data-state="loading">Checking your wallet…</p>
-<section id="wallet-account" aria-label="Connected account" hidden><dl><dt>Account address</dt><dd id="wallet-address"></dd><dt id="wallet-passkey-label">Passkey</dt><dd id="wallet-passkey"></dd><dt>Networks</dt><dd><span id="wallet-networks">Base</span> <button id="wallet-networks-add" class="link" type="button" hidden>Add more</button></dd></dl>
+<section id="wallet-account" aria-label="Connected account" hidden><dl id="wallet-details"><dt>Account address</dt><dd id="wallet-address"></dd><dt id="wallet-passkey-label">Passkey</dt><dd id="wallet-passkey"></dd><dt>Networks</dt><dd><span id="wallet-networks">Base</span> <button id="wallet-networks-add" class="link" type="button" hidden>Add more</button></dd></dl>
 <form id="wallet-networks-form" hidden><fieldset id="wallet-networks-family"><legend>Add your account to</legend>
 <label class="choice"><input type="radio" name="family" value="mainnet" checked>Mainnets</label><label class="choice"><input type="radio" name="family" value="testnet">Testnets</label></fieldset>
 <fieldset id="wallet-networks-choices"></fieldset>
 <div class="actions"><button id="wallet-networks-deploy" type="submit">Deploy</button><button id="wallet-networks-cancel" class="link" type="button">Cancel</button></div></form>
 <p id="wallet-devices-row"><button id="wallet-device-add" class="link" type="button">Add a device</button></p>
-<section id="wallet-device" hidden aria-label="Add a device"><h2>Add a device</h2>
+<section id="wallet-device" hidden aria-label="Add a device"><h2 id="wallet-device-title">Add a device</h2>
 <p id="wallet-device-hint">Open this link on the other device. It creates its own passkey for this account; you approve it here.</p>
 <div id="wallet-device-code" class="qr"></div><p><a id="wallet-device-link" target="_blank" rel="noopener"></a></p>
 <div class="actions"><button id="wallet-device-approve" type="button" hidden>Approve this device</button></div></section></section>
