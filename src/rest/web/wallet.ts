@@ -500,7 +500,7 @@ async function refreshBalances() {
   } catch { /* The balance stays hidden until the next load. */ }
 }
 // Adding funds: Apple Pay (Coinbase's headless guest checkout, US cards) or a Coinbase account (hosted). Either
-// opens on Coinbase's page in a new window and buys USDC on Base for this account; the server names the address.
+// buys USDC or ETH on Base for this account; the server names the address.
 // Apple Pay needs a verified email and US mobile: Coinbase sends and checks the codes, and only this device keeps
 // the verification (never Signa's servers) for the 60 days Coinbase honors it.
 type Contact = { email: string; phoneNumber: string; emailVerificationId: string; smsVerificationId: string; phoneVerifiedAtMs: number; userAuthToken: string | null };
@@ -530,6 +530,7 @@ function renderFunds() {
   for (const button of funds.querySelectorAll("button")) button.disabled = busy;
 }
 class FundsProblem extends Error {}
+const fundsAsset = () => funds.querySelector<HTMLInputElement>("input[name=asset]:checked")?.value === "ETH" ? "ETH" : "USDC";
 function fundsAmount(required: boolean): string | null {
   const value = fundsInput("amount").value.trim().replace(/^\$/, "");
   if (!value && !required) return null;
@@ -562,9 +563,9 @@ async function fundsAction(action: (opened: Window | null) => Promise<void>, ope
 }
 async function fundsCoinbase(opened: Window | null) {
   const amount = fundsAmount(false);
-  const result = await request(`${base}/onramp/session`, amount ? { amount } : {}, csrf, 20_000);
+  const result = await request(`${base}/onramp/session`, { asset: fundsAsset(), ...(amount ? { amount } : {}) }, csrf, 20_000);
   openCheckout(opened, result.url);
-  fundsShown = false; setStatus("ready", "Finish on Coinbase. The USDC arrives in your account when Coinbase sends it.");
+  fundsShown = false; setStatus("ready", `Finish on Coinbase. The ${fundsAsset()} arrives in your account when Coinbase sends it.`);
 }
 function phoneNumber(value: string): string {
   const digits = value.replace(/[^0-9]/g, "");
@@ -589,7 +590,7 @@ async function fundsApplePay(opened: Window | null) {
     saveContact(contact); codesSent = null;
   }
   const { userAuthToken, ...fields } = contact;
-  const order = record(await request(`${base}/onramp/order`, { amount, ...fields, agreed: true, embed: !opened, ...(userAuthToken ? { userAuthToken } : {}) }, csrf, 20_000));
+  const order = record(await request(`${base}/onramp/order`, { amount, asset: fundsAsset(), ...fields, agreed: true, embed: !opened, ...(userAuthToken ? { userAuthToken } : {}) }, csrf, 20_000));
   if (typeof order.userAuthToken === "string") saveContact({ ...contact, userAuthToken: order.userAuthToken });
   fundsShown = false; fundsStep = "amount";
   if (opened) { openCheckout(opened, order.url); setStatus("checking", "Pay with Apple Pay in the Coinbase window."); }
@@ -612,8 +613,8 @@ window.addEventListener("message", event => {
   if (event.origin !== "https://pay.coinbase.com" || payFrame.hidden) return;
   let name: unknown;
   try { name = (typeof event.data === "string" ? JSON.parse(event.data) : event.data)?.eventName; } catch { return; }
-  if (name === "onramp_api.commit_success") setStatus("checking", "Payment approved. Coinbase is sending the USDC…");
-  else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The USDC is in your account."); void refreshBalances(); }
+  if (name === "onramp_api.commit_success") setStatus("checking", "Payment approved. Coinbase is sending it to your account…");
+  else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The funds are in your account."); void refreshBalances(); }
   else if (name === "onramp_api.cancel") { closePayment(); setStatus("ready", "Apple Pay cancelled."); }
   else if (name === "onramp_api.load_error" || name === "onramp_api.commit_error" || name === "onramp_api.polling_error") {
     closePayment(); setStatus("error", "Coinbase couldn't complete the purchase. Try again, or use a Coinbase account.");
@@ -628,9 +629,9 @@ function watchOrder(orderId: string) {
     if (polls++ > 180) return stop();
     request(`${base}/onramp/status`, { orderId }, csrf).then(value => {
       const state = string(value.status, 40);
-      if (state === "completed") { stop(); closePayment(); setStatus("ready", "The USDC is in your account."); void refreshBalances(); }
+      if (state === "completed") { stop(); closePayment(); setStatus("ready", "The funds are in your account."); void refreshBalances(); }
       else if (state === "failed") { stop(); closePayment(); setStatus("error", "Coinbase couldn't complete the purchase."); }
-      else if (state === "processing") setStatus("checking", "Payment received. Coinbase is sending the USDC…");
+      else if (state === "processing") setStatus("checking", "Payment received. Coinbase is sending it to your account…");
     }).catch(() => { /* The next poll reads again. */ });
   }, 5_000);
 }

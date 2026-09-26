@@ -57,6 +57,9 @@ describe('hosted onramp', () => {
     expect(decode(calls[0]!.auth.slice('Bearer '.length)).claims.uris).toEqual(['POST api.cdp.coinbase.com/platform/v2/onramp/sessions']);
     await service.session(address, {});
     expect(calls[1]!.body).not.toHaveProperty('paymentAmount');
+    await service.session(address, { asset: 'ETH' });
+    expect(calls[2]!.body.purchaseCurrency).toBe('ETH');
+    await expect(service.session(address, { asset: 'BTC' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
     expect(calls[1]!.body.partnerUserRef).toBe(calls[0]!.body.partnerUserRef);
   });
   it('rejects bad amounts before calling Coinbase and URLs that are not Coinbase checkout', async () => {

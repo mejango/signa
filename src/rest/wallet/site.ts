@@ -391,7 +391,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   });
   app.post(`${base}/onramp/session`, async c => {
     const service = onramp(), session = await paymentSession(c, true);
-    const body = fields(await readWalletJson(c.req.raw), [], ['amount']);
+    const body = fields(await readWalletJson(c.req.raw), [], ['amount', 'asset']);
     const result = await service.session(address(session), body);
     emit('onramp_session', 'ok'); return c.json(result);
   });
@@ -407,7 +407,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   });
   app.post(`${base}/onramp/order`, async c => {
     const service = onramp(), session = await paymentSession(c, true);
-    const body = fields(await readWalletJson(c.req.raw), ['amount', 'email', 'phoneNumber', 'emailVerificationId', 'smsVerificationId', 'phoneVerifiedAtMs', 'agreed'], ['userAuthToken', 'embed']);
+    const body = fields(await readWalletJson(c.req.raw), ['amount', 'email', 'phoneNumber', 'emailVerificationId', 'smsVerificationId', 'phoneVerifiedAtMs', 'agreed'], ['userAuthToken', 'embed', 'asset']);
     const result = await service.order(address(session), body);
     emit('onramp_order', 'ok'); return c.json(result);
   });
