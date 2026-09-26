@@ -94,6 +94,12 @@ describe('Apple Pay guest checkout', () => {
     await service.verify('b', { channel: 'sms', destination: '+12125551234' });
     expect(calls).toHaveLength(6); expect(calls[0]!.body).toEqual({ channel: 'sms', destination: '+12125551234' });
   });
+  it('accepts Coinbase sandbox test numbers only in sandbox', async () => {
+    const live = onramp(() => [201, { verificationId: vid }], { applePay: true });
+    await expect(live.service.verify('a', { channel: 'sms', destination: '+10005550100' })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
+    const sandbox = onramp(() => [201, { verificationId: vid }], { applePay: true, sandbox: true });
+    expect(await sandbox.service.verify('a', { channel: 'sms', destination: '+10005550100' })).toEqual({ verificationId: vid });
+  });
   it('submits a six-digit code and maps a wrong one', async () => {
     let reply: [number, unknown] = [200, { verificationId: vid, verificationExpiresAt: '2026-11-25T00:00:00Z' }];
     const { calls, service } = onramp(() => reply, { applePay: true });

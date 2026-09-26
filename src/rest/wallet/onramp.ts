@@ -91,6 +91,8 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
   const userRef = (address: string) => (config.sandbox ? 'sandbox-' : '') + createHash('sha256').update('signa-onramp-v1\0' + address.toLowerCase()).digest('hex').slice(0, 32);
   // ponytail: per-process count; a shared limiter when Signa runs more than one instance.
   const codesSent = new Map<string, number[]>();
+  // Coinbase's sandbox takes only +1000 test numbers; production needs a real US mobile number.
+  const mobile = config.sandbox ? /^\+1[0-9]{10}$/ : phone;
   const applePay = () => { if (!config.applePay) throw new RestError(503, 'WALLET_ONRAMP_APPLE_PAY_UNAVAILABLE', 'Apple Pay is not enabled.'); };
 
   return {
@@ -108,7 +110,7 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
     async verify(accountId: string, input: { channel?: unknown; destination?: unknown }) {
       applePay();
       const channel = text(input.channel, /^(sms|email)$/);
-      const destination = text(input.destination, channel === 'sms' ? phone : email);
+      const destination = text(input.destination, channel === 'sms' ? mobile : email);
       const now = Date.now(), recent = (codesSent.get(accountId) ?? []).filter(at => now - at < 600_000);
       if (recent.length >= 5) throw new RestError(429, 'WALLET_ONRAMP_BUSY', 'Too many codes sent.');
       codesSent.set(accountId, [...recent, now]);
@@ -133,7 +135,7 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
       const token = input.userAuthToken === undefined || input.userAuthToken === null ? undefined : text(input.userAuthToken, /^[A-Za-z0-9._~+/=-]{1,2048}$/);
       const result = await call('POST', '/orders', { paymentAmount: amount, paymentCurrency: 'USD', purchaseCurrency: asset(input.asset),
         paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY', destinationAddress: address, destinationNetwork: network, partnerUserRef: userRef(address),
-        email: text(input.email, email), phoneNumber: text(input.phoneNumber, phone),
+        email: text(input.email, email), phoneNumber: text(input.phoneNumber, mobile),
         emailVerificationId: text(input.emailVerificationId, verification),
         smsVerificationId: text(input.smsVerificationId, verification),
         phoneNumberVerifiedAt: new Date(phoneVerifiedAtMs).toISOString(), agreementAcceptedAt: new Date().toISOString(),
