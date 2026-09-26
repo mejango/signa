@@ -146,7 +146,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     await page.locator('#explain-continue').click();
   };
   try {
-    await page.goto(origin + '/');
+    await page.goto(origin + '/create');
     const fillForm = async () => {
       await page.locator('#passkey-name').fill('Juicebox test');
       if (!kitMode) await page.getByLabel('A wallet you already have').check();

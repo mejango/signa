@@ -157,7 +157,7 @@ describe('dedicated Center wallet HTTP journey',()=>{
   it('serves the wallet at the host root when mounted without a path prefix, and keeps /wallet links working',async()=>{
     const {app}=setup({ basePath: '', signup: {} as never, signupBrowserScript: '/* signup */' });
     const root=await app.fetch(new Request(origin+'/'));
-    expect(root.status).toBe(200);expect(await root.text()).toContain('id="signup-form"');
+    expect(root.status).toBe(200);expect(await root.text()).toContain('>Signa in</button>');
     expect(await (await app.fetch(new Request(origin+'/'))).text()).toContain('content=""');
     expect((await app.fetch(new Request(origin+'/create'))).status).toBe(200);
     expect((await app.fetch(new Request(origin+'/assets/wallet-signup.js'))).status).toBe(200);
@@ -181,10 +181,11 @@ describe('dedicated Center wallet HTTP journey',()=>{
     expect(response.status).toBe(302);expect(response.headers.get('location')).toBe('/wallet');
     expect((await app.fetch(new Request(origin+'/anything'))).status).toBe(404);
   });
-  it('serves a bare landing visit as the signup page unless a session cookie or app return is present',async()=>{
+  it('serves a bare landing visit as the sign-in page, with signup offered as a link',async()=>{
     const {app}=setup({ signup: {} as never, signupBrowserScript: '/* signup */' });
     const bare=await app.fetch(new Request(origin+'/wallet'));
-    expect(bare.status).toBe(200);expect(await bare.text()).toContain('id="signup-form"');
+    expect(bare.status).toBe(200);const text=await bare.text();
+    expect(text).toContain('>Signa in</button>');expect(text).toContain('id="wallet-create"');expect(text).not.toContain('id="signup-form"');
     expect((await app.fetch(new Request(origin+'/wallet',{headers:{cookie:`${walletSessionCookie}=${token}`}}))).status).toBe(200);
     expect((await app.fetch(new Request(origin+'/wallet?intent='+flow))).status).toBe(200);
     expect((await app.fetch(new Request(origin+'/wallet?payment='+loginId))).status).toBe(200);

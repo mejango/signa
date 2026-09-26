@@ -113,11 +113,11 @@ describe("served Center signup page", () => {
         navigator.credentials.create = async () => { throw new DOMException('See https://www.w3.org/TR/webauthn-2/', 'NotAllowedError'); };
       });
       await signup.locator('#signup-begin').click();
-      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your device.');
+      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('The device prompt didn’t finish. Try again.');
       expect(await signup.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
       expect(await signup.locator('#wallet-status').textContent()).not.toMatch(/NotAllowedError|https:/);
       await signup.getByRole('button', { name: 'Signa up', exact: true }).click();
-      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('We couldn’t finish with your device.');
+      await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('The device prompt didn’t finish. Try again.');
       expect(begins).toBe(1);
     } finally { await context.close(); }
   });
@@ -166,7 +166,7 @@ describe("served Center signup page", () => {
     await page.setViewportSize({ width: 1200, height: 900 });
   });
 
-  it("hides the signup form while sign-in is in progress, and offers it again after a failure", async () => {
+  it("hides the signup form while sign-in is in progress, and goes back to the sign-in page after a failure", async () => {
     await page.goto(`${origin}/wallet`);
     await expect.poll(() => page.locator("#signup-form").isVisible()).toBe(true);
     await page.locator("#signup-resume").click();
@@ -189,8 +189,12 @@ describe("served Center signup page", () => {
     await page.setViewportSize({ width: 1200, height: 900 });
     // Under load the held log-in request may not have reached the server yet.
     await expect.poll(() => releaseLogin !== null, { timeout: 10_000 }).toBe(true);
+    const leaving = page.waitForEvent("framenavigated");
     releaseLogin!();
-    await expect.poll(() => page.locator("#signup-form").isVisible()).toBe(true);
+    // The failed sign-in leaves for the sign-in page (served at /wallet) and carries a plain message there.
+    expect(new URL((await leaving).url()).pathname).toBe("/wallet");
+    expect(JSON.parse(await page.evaluate(() => sessionStorage.getItem("signa:sign-in-notice")) ?? "null"))
+      .toEqual({ message: "Sign-in didn’t finish. Try again.", state: "ready" });
     expect(await page.locator("body").textContent()).not.toContain("private-detail");
     expect(errors).toEqual([]);
   }, 20_000);

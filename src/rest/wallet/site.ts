@@ -1,4 +1,3 @@
-import { walletSignupPage } from '../web/walletSignupPage.js';
 import { FAVICON_SVG } from '../../branding.js';
 import { Hono, type Context, type MiddlewareHandler } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -242,11 +241,9 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
     mountWalletDevices(app, { origin, devices: options.devices, browserScript: options.deviceBrowserScript, basePath: base,
       session: (c, mutate) => paymentSession(c, mutate), onEvent: (action, outcome) => emit(action, outcome) });
   }
-  // A bare visit without a session is a signup (which also logs in), served right here so nothing
-  // redirects or repaints. App returns and stale cookies still get the landing page. An app return
-  // may be framed by the app whose intent it carries, when that app is admitted to.
+  // Every visit lands on sign-in; signup is the person's choice from there. An app return may be
+  // framed by the app whose intent it carries, when that app is admitted to.
   const landing = async (c: Context) => {
-    if (options.signup && !readWalletCookie(c.req.raw, walletSessionCookie) && new URL(c.req.url).search === '') return c.html(walletSignupPage({ base }));
     const intentId = c.req.query('intent');
     const framer = intentId && handoff.frameOrigin && frameable.size ? await handoff.frameOrigin(intentId).catch(() => undefined) : undefined;
     if (intentId) framedBy(c, framer);

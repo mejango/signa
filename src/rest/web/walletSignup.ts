@@ -1,4 +1,4 @@
-import { nativePasskeyError } from './walletPasskeyError.js';
+import { carrySignInNotice, nativePasskeyError } from './walletPasskeyError.js';
 import { defaultPasskeyName } from './passkeyName.js';
 import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'viem';
 import type { createLocalWalletSignup } from '../wallet/signup.js';
@@ -134,7 +134,7 @@ function accept(result: { view: View | null; csrfToken?: string; flowToken?: str
   if (view?.phase === 'deploying') view.preconfirmed ? messageLinked('Almost', ' there…' + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''))
     : messageLinked('Creating', steps.deploying.slice('Creating'.length) + (mode() === 'kit' && recoverySecret ? ' Meanwhile, save your backup password.' : ''));
   else message(view ? steps[view.phase] + (view.phase === 'awaiting_activation' ? mode() === 'kit' && recoverySecret ? ' Save your backup password, or continue to sign in.' : ' Continue to sign in.' : '')
-    : inFrame() ? 'Signa' : 'Name your device key and pick a way back in.');
+    : inFrame() ? 'Signa' : 'Name your device key and pick a backup.');
   if (view?.phase === 'ready_to_sign_in' && kitSavedWallet === view.walletAddress) recoverySecret = null;
 }
 function render() {
@@ -449,9 +449,15 @@ async function resumeSignup() {
   await send('resume/complete', { resumeId: begun.challenge.id, assertion: proof }, begun.csrfToken);
 }
 resume.addEventListener('click', event => { event.preventDefault(); if (busy || pending) return; void run(async () => {
-  // A passkey with a finished wallet logs in; one from an unfinished signup resumes it.
-  try { await login(); return; } catch (error) { if (!(error instanceof HttpFailure) || ![400, 401, 403, 404, 410].includes(error.status)) throw error; }
-  await resumeSignup();
+  // A passkey with a finished wallet logs in; one from an unfinished signup resumes it. Any other
+  // failed sign-in goes back to the sign-in page with its message, never to this signup form.
+  try { await login(); return; } catch (error) {
+    if (error instanceof HttpFailure && [400, 401, 403, 404, 410].includes(error.status)) { await resumeSignup(); return; }
+    carrySignInNotice(error instanceof DOMException && native ? nativePasskeyError(error, native.signal.aborted)
+      : { message: 'Sign-in didn’t finish. Try again.', state: 'ready' });
+    disposed = true; message(''); // Leaving: nothing repaints the signup form behind the navigation.
+    location.replace((base || '/') + location.search);
+  }
 }); });
 // Phase changes are pushed over the events stream while creation or login preparation is under way.
 // The poll stays behind it: every 10 s while the stream is live (a change made in another replica

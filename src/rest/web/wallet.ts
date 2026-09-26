@@ -1,4 +1,4 @@
-import { nativePasskeyError } from './walletPasskeyError.js';
+import { nativePasskeyError, takeSignInNotice } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
 import { qrSvg } from "./qr.js";
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
@@ -36,6 +36,8 @@ let completionAttempted = false;
 let paymentReviewId: string | null = null;
 let nativePrompt: AbortController | null = null, retryAction: (() => Promise<void>) | null = null;
 let nextRetry: () => Promise<void> = load;
+// A sign-in that failed on the signup page comes back here with its message.
+let notice = takeSignInNotice();
 // Framed inside an admitted app's page, this page signs in without a Center session or cookie: the
 // intent admits it, the launch signature kept on the row is the browser-launch claim, and one
 // passkey assertion naming the app as its top origin both signs in and approves the grant. Only an
@@ -214,7 +216,6 @@ async function load() {
   if (framed) {
     // Signing up stays in the frame (Center admits the same app to frame it); recovery and the page of its own open on top.
     for (const link of [recover, openAsPage]) if (link) { link.target = "_top"; link.rel = "noopener"; }
-    if (recover) recover.textContent = "Recover";
     if (openAsPage) { openAsPage.textContent = "Fullscreen"; openAsPage.title = "Fullscreen"; document.getElementById("wallet-links")?.append(openAsPage); }
   }
   const rpId = string(config.rpId, 253);
@@ -237,7 +238,9 @@ async function load() {
     window.parent.postMessage({ type: 'juicebox-center:page', page: 'signin' }, framerOrigin!);
     // No cookie reaches a cross-site frame, so there is no session to read; the sign-in below carries its own proof.
     ahead?.catch(() => undefined); ahead = null; session = null; sessionKnown = true;
-    setStatus("brand", "Signa"); return;
+    const carried = notice; notice = null;
+    if (carried) setStatus(carried.state, carried.message); else setStatus("brand", "Signa");
+    return;
   }
   await readSession();
 }
@@ -254,9 +257,8 @@ async function continueSession() {
     location.replace(`${base}/payment?review=${paymentReviewId}`);
   }
   else if (session && intent) await issue();
-  // A direct visit without a session or an app return belongs on the signup page, which also logs in.
-  else if (!session && !intent && !paymentReviewId && document.getElementById("wallet-create")) location.replace(`${base}/create`);
-  else setStatus(session ? "signed-in" : "ready", session ? "You are signed in." : "Use Face ID, Touch ID, a screen lock, or a security key.");
+  else if (session) setStatus("signed-in", "You are signed in.");
+  else { const carried = notice; notice = null; setStatus(carried?.state ?? "ready", carried?.message ?? "Use Face ID, Touch ID, a screen lock, or a security key."); }
 }
 async function login() {
   nextRetry = login;
