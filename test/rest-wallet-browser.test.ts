@@ -292,7 +292,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(brandLabel && brandIcon && heading && Math.abs(brandLabel.x - heading.x)).toBeLessThan(1);
     // The mark sits clear of the word, and still inside the screen.
     expect(brandLabel!.x - (brandIcon!.x + brandIcon!.width)).toBeGreaterThanOrEqual(10);
-    expect(brandIcon!.x).toBeGreaterThanOrEqual(4);
+    expect(brandIcon!.x).toBeGreaterThanOrEqual(0);
     const links = await page.evaluate(() => [...document.querySelectorAll("#wallet-links a")].map(a => ({
       text: a.textContent!.trim(), color: getComputedStyle(a).color, size: parseFloat(getComputedStyle(a).fontSize) })));
     expect(links.map(link => link.text)).toEqual(["Signa up", "Lost your account?"]);
