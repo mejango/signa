@@ -103,6 +103,7 @@ export interface RestWalletConfiguration {
   networksPayerKey?: Hex;
   /** Coinbase Onramp to the account's own address. */
   onramp?: ReturnType<typeof createWalletOnramp>;
+  applePayDomainFile?: string;
 }
 export interface RestWalletRuntime {
   origin: string;
@@ -585,6 +586,7 @@ export async function createRestRuntime(options: {
     ...(wallet.devices ? { devices: wallet.devices, deviceBrowserScript: assets.walletDeviceScript } : {}),
     ...(wallet.networks ? { networks: wallet.networks } : {}),
     ...(options.wallet?.onramp ? { onramp: options.wallet.onramp } : {}),
+    ...(options.wallet?.applePayDomainFile ? { applePayDomainFile: options.wallet.applePayDomainFile } : {}),
     onEvent: event => console.info(JSON.stringify({ service: "wallet", ...event })),
   }) : undefined;
   if (options.startMaintenance !== false) wallet?.signup?.start();

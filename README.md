@@ -80,7 +80,11 @@ senders or share a signer across creation, recovery and network funding lanes.
 (`CDP_ONRAMP_APPLE_PAY=false` hides it) and Coinbase's hosted checkout for Coinbase accounts.
 Purchases land as USDC on Base at the account's own address. Coinbase sends and checks the
 email and mobile codes; the verification stays on the person's device, never on Signa.
-`CDP_ONRAMP_SANDBOX=true` uses Coinbase's sandbox with the same key.
+`CDP_ONRAMP_SANDBOX=true` uses Coinbase's sandbox with the same key. The Apple Pay button embeds
+in the account page (the wallet host must be on the CDP Portal's Onramp domain allowlist); the
+file Coinbase issues for that domain goes in `CDP_APPLE_PAY_DOMAIN_FILE` and is served at
+`/.well-known/apple-developer-merchantid-domain-association`. Inside an app's frame the button
+opens in a window instead, since Apple checks the top page's domain.
 `REST_ERC4337_CONFIG` and optional `REST_ERC4337_SPONSOR_ROUTES` retain the existing
 reviewed execution-policy formats.
 

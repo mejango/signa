@@ -485,6 +485,16 @@ describe('onramp HTTP boundary',()=>{
     expect((await app.fetch(request('/wallet/onramp/session',{destinationAddress:'0x00000000000000000000000000000000000000bb'},signedIn))).status).toBe(400);
     expect(service.session).toHaveBeenCalledTimes(1);
   });
+  it('serves Coinbase\'s Apple Pay domain file only when configured, and lets only pay.coinbase.com frame into the page',async()=>{
+    const path='/.well-known/apple-developer-merchantid-domain-association';
+    const {app}=setup({onramp:onramp() as never,applePayDomainFile:'domain-file-contents'});
+    const file=await app.fetch(new Request(origin+path));
+    expect(file.status).toBe(200);expect(await file.text()).toBe('domain-file-contents');
+    expect((await setup().app.fetch(new Request(origin+path))).status).toBe(404);
+    const page=await app.fetch(new Request(origin+'/wallet/onramp',{headers:{cookie:signedIn.cookie}}));
+    expect(page.headers.get('content-security-policy')).toContain('frame-src https://pay.coinbase.com;');
+    expect(page.headers.get('permissions-policy')).toContain('payment=(self "https://pay.coinbase.com")');
+  });
   it('reports what is offered to a signed-in account and is absent without configuration',async()=>{
     const {app}=setup({onramp:onramp() as never});
     const offered=await app.fetch(new Request(origin+'/wallet/onramp',{headers:{cookie:signedIn.cookie}}));

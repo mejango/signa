@@ -546,12 +546,36 @@ async function fundsApplePay(opened: Window | null) {
     saveContact(contact); codesSent = null;
   }
   const { userAuthToken, ...fields } = contact;
-  const order = record(await request(`${base}/onramp/order`, { amount, ...fields, agreed: true, ...(userAuthToken ? { userAuthToken } : {}) }, csrf, 20_000));
+  const order = record(await request(`${base}/onramp/order`, { amount, ...fields, agreed: true, embed: !opened, ...(userAuthToken ? { userAuthToken } : {}) }, csrf, 20_000));
   if (typeof order.userAuthToken === "string") saveContact({ ...contact, userAuthToken: order.userAuthToken });
-  openCheckout(opened, order.url);
-  fundsShown = false; fundsStep = "amount"; setStatus("checking", "Pay with Apple Pay in the Coinbase window.");
+  fundsShown = false; fundsStep = "amount";
+  if (opened) { openCheckout(opened, order.url); setStatus("checking", "Pay with Apple Pay in the Coinbase window."); }
+  else { embedPayment(order.url); setStatus("checking", "Tap the Apple Pay button to pay."); }
   watchOrder(string(order.orderId, 64));
 }
+// Coinbase's pay button in a frame on this page, as Coinbase requires. Apple checks the top page's registered
+// domain, so inside an app's frame (a different top page) the button opens in a window instead.
+const payFrame = element("wallet-funds-pay");
+function embedPayment(value: unknown) {
+  const url = string(value);
+  if (!url.startsWith("https://pay.coinbase.com/")) throw new InvalidResponse();
+  const frame = document.createElement("iframe");
+  frame.src = url; frame.title = "Apple Pay"; frame.allow = "payment"; frame.referrerPolicy = "no-referrer";
+  frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
+  payFrame.replaceChildren(frame); payFrame.hidden = false;
+}
+function closePayment() { payFrame.replaceChildren(); payFrame.hidden = true; }
+window.addEventListener("message", event => {
+  if (event.origin !== "https://pay.coinbase.com" || payFrame.hidden) return;
+  let name: unknown;
+  try { name = (typeof event.data === "string" ? JSON.parse(event.data) : event.data)?.eventName; } catch { return; }
+  if (name === "onramp_api.commit_success") setStatus("checking", "Payment approved. Coinbase is sending the USDC…");
+  else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The USDC is in your account."); }
+  else if (name === "onramp_api.cancel") { closePayment(); setStatus("ready", "Apple Pay cancelled."); }
+  else if (name === "onramp_api.load_error" || name === "onramp_api.commit_error" || name === "onramp_api.polling_error") {
+    closePayment(); setStatus("error", "Coinbase couldn't complete the purchase. Try again, or use a Coinbase account.");
+  }
+});
 function watchOrder(orderId: string) {
   if (orderTimer) clearInterval(orderTimer);
   let polls = 0;
@@ -561,18 +585,18 @@ function watchOrder(orderId: string) {
     if (polls++ > 180) return stop();
     request(`${base}/onramp/status`, { orderId }, csrf).then(value => {
       const state = string(value.status, 40);
-      if (state === "completed") { stop(); setStatus("ready", "The USDC is in your account."); }
-      else if (state === "failed") { stop(); setStatus("error", "Coinbase couldn't complete the purchase."); }
+      if (state === "completed") { stop(); closePayment(); setStatus("ready", "The USDC is in your account."); }
+      else if (state === "failed") { stop(); closePayment(); setStatus("error", "Coinbase couldn't complete the purchase."); }
       else if (state === "processing") setStatus("checking", "Payment received. Coinbase is sending the USDC…");
     }).catch(() => { /* The next poll reads again. */ });
   }, 5_000);
 }
-fundsOpenButton.addEventListener("click", () => { fundsShown = true; fundsStep = "amount"; render(); fundsInput("amount").focus(); });
+fundsOpenButton.addEventListener("click", () => { closePayment(); fundsShown = true; fundsStep = "amount"; render(); fundsInput("amount").focus(); });
 // Enter in any field continues the Apple Pay steps; the Coinbase account button is its own path.
 funds.addEventListener("submit", event => {
   event.preventDefault();
   if (!fundsOffer?.applePay) return void run(() => fundsAction(fundsCoinbase, true));
-  if (fundsStep === "codes" || (fundsStep === "amount" && savedContact())) return void run(() => fundsAction(fundsApplePay, true));
+  if (fundsStep === "codes" || (fundsStep === "amount" && savedContact())) return void run(() => fundsAction(fundsApplePay, framed));
   if (fundsStep === "contact") return void run(() => fundsAction(fundsSendCodes, false));
   try { fundsAmount(true); fundsStep = "contact"; render(); fundsInput("email").focus(); }
   catch (error) { setStatus("error", (error as Error).message); }

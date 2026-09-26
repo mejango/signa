@@ -13,10 +13,11 @@ export const walletLaunchCookie = '__Host-center-wallet-launch';
 export type WalletCookieName = typeof walletSessionCookie | typeof walletFlowCookie | typeof walletSignupCookie | typeof walletSignupResumeCookie
   | typeof walletRecoveryCookie | typeof walletRecoveryResumeCookie | typeof walletLaunchCookie;
 
+/** Coinbase's Apple Pay button is the one frame the account page embeds; it needs the Payment Request API. */
 export const walletPageHeaders = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-src https://pay.coinbase.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY', 'Permissions-Policy': 'publickey-credentials-get=(self), publickey-credentials-create=(self)',
+  'X-Frame-Options': 'DENY', 'Permissions-Policy': 'publickey-credentials-get=(self), publickey-credentials-create=(self), payment=(self "https://pay.coinbase.com")',
 };
 
 function invalid(status = 400, code = 'WALLET_HTTP_INVALID'): never {
