@@ -475,6 +475,29 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(errors).toEqual([]);
   });
 
+  it("keeps Coinbase's QR fallback, and shows Coinbase's own reason when Apple Pay fails", async () => {
+    onramp = true;
+    let events: object[] = [];
+    await page.context().route("https://pay.coinbase.com/**", route => route.fulfill({ contentType: "text/html",
+      body: `<script>for (const e of ${JSON.stringify(events)}) parent.postMessage(e, "*")</script>` }));
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    const pay = async () => {
+      await page.locator("#wallet-funds-open").click(); await page.locator("#wallet-funds-amount").fill("25");
+      await page.locator("#wallet-funds-agree").check(); await page.locator("#wallet-funds-applepay").click();
+    };
+    const frame = page.locator("#wallet-funds-pay iframe");
+    events = [{ eventName: "onramp_api.load_error", data: { errorCode: "ERROR_CODE_GUEST_APPLE_PAY_NOT_SUPPORTED", errorMessage: "x" } }];
+    await pay(); await expect.poll(() => frame.isVisible()).toBe(true);
+    await page.waitForTimeout(300); expect(await frame.isVisible()).toBe(true);
+    events = [{ eventName: "onramp_api.validate_merchant_error", data: { errorCode: "ERROR_CODE_GUEST_APPLE_PAY_MERCHANT_VALIDATION_TIMEOUT", errorMessage: "Check your connection and try again." } },
+      { eventName: "onramp_api.cancel" }];
+    await pay(); await expect.poll(() => page.locator("#wallet-status").textContent()).toBe("Check your connection and try again.");
+    expect(await frame.count()).toBe(0);
+    events = [{ eventName: "onramp_api.commit_error", data: { errorCode: "ERROR_CODE_GUEST_CARD_SOFT_DECLINED", errorMessage: "Your bank declined this card. Try a different debit card." } }];
+    await pay(); await expect.poll(() => page.locator("#wallet-status").textContent()).toBe("Your bank declined this card. Try a different debit card.");
+    expect(errors).toEqual([]);
+  });
+
   it("retries an interrupted completion with identical proof before allowing another passkey", async () => {
     await loadAndEnroll();
     let dropped = false;
