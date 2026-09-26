@@ -3,7 +3,7 @@ import { RestError } from '../core.js';
 
 /** Coinbase Onramp for a Signa account: headless Apple Pay guest checkout (cards, US), and the hosted
  * checkout for people paying from a Coinbase account (Coinbase ended hosted guest checkout 2026-06-30).
- * Both open on Coinbase's own page in a new window. Purchases land as USDC on Base at the account's own
+ * Apple Pay embeds Coinbase's pay button in a frame on the wallet origin; the hosted checkout opens a window. Purchases land as USDC on Base at the account's own
  * address; the caller never names a destination. Signa stores nothing: Coinbase runs the one-time codes
  * and checks each order's email and phone against its own verification records, and the device keeps
  * the verification ids. Contact details never sign in, recover or otherwise act for the account. */
@@ -11,6 +11,8 @@ export interface WalletOnrampConfig {
   keyId: string;
   /** Ed25519 (base64 of seed and public key, 64 bytes) or an EC private key in PEM. */
   secret: string;
+  /** The wallet origin; its host is the registered domain the embedded Apple Pay button renders on. */
+  origin: string;
   applePay?: boolean;
   /** Coinbase sandbox: production key, `sandbox-` user refs, Apple Pay's sandbox sheet. */
   sandbox?: boolean;
@@ -66,7 +68,7 @@ const known: Record<string, [number, string]> = {
 };
 
 export function createWalletOnramp(config: WalletOnrampConfig) {
-  const { key } = signingKey(config.secret), request = config.fetch ?? fetch;
+  const { key } = signingKey(config.secret), request = config.fetch ?? fetch, domain = new URL(config.origin).hostname;
   const call = async (method: 'GET' | 'POST', path: string, body?: object): Promise<Record<string, unknown>> => {
     const url = api + path;
     let response: Response;
@@ -116,7 +118,8 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
       return { verificationId: text(result.verificationId, verification),
         verifiedAtMs: Date.now(), expiresAt: typeof result.verificationExpiresAt === 'string' ? result.verificationExpiresAt : null };
     },
-    /** An Apple Pay order; its link is Coinbase's pay button page, opened top-level (no `domain`, so no frame). */
+    /** An Apple Pay order. `embed` renders Coinbase's pay button in a frame on the wallet origin (its registered
+     * domain); otherwise the link opens top-level, as inside an app's frame where Apple checks the app's domain. */
     async order(address: string, input: Record<string, unknown>) {
       applePay();
       const amount = onrampAmount(input.amount);
@@ -130,6 +133,7 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
         emailVerificationId: text(input.emailVerificationId, verification),
         smsVerificationId: text(input.smsVerificationId, verification),
         phoneNumberVerifiedAt: new Date(phoneVerifiedAtMs).toISOString(), agreementAcceptedAt: new Date().toISOString(),
+        ...(input.embed === true ? { domain } : {}),
         ...(token ? { userAuthToken: token } : {}) });
       const order = result.order as Record<string, unknown> | undefined, link = result.paymentLink as Record<string, unknown> | undefined;
       if (typeof link?.url !== 'string' || !link.url.startsWith('https://pay.coinbase.com/') || typeof order?.orderId !== 'string')

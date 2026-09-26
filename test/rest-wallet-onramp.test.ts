@@ -21,7 +21,7 @@ function onramp(reply: (url: string, body: any) => [number, unknown], extra: { a
     const [status, json] = reply(url, body);
     return new Response(JSON.stringify(json), { status });
   });
-  return { calls, service: createWalletOnramp({ keyId: 'key-id', secret: ed25519().secret, fetch: fetch as never, ...extra }) };
+  return { calls, service: createWalletOnramp({ keyId: 'key-id', secret: ed25519().secret, origin: 'https://signa.center', fetch: fetch as never, ...extra }) };
 }
 
 describe('CDP request signing', () => {
@@ -43,7 +43,7 @@ describe('CDP request signing', () => {
     expect(verify('sha256', Buffer.from(`${h}.${c}`), { key: publicKey, dsaEncoding: 'ieee-p1363' }, Buffer.from(s!, 'base64url'))).toBe(true);
   });
   it('refuses a secret that is neither key type', () => {
-    expect(() => createWalletOnramp({ keyId: 'k', secret: 'short' })).toThrow(/CDP_API_KEY_SECRET/);
+    expect(() => createWalletOnramp({ keyId: 'k', secret: 'short', origin: 'https://signa.center' })).toThrow(/CDP_API_KEY_SECRET/);
   });
 });
 
@@ -109,6 +109,8 @@ describe('Apple Pay guest checkout', () => {
       destinationAddress: address, destinationNetwork: 'base', partnerUserRef: expect.stringMatching(/^sandbox-[0-9a-f]{32}$/),
       email: 'a@b.co', phoneNumber: '+12125551234', emailVerificationId: vid, smsVerificationId: vid });
     expect(calls[0]!.body).not.toHaveProperty('domain');
+    await service.order(address, { ...input, embed: true });
+    expect(calls[1]!.body.domain).toBe('signa.center');
     for (const bad of [{ agreed: false }, { phoneVerifiedAtMs: Date.now() - 61 * 86_400_000 }, { phoneVerifiedAtMs: Date.now() + 3_600_000 }, { smsVerificationId: 'x' }])
       await expect(service.order(address, { ...input, ...bad })).rejects.toMatchObject({ code: 'WALLET_ONRAMP_INVALID' });
   });

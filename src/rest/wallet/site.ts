@@ -52,6 +52,8 @@ export interface WalletSiteOptions {
   networks?: Pick<ReturnType<typeof createWalletNetworks>, 'list' | 'quote' | 'approve' | 'status'>;
   /** Coinbase Onramp to the account's own address: hosted checkout, and Apple Pay when Coinbase admits it. */
   onramp?: Pick<ReturnType<typeof createWalletOnramp>, 'applePay' | 'session' | 'verify' | 'confirm' | 'order' | 'status'>;
+  /** The domain verification file Coinbase issues for the embedded Apple Pay button, served at Apple's well-known path. */
+  applePayDomainFile?: string;
   onEvent?: (event: { action: string; outcome: 'ok' | 'rejected' | 'unavailable'; code?: string; detail?: Record<string, unknown> }) => void;
 }
 
@@ -100,7 +102,8 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   // The wallet's own paths under `base`. On the credential host nothing else may execute.
   const walletPrefixes = ['/assets/', '/authorize/', '/config', '/create', '/handoff/', '/launch', '/login/', '/logout', '/payment',
     '/networks', '/onramp', '/payment-reviews/', '/recover', '/recovery/', '/session', '/signup/', '/add', '/devices/'];
-  const isWalletPath = (path: string) => path === (base || '/') || path === `${base}/` || walletPrefixes.some(prefix => path.startsWith(base + prefix));
+  const applePayFile = '/.well-known/apple-developer-merchantid-domain-association';
+  const isWalletPath = (path: string) => (path === applePayFile && !!options.applePayDomainFile) || path === (base || '/') || path === `${base}/` || walletPrefixes.some(prefix => path.startsWith(base + prefix));
   const legacyPrefix = '/wallet';
   if (base === '') app.use('*', async (c, next) => {
     // Links minted while the pages lived under the old prefix keep working: navigations move, calls are served.
@@ -395,7 +398,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   });
   app.post(`${base}/onramp/order`, async c => {
     const service = onramp(), session = await paymentSession(c, true);
-    const body = fields(await readWalletJson(c.req.raw), ['amount', 'email', 'phoneNumber', 'emailVerificationId', 'smsVerificationId', 'phoneVerifiedAtMs', 'agreed'], ['userAuthToken']);
+    const body = fields(await readWalletJson(c.req.raw), ['amount', 'email', 'phoneNumber', 'emailVerificationId', 'smsVerificationId', 'phoneVerifiedAtMs', 'agreed'], ['userAuthToken', 'embed']);
     const result = await service.order(address(session), body);
     emit('onramp_order', 'ok'); return c.json(result);
   });
@@ -403,6 +406,10 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
     const service = onramp(), session = await paymentSession(c, true);
     return c.json(await service.status(address(session), fields(await readWalletJson(c.req.raw), ['orderId'])));
   });
+  if (options.applePayDomainFile) {
+    const file = options.applePayDomainFile;
+    app.get(applePayFile, c => { assertWalletHttpHost(c.req.raw, origin); return c.body(file, 200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); });
+  }
   // The review id is the capability here: the app hands the customer its own link, and the approval
   // is a passkey signature over the review. No Center session is asked for on the way.
   app.get(`${base}/payment-reviews/:id`, async c => {

@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from
 import { build } from "esbuild";
 import { parseWalletRegistration, type WalletRegistrationCandidate } from "../src/rest/wallet/registration.js";
 import { verifyWalletAssertion, type WalletAssertion } from "../src/rest/wallet/webauthn.js";
+import { walletPageHeaders } from "../src/rest/wallet/http.js";
 
 const encode = (value: Uint8Array) => Buffer.from(value).toString("base64url");
 const decode = (value: string) => Buffer.from(value, "base64url");
@@ -179,7 +180,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       };
       if (path === "/wallet" || path === "/wallet/ways") {
         // /wallet/ways renders the landing with signup and recovery offered, as production does for an app intent.
-        response.writeHead(200, { "content-type": "text/html", "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" });
+        response.writeHead(200, { "content-type": "text/html", "content-security-policy": walletPageHeaders["Content-Security-Policy"] });
         response.end(path === "/wallet/ways" || landingWays ? productionWaysHtml : pageHtml); return;
       }
       if (path === "/wallet/create") { response.writeHead(200, { "content-type": "text/html" }); response.end(signupHtml); return; }
@@ -242,7 +243,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         : json({ error: { code: "WALLET_ONRAMP_CODE_INVALID", message: "x" } }, 400);
       if (onramp && path === "/wallet/onramp/order") return json({ orderId: "order-1", url: "https://pay.coinbase.com/apple-pay?order=1", userAuthToken: "auth-token" });
       if (onramp && path === "/wallet/onramp/session") return json({ url: "https://pay.coinbase.com/buy?sessionToken=t" });
-      if (onramp && path === "/wallet/onramp/status") return json({ orderId: "order-1", status: "completed", txHash: null });
+      if (onramp && path === "/wallet/onramp/status") return json({ orderId: "order-1", status: "pending_payment", txHash: null });
       if (path === "/wallet/logout") { authenticated = false; return json({ loggedOut: true, replayed: false }); }
       if (path === "/app/callback") { response.writeHead(200, { "content-type": "text/html" }); response.end("<p>App callback</p>"); return; }
       return json({}, 404);
@@ -421,9 +422,11 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(errors).toEqual([]);
   });
 
-  it("adds funds with Apple Pay: codes once, kept only on this device, then straight to Coinbase", async () => {
+  it("adds funds with Apple Pay: codes once, kept only on this device, Coinbase's button embedded here", async () => {
     onramp = true;
-    await page.context().route("https://pay.coinbase.com/**", route => route.fulfill({ contentType: "text/html", body: "<p>Coinbase</p>" }));
+    // The stand-in pay page reports an approved payment the way Coinbase's frame does.
+    await page.context().route("https://pay.coinbase.com/**", route => route.fulfill({ contentType: "text/html",
+      body: route.request().url().includes("apple-pay") ? `<script>parent.postMessage({ eventName: "onramp_api.commit_success" }, "*")</script>` : "<p>Coinbase</p>" }));
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
     await page.locator("#wallet-funds-open").click();
     await page.locator("#wallet-funds-amount").fill("25");
@@ -439,19 +442,24 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("wrong or expired");
     expect(requests.some(item => item.path === "/wallet/onramp/order")).toBe(false);
     await page.locator("#wallet-funds-email-code").fill("123456");
-    const [popup] = await Promise.all([page.waitForEvent("popup"), page.locator("#wallet-funds-applepay").click()]);
-    await expect.poll(() => popup.url()).toBe("https://pay.coinbase.com/apple-pay?order=1");
+    await page.locator("#wallet-funds-applepay").click();
+    const frame = page.locator("#wallet-funds-pay iframe");
+    await expect.poll(() => frame.getAttribute("src")).toBe("https://pay.coinbase.com/apple-pay?order=1");
+    expect(await frame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+    expect(await frame.getAttribute("allow")).toBe("payment");
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("Payment approved");
     const order = requests.find(item => item.path === "/wallet/onramp/order")!;
     expect(order.headers["x-center-wallet-csrf"]).toBe(csrf);
-    expect(order.body).toMatchObject({ amount: "25", email: "a@b.co", phoneNumber: "+12125551234", smsVerificationId: vid(1), emailVerificationId: vid(2), agreed: true });
+    expect(order.body).toMatchObject({ amount: "25", email: "a@b.co", phoneNumber: "+12125551234", smsVerificationId: vid(1), emailVerificationId: vid(2), agreed: true, embed: true });
     expect(order.body).not.toHaveProperty("destinationAddress");
     expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), `signa-onramp:eip155:8453:${walletAddress}`))
       .toMatchObject({ smsVerificationId: vid(1), emailVerificationId: vid(2), userAuthToken: "auth-token" });
     // The next purchase skips the codes and reuses Coinbase's returning-user token.
     await page.locator("#wallet-funds-open").click(); await page.locator("#wallet-funds-amount").fill("10");
     await page.locator("#wallet-funds-agree").check();
-    const [again] = await Promise.all([page.waitForEvent("popup"), page.locator("#wallet-funds-applepay").click()]);
-    await expect.poll(() => again.url()).toBe("https://pay.coinbase.com/apple-pay?order=1");
+    await page.locator("#wallet-funds-applepay").click();
+    await expect.poll(() => requests.filter(item => item.path === "/wallet/onramp/order").length).toBe(2);
+    await expect.poll(() => frame.isVisible()).toBe(true);
     expect(requests.filter(item => item.path === "/wallet/onramp/verify")).toHaveLength(2);
     expect(requests.filter(item => item.path === "/wallet/onramp/order").at(-1)!.body).toMatchObject({ amount: "10", userAuthToken: "auth-token" });
     // A Coinbase account opens the hosted checkout without any contact details.

@@ -67,7 +67,7 @@ async function activate(): Promise<void> {
   const networksPayerKey = signer("WALLET_NETWORKS_PAYER_KEY");
   const frameableAppOrigins = origins("WALLET_FRAMEABLE_APP_ORIGINS");
   const onramp = configuredGroup(["CDP_API_KEY_ID", "CDP_API_KEY_SECRET"]) ? createWalletOnramp({ keyId: process.env.CDP_API_KEY_ID!,
-    secret: process.env.CDP_API_KEY_SECRET!, applePay: flag("CDP_ONRAMP_APPLE_PAY", true), sandbox: flag("CDP_ONRAMP_SANDBOX") }) : undefined;
+    secret: process.env.CDP_API_KEY_SECRET!, origin, applePay: flag("CDP_ONRAMP_APPLE_PAY", true), sandbox: flag("CDP_ONRAMP_SANDBOX") }) : undefined;
   keepUpstreamConnections();
   const upstreams = dwellirRpcUpstreams(process.env.DWELLIR_API_KEY);
   const rpcSiteLimitPerMinute = positiveInteger("RPC_SITE_LIMIT_PER_MINUTE", 20_000);
@@ -80,7 +80,8 @@ async function activate(): Promise<void> {
   const stack = await createBaseWalletProductionStack();
   const wallet: RestWalletConfiguration = { origin, frameableAppOrigins,
     manifest: stack.manifest, utility: stack.utility, basePath: "", payments: stack.payments,
-    ...(networksPayerKey ? { networksPayerKey } : {}), ...(onramp ? { onramp } : {}) };
+    ...(networksPayerKey ? { networksPayerKey } : {}), ...(onramp ? { onramp } : {}),
+    ...(process.env.CDP_APPLE_PAY_DOMAIN_FILE ? { applePayDomainFile: process.env.CDP_APPLE_PAY_DOMAIN_FILE } : {}) };
   const rpcUrl = `https://${DWELLIR_RPC_HOSTS[8453]}/${process.env.DWELLIR_API_KEY}`;
   accountRuntime = await createRestRuntime({
     surface: "wallet",
