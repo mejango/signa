@@ -135,8 +135,10 @@ describe("actual Chromium WebAuthn producer and Center verification", () => {
 });
 
 describe("served Center wallet UI (local HTTP contract, virtual authenticator)", () => {
-  let server: Server, browser: Browser, page: Page, origin: string, script: string;
-  let pageHtml: string, css: string, productionWaysHtml: string;
+  let server: Server, browser: Browser, page: Page, origin: string, script: string, signupScript: string;
+  let pageHtml: string, css: string, productionWaysHtml: string, signupHtml: string, signupCss: string;
+  // Production serves the landing with signup and recovery offered; most tests here use the plain page.
+  let landingWays = false;
   const csrf = encode(Buffer.alloc(32, 9)), intentId = encode(Buffer.alloc(32, 10));
   const state = encode(Buffer.alloc(32, 11)), code = encode(Buffer.alloc(32, 12));
   const challenge = encode(Buffer.alloc(32, 13)), handle = encode(Buffer.alloc(32, 14));
@@ -162,6 +164,10 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     script = built.outputFiles[0]!.text;
     const productionPage = await import("../src/rest/web/walletPage.js");
     pageHtml = productionPage.walletPage(); css = productionPage.walletCss(); productionWaysHtml = productionPage.walletPage(true, true);
+    signupScript = (await build({ entryPoints: [new URL("../src/rest/web/walletSignup.ts", import.meta.url).pathname],
+      bundle: true, platform: "browser", format: "esm", target: "es2022", write: false })).outputFiles[0]!.text;
+    const signupPage = await import("../src/rest/web/walletSignupPage.js");
+    signupHtml = signupPage.walletSignupPage(); signupCss = signupPage.walletSignupCss();
     server = createServer(async (request, response) => {
       const path = new URL(request.url!, origin).pathname;
       const json = (value: unknown, status = 200) => {
@@ -171,7 +177,12 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       if (path === "/wallet" || path === "/wallet/ways") {
         // /wallet/ways renders the landing with signup and recovery offered, as production does for an app intent.
         response.writeHead(200, { "content-type": "text/html", "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" });
-        response.end(path === "/wallet/ways" ? productionWaysHtml : pageHtml); return;
+        response.end(path === "/wallet/ways" || landingWays ? productionWaysHtml : pageHtml); return;
+      }
+      if (path === "/wallet/create") { response.writeHead(200, { "content-type": "text/html" }); response.end(signupHtml); return; }
+      if (path === "/wallet/assets/wallet-signup.js" || path === "/wallet/assets/wallet-signup.css") {
+        response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : "text/css" });
+        response.end(path.endsWith(".js") ? signupScript : signupCss); return;
       }
       if (path === "/wallet/assets/wallet.js" || path === "/wallet/assets/wallet.css") {
         response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : "text/css" });
@@ -187,6 +198,12 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         if (recoveredLoginId) return json({ session: { ...publicSession(), loginId: recoveredLoginId }, csrfToken: encode(Buffer.alloc(32, 31)) });
         return json(authenticated && (!requireSessionCookie || request.headers.cookie?.includes("test-session=opaque"))
           ? { session: publicSession(), csrfToken: csrf } : { session: null });
+      }
+      if (path === "/wallet/signup/state" || path === "/wallet/signup/framed/state") return json({ view: null });
+      if (path === `/wallet/authorize/${intentId}/begin`) {
+        begins++;
+        return json({ loginId, flowToken: encode(Buffer.alloc(32, 15)), publicKey: { rpId: "localhost", challenge, userVerification: "required", timeout: 90_000 },
+          expiresAtMs: Date.now() + 180_000 }, 201);
       }
       if (path === `/wallet/authorize/${intentId}`) return intentExpired
         ? json({ error: { code: "WALLET_HANDOFF_EXPIRED", message: "private-detail" }, app: { origin: "https://beep.example" } }, 410) : json(intent());
@@ -227,7 +244,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   }, 30_000);
 
   beforeEach(async () => {
-    authenticated = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
+    authenticated = false; landingWays = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
     redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0;
     requests.length = 0; errors.length = 0;
@@ -273,9 +290,9 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     const brandIcon = await page.locator('.brand-icon').boundingBox();
     const heading = await page.locator('h1').boundingBox();
     expect(brandLabel && brandIcon && heading && Math.abs(brandLabel.x - heading.x)).toBeLessThan(1);
-    const statusMarkerX = await page.locator('#wallet-status').evaluate(node =>
-      node.getBoundingClientRect().x + parseFloat(getComputedStyle(node, '::before').left));
-    expect(Math.abs(brandIcon!.x - statusMarkerX)).toBeLessThan(4);
+    // The mark sits clear of the word, and still inside the screen.
+    expect(brandLabel!.x - (brandIcon!.x + brandIcon!.width)).toBeGreaterThanOrEqual(10);
+    expect(brandIcon!.x).toBeGreaterThanOrEqual(4);
     const links = await page.evaluate(() => [...document.querySelectorAll("#wallet-links a")].map(a => ({
       text: a.textContent!.trim(), color: getComputedStyle(a).color, size: parseFloat(getComputedStyle(a).fontSize) })));
     expect(links.map(link => link.text)).toEqual(["Signa up", "Lost your account?"]);
@@ -545,5 +562,59 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       expect(await page.locator("#wallet-signin").isHidden()).toBe(true);
       expect(await page.locator("#wallet-status a").getAttribute("href")).toBe("https://beep.example/");
     } finally { intentExpired = false; }
+  });
+  it("lands on sign-in, stays there after a failed passkey, and shows signup only when chosen", async () => {
+    landingWays = true;
+    await page.context().addInitScript(() => { navigator.credentials.get = async () => { throw new DOMException("See https://www.w3.org/TR/webauthn-2/", "NotAllowedError"); }; });
+    await page.goto(`${origin}/wallet`); await status("ready");
+    expect(page.url()).toBe(`${origin}/wallet`);
+    expect(await page.locator("#wallet-signin").isVisible()).toBe(true);
+    expect(await page.locator("#wallet-create").textContent()).toBe("Signa up");
+    expect(await page.locator("#signup-form").count()).toBe(0);
+    await page.locator("#wallet-signin").click();
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toBe("The device prompt didn’t finish. Try again.");
+    expect(await page.locator("#wallet-status").getAttribute("data-state")).toBe("ready");
+    expect(page.url()).toBe(`${origin}/wallet`);
+    expect(await page.locator("#wallet-signin").isVisible()).toBe(true);
+    expect(await page.locator("#wallet-create").isVisible()).toBe(true);
+    await page.locator("#wallet-create").click();
+    await expect.poll(() => page.locator("#signup-form").isVisible()).toBe(true);
+    expect(new URL(page.url()).pathname).toBe("/wallet/create");
+    // A failed sign-in from the signup page goes back to the sign-in page with its message.
+    await page.locator("#signup-resume").click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/wallet");
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toBe("The device prompt didn’t finish. Try again.");
+    expect(await page.locator("#wallet-signin").isVisible()).toBe(true);
+    expect(await page.locator("#signup-form").count()).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps a framed failed sign-in on the sign-in view, including one started from the framed signup", async () => {
+    landingWays = true;
+    const framedUrl = `${origin}/wallet?intent=${intentId}`;
+    await page.route(framedUrl, async route => {
+      const response = await route.fetch(), headers = response.headers();
+      headers["content-security-policy"] = headers["content-security-policy"]!.replace("frame-ancestors 'none'", `frame-ancestors ${origin}`);
+      await route.fulfill({ response, headers });
+    });
+    await page.context().addInitScript(() => { navigator.credentials.get = async () => { throw new DOMException("denied", "NotAllowedError"); }; });
+    await page.setViewportSize({ width: 800, height: 900 });
+    await page.goto(`${origin}/app/callback`);
+    await page.evaluate(src => { const frame = document.createElement("iframe"); frame.src = src; frame.style.cssText = "width:420px;height:640px;border:0"; document.body.append(frame); }, framedUrl);
+    const frame = page.frameLocator("iframe");
+    await expect.poll(() => frame.locator("#wallet-status").getAttribute("data-state")).toBe("brand");
+    await frame.locator("#wallet-signin").click();
+    await expect.poll(() => frame.locator("#wallet-status").textContent()).toBe("The device prompt didn’t finish. Try again.");
+    expect(await frame.locator("#wallet-signin").isVisible()).toBe(true);
+    expect(await frame.locator("#wallet-create").isVisible()).toBe(true);
+    expect(await frame.locator("#signup-form").count()).toBe(0);
+    await frame.locator("#wallet-create").click();
+    await expect.poll(() => frame.locator("#signup-form").isVisible()).toBe(true);
+    await frame.locator("#signup-resume").click();
+    await expect.poll(() => frame.locator("#wallet-signin").isVisible()).toBe(true);
+    await expect.poll(() => frame.locator("#wallet-status").textContent()).toBe("The device prompt didn’t finish. Try again.");
+    expect(await frame.locator("#signup-form").count()).toBe(0);
+    expect(page.frames().some(item => item.url() === framedUrl)).toBe(true);
+    expect(errors).toEqual([]);
   });
 });

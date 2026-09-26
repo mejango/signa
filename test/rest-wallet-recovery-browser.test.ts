@@ -108,7 +108,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       // Browser diagnostics can include long URLs and cannot distinguish a dismissed prompt
       // from an unavailable passkey. Keep retries explicit and the current recovery intact.
       for (const [name, text, state] of [
-        ['NotAllowedError', 'We couldn’t finish with your device.', 'ready'],
+        ['NotAllowedError', 'The device prompt didn’t finish. Try again.', 'ready'],
         ['SecurityError', 'This browser blocked the device request.', 'error'],
         ['NotSupportedError', 'This browser or device cannot complete the request.', 'error'],
       ] as const) {
