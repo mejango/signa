@@ -139,8 +139,10 @@ console.info(JSON.stringify({ service: "signa", event: "listening", port: addres
 if (enabled === "true") {
   starting = activate();
   try { await starting; }
-  catch {
-    console.error(JSON.stringify({ service: "signa", code: "STARTUP_FAILED" }));
+  catch (error) {
+    // A bounded reason names the failing step; configuration values never appear in these messages.
+    console.error(JSON.stringify({ service: "signa", code: "STARTUP_FAILED",
+      reason: String((error as { message?: unknown })?.message ?? error).slice(0, 160) }));
     await shutdown();
     process.exitCode = 1;
   }
