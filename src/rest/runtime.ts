@@ -84,6 +84,7 @@ import { createWalletNetworks } from "./wallet/networks.js";
 import { PostgresWalletNetworksStore } from "./wallet/networksPostgres.js";
 import { PostgresWalletEnrollmentStore } from "./wallet/enrollmentPostgres.js";
 import { RelayrProvider } from "./sponsorship/provider.js";
+import type { createWalletOnramp } from "./wallet/onramp.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Address, Hex } from "viem";
 
@@ -100,6 +101,8 @@ export interface RestWalletConfiguration {
   payments?: Omit<WalletV6UsdcPaymentConfig, 'chainId'>;
   /** Private key of the account that funds Relayr bundles for the account-on-more-chains feature. */
   networksPayerKey?: Hex;
+  /** Coinbase Onramp to the account's own address. */
+  onramp?: ReturnType<typeof createWalletOnramp>;
 }
 export interface RestWalletRuntime {
   origin: string;
@@ -581,6 +584,7 @@ export async function createRestRuntime(options: {
     ...(wallet.recovery ? { recovery: wallet.recovery, recoveryBrowserScript: assets.walletRecoveryScript } : {}),
     ...(wallet.devices ? { devices: wallet.devices, deviceBrowserScript: assets.walletDeviceScript } : {}),
     ...(wallet.networks ? { networks: wallet.networks } : {}),
+    ...(options.wallet?.onramp ? { onramp: options.wallet.onramp } : {}),
     onEvent: event => console.info(JSON.stringify({ service: "wallet", ...event })),
   }) : undefined;
   if (options.startMaintenance !== false) wallet?.signup?.start();

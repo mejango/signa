@@ -139,6 +139,9 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   let pageHtml: string, css: string, productionWaysHtml: string, signupHtml: string, signupCss: string;
   // Production serves the landing with signup and recovery offered; most tests here use the plain page.
   let landingWays = false;
+  // Onramp routes answer only in the funds test; elsewhere they 404 and the link stays hidden.
+  let onramp = false;
+  const vid = (n: number) => `onramp_verification_${String(n).repeat(8)}-0000-4000-8000-000000000000`;
   const csrf = encode(Buffer.alloc(32, 9)), intentId = encode(Buffer.alloc(32, 10));
   const state = encode(Buffer.alloc(32, 11)), code = encode(Buffer.alloc(32, 12));
   const challenge = encode(Buffer.alloc(32, 13)), handle = encode(Buffer.alloc(32, 14));
@@ -233,6 +236,13 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         if (unavailableIssues-- > 0) return json({ error: { code: "WALLET_AUTHORITY_CHECKING", message: "private-provider-detail" } }, 503);
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
+      if (onramp && path === "/wallet/onramp") return json({ applePay: true });
+      if (onramp && path === "/wallet/onramp/verify") return json({ verificationId: vid(body.channel === "sms" ? 1 : 2) });
+      if (onramp && path === "/wallet/onramp/confirm") return body.code === "123456" ? json({ verificationId: body.verificationId, verifiedAtMs: Date.now(), expiresAt: null })
+        : json({ error: { code: "WALLET_ONRAMP_CODE_INVALID", message: "x" } }, 400);
+      if (onramp && path === "/wallet/onramp/order") return json({ orderId: "order-1", url: "https://pay.coinbase.com/apple-pay?order=1", userAuthToken: "auth-token" });
+      if (onramp && path === "/wallet/onramp/session") return json({ url: "https://pay.coinbase.com/buy?sessionToken=t" });
+      if (onramp && path === "/wallet/onramp/status") return json({ orderId: "order-1", status: "completed", txHash: null });
       if (path === "/wallet/logout") { authenticated = false; return json({ loggedOut: true, replayed: false }); }
       if (path === "/app/callback") { response.writeHead(200, { "content-type": "text/html" }); response.end("<p>App callback</p>"); return; }
       return json({}, 404);
@@ -244,7 +254,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   }, 30_000);
 
   beforeEach(async () => {
-    authenticated = false; landingWays = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
+    authenticated = false; landingWays = false; onramp = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
     redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0;
     requests.length = 0; errors.length = 0;
@@ -408,6 +418,48 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.locator("#wallet-logout").click(); await status("ready");
     expect(requests.find(item => item.path === "/wallet/logout")!.headers["x-center-wallet-csrf"]).toBe(csrf);
+    expect(errors).toEqual([]);
+  });
+
+  it("adds funds with Apple Pay: codes once, kept only on this device, then straight to Coinbase", async () => {
+    onramp = true;
+    await page.context().route("https://pay.coinbase.com/**", route => route.fulfill({ contentType: "text/html", body: "<p>Coinbase</p>" }));
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await page.locator("#wallet-funds-open").click();
+    await page.locator("#wallet-funds-amount").fill("25");
+    await page.locator("#wallet-funds-applepay").click();
+    await page.locator("#wallet-funds-email").fill("a@b.co"); await page.locator("#wallet-funds-phone").fill("(212) 555-1234");
+    await page.locator("#wallet-funds-applepay").click();
+    await expect.poll(() => page.locator("#wallet-funds-codes").isVisible()).toBe(true);
+    expect(requests.filter(item => item.path === "/wallet/onramp/verify").map(item => item.body)).toEqual([
+      { channel: "sms", destination: "+12125551234" }, { channel: "email", destination: "a@b.co" }]);
+    await page.locator("#wallet-funds-sms-code").fill("123456"); await page.locator("#wallet-funds-email-code").fill("654321");
+    await page.locator("#wallet-funds-agree").check();
+    await page.locator("#wallet-funds-applepay").click();
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("wrong or expired");
+    expect(requests.some(item => item.path === "/wallet/onramp/order")).toBe(false);
+    await page.locator("#wallet-funds-email-code").fill("123456");
+    const [popup] = await Promise.all([page.waitForEvent("popup"), page.locator("#wallet-funds-applepay").click()]);
+    await expect.poll(() => popup.url()).toBe("https://pay.coinbase.com/apple-pay?order=1");
+    const order = requests.find(item => item.path === "/wallet/onramp/order")!;
+    expect(order.headers["x-center-wallet-csrf"]).toBe(csrf);
+    expect(order.body).toMatchObject({ amount: "25", email: "a@b.co", phoneNumber: "+12125551234", smsVerificationId: vid(1), emailVerificationId: vid(2), agreed: true });
+    expect(order.body).not.toHaveProperty("destinationAddress");
+    expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key)!), `signa-onramp:eip155:8453:${walletAddress}`))
+      .toMatchObject({ smsVerificationId: vid(1), emailVerificationId: vid(2), userAuthToken: "auth-token" });
+    // The next purchase skips the codes and reuses Coinbase's returning-user token.
+    await page.locator("#wallet-funds-open").click(); await page.locator("#wallet-funds-amount").fill("10");
+    await page.locator("#wallet-funds-agree").check();
+    const [again] = await Promise.all([page.waitForEvent("popup"), page.locator("#wallet-funds-applepay").click()]);
+    await expect.poll(() => again.url()).toBe("https://pay.coinbase.com/apple-pay?order=1");
+    expect(requests.filter(item => item.path === "/wallet/onramp/verify")).toHaveLength(2);
+    expect(requests.filter(item => item.path === "/wallet/onramp/order").at(-1)!.body).toMatchObject({ amount: "10", userAuthToken: "auth-token" });
+    // A Coinbase account opens the hosted checkout without any contact details.
+    await page.locator("#wallet-funds-open").click();
+    const [hosted] = await Promise.all([page.waitForEvent("popup"), page.locator("#wallet-funds-coinbase").click()]);
+    await expect.poll(() => hosted.url()).toBe("https://pay.coinbase.com/buy?sessionToken=t");
+    expect(requests.find(item => item.path === "/wallet/onramp/session")!.body).toEqual({ amount: "10" });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   });
 

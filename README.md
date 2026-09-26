@@ -75,6 +75,12 @@ require all three `WALLET_RECOVERY_*` settings. `WALLET_NETWORKS_PAYER_KEY` enab
 additional-network funding. Fund independent Signa senders and configure their
 actual reviewed nonce and budget state. Do not reuse Center's active treasury
 senders or share a signer across creation, recovery and network funding lanes.
+`CDP_API_KEY_ID` with `CDP_API_KEY_SECRET` (a CDP Secret API key, Ed25519 or EC) adds
+"Add funds" to the account page: Apple Pay through Coinbase's headless onramp
+(`CDP_ONRAMP_APPLE_PAY=false` hides it) and Coinbase's hosted checkout for Coinbase accounts.
+Purchases land as USDC on Base at the account's own address. Coinbase sends and checks the
+email and mobile codes; the verification stays on the person's device, never on Signa.
+`CDP_ONRAMP_SANDBOX=true` uses Coinbase's sandbox with the same key.
 `REST_ERC4337_CONFIG` and optional `REST_ERC4337_SPONSOR_ROUTES` retain the existing
 reviewed execution-policy formats.
 
