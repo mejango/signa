@@ -125,9 +125,8 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
         expect(await page.locator('#recovery-next').isEnabled()).toBe(true);
         expect(begins).toBe(1); expect(registrations).toHaveLength(0);
       }
-      await page.locator('#recovery-next').click();
-      await page.getByRole('button', { name: 'Cancel prompt' }).click(); await contains('cancelled');
-      expect(await page.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
+      // The OS prompt owns cancellation (NotAllowedError above); the page offers no second cancel.
+      expect(await page.getByRole('button', { name: 'Cancel prompt' }).count()).toBe(0);
       expect(registrations).toHaveLength(0);
       await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: true });
       await page.locator('#recovery-next').click();

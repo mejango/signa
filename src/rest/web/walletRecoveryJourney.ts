@@ -10,7 +10,7 @@ type Ethereum = { request(input: { method: string; params?: unknown[] }): Promis
 type TypedDocument = { domain: Record<string, any>; types: Record<string, { name: string; type: string }[]>; primaryType: string; message: Record<string, any> };
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const form = el<HTMLFormElement>('recovery-form'), name = el<HTMLInputElement>('passkey-name'), wallet = el<HTMLInputElement>('recovery-wallet');
-const next = el<HTMLButtonElement>('recovery-next'), check = el<HTMLButtonElement>('recovery-check'), cancel = el<HTMLButtonElement>('recovery-cancel');
+const next = el<HTMLButtonElement>('recovery-next'), check = el<HTMLButtonElement>('recovery-check');
 const resume = el<HTMLButtonElement>('recovery-resume'), reference = el<HTMLInputElement>('recovery-id'), signIn = el<HTMLAnchorElement>('recovery-signin');
 const status = el('wallet-status'), locatorKey = 'center:recovery:reference';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, word = /^0x[0-9a-f]{64}$/;
@@ -111,7 +111,7 @@ function render() {
     : view?.phase === 'awaiting_rotation_approval' ? rotation ? 'Approve passkey replacement' : 'Review passkey replacement'
     : view?.phase === 'awaiting_activation' ? 'Continue' : null;
   next.hidden = !label || !!pending; next.textContent = label; next.disabled = engaged;
-  check.hidden = !known || (!view && !pending); check.disabled = engaged; cancel.hidden = !native;
+  check.hidden = !known || (!view && !pending); check.disabled = engaged;
   el<HTMLButtonElement>('recovery-restart').hidden = view?.phase !== 'expired' || !!pending;
   el<HTMLButtonElement>('recovery-restart').disabled = engaged;
   el('recovery-resume-section').hidden = !known || !recoverable; reference.disabled = engaged || !!view; resume.disabled = engaged || !!pending;
@@ -293,7 +293,7 @@ function loadPassword() {
 }
 next.addEventListener('click', () => { void run(advance); }); check.addEventListener('click', () => { void run(observe); });
 el('recovery-restart').addEventListener('click', () => { void run(() => send('restart', {})); });
-resume.addEventListener('click', () => { void run(resumeRecovery); }); cancel.addEventListener('click', () => native?.abort());
+resume.addEventListener('click', () => { void run(resumeRecovery); });
 const timer = setInterval(() => {
   if (!busy && !pending && polling() && !document.hidden && navigator.onLine && pollCount++ < 90) void run(observe, true);
 }, 2000);

@@ -18,7 +18,7 @@ el('signup-key-label').textContent = deviceMethod === 'device' ? 'Device key nam
 el('signup-recovery-prompt').textContent = deviceMethod === 'device'
   ? 'If you lose access to this device, get back in with' : `If you lose this ${deviceMethod}, get back in with`;
 const next = el<HTMLButtonElement>('signup-next'), resume = el<HTMLAnchorElement>('signup-resume');
-const check = el<HTMLButtonElement>('signup-check'), cancel = el<HTMLButtonElement>('signup-cancel');
+const check = el<HTMLButtonElement>('signup-check');
 const status = el('wallet-status'), details = el('signup-details'), restart = el<HTMLButtonElement>('signup-restart');
 const explain = el<HTMLDialogElement>('signup-explain');
 /** An in-page question the person must answer before going on; a native passkey prompt is its own explanation. */
@@ -188,7 +188,6 @@ function render() {
   check.hidden = stranded || !pending; check.disabled = engaged;
   // One filled button per page: the check is the primary only when it stands alone.
   check.classList.toggle('link', !form.hidden); check.classList.toggle('secondary', form.hidden && !next.hidden);
-  cancel.hidden = !native;
   // Forgetting this browser's continuation; the signup and its passkey stay usable through "log in".
   // Not while a paid creation is in flight or awaiting its activation: a restart there orphans it.
   restart.hidden = !view || stranded || ['expired', 'deploying', 'awaiting_activation', 'preparing_sign_in'].includes(view.phase); restart.disabled = engaged;
@@ -398,7 +397,6 @@ check.addEventListener('click', () => { void run(async () => {
   message('Checking your signup…'); await observe(); pollCount = 0;
   if (view?.phase === 'deploying') message('Still creating your account. Checked just now; this page keeps checking while it is open.');
 }); });
-cancel.addEventListener('click', () => native?.abort());
 // Login completion may refresh the account's authority on Base first (the site waits up to 90 s for it).
 async function walletRequest(path: string, body: unknown, proof?: string, timeoutMs = 15000): Promise<any> {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);

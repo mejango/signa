@@ -153,27 +153,34 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     };
     await fillForm();
     // Sign up opens the passkey prompt at once; a cancelled prompt leaves the explicit button as the fallback.
-    await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: false });
+    // The OS prompt owns cancellation; a cancelled prompt rejects with NotAllowedError.
+    await page.evaluate(() => {
+      const original = navigator.credentials.create;
+      navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
+    });
     await page.getByRole('button', { name: 'Signa up' }).click();
-    // A prompt waiting on the user is not work in flight: the status mark holds still.
-    await expect.poll(() => page.locator('#wallet-status').getAttribute('data-state'), { timeout: 5000 }).toBe('ready');
-    await page.getByRole('button', { name: 'Cancel prompt' }).click();
-    await contains('cancelled');
+    await contains('We couldn’t finish with your device');
+    expect(await page.locator('#wallet-status').getAttribute('data-state')).toBe('ready');
     // Starting over forgets the continuation and shows the clean form again.
     await page.getByRole('button', { name: 'Reset signup' }).click();
     await expect.poll(() => page.locator('#passkey-name').isVisible()).toBe(true);
     expect((await context.cookies()).some(item => item.name === walletSignupCookie)).toBe(false);
     await fillForm();
-    await page.getByRole('button', { name: 'Signa up' }).click();
     // The prompt opens straight from the tap; cancelling it leaves the explicit button as the fallback.
-    await page.getByRole('button', { name: 'Cancel prompt' }).click();
-    await contains('cancelled');
+    await page.evaluate(() => {
+      const original = navigator.credentials.create;
+      navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
+    });
+    await page.getByRole('button', { name: 'Signa up' }).click();
+    await contains('We couldn’t finish with your device');
     // A begun signup without a passkey yet still offers "log in" for someone who already has an account.
     expect(await page.getByRole('link', { name: 'Signa in' }).isVisible()).toBe(true);
+    await page.evaluate(() => {
+      const original = navigator.credentials.create;
+      navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
+    });
     await page.getByRole('button', { name: 'Signa up', exact: true }).click();
-    await page.getByRole('button', { name: 'Cancel prompt' }).click();
-    await contains('cancelled');
-    await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: true });
+    await contains('We couldn’t finish with your device');
     await page.getByRole('button', { name: 'Signa up', exact: true }).click();
     let encoded = '';
     if (kitMode) {

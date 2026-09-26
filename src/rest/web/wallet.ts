@@ -29,7 +29,7 @@ const deviceSignInLabel = /iPhone/.test(navigator.userAgent) ? "Face ID"
   : "your device";
 const deviceSignInPrompt = `Use ${deviceSignInLabel} to sign in.`;
 signIn.textContent = "Signa in";
-const cancel = element<HTMLButtonElement>("wallet-cancel"), signOut = element<HTMLButtonElement>("wallet-logout");
+const signOut = element<HTMLButtonElement>("wallet-logout");
 let configuration: Configuration, intent: Intent | null = null, session: Session | null = null, framerOrigin: string | null = null;
 let sessionKnown = false, busy = false, csrf = "", pending: Completion | null = null;
 let completionAttempted = false;
@@ -98,7 +98,6 @@ function render() {
   // A page that is leaving for an app shows nothing it has not shown yet.
   const leaving = !!intent && busy;
   signOut.hidden = !session || leaving; signOut.disabled = busy;
-  cancel.hidden = !nativePrompt;
   account.hidden = !session || leaving; address.textContent = session?.walletAddress ?? "";
   // Signed in, the page is the account; the ways in belong to the signed-out page only.
   // The signed-out links belong to a page that knows there is no session, not to a check in progress or a failed one.
@@ -534,7 +533,6 @@ if (deviceAdd && devicePanel) {
 signIn.addEventListener("click", () => void run(login));
 if (framed) window.addEventListener("resize", render);
 retry.addEventListener("click", () => { if (retryAction) void run(retryAction); });
-cancel.addEventListener("click", () => nativePrompt?.abort());
 signOut.addEventListener("click", () => void run(logout));
 void run(load);
 export {};

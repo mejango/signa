@@ -36,11 +36,13 @@ export async function exerciseRecoveryBrowser(options: {
   await page.getByLabel('New passkey name').fill('Juicebox replacement');
   await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await contains('Create your replacement passkey');
-  await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: false });
+  // The OS prompt owns cancellation; a cancelled prompt rejects with NotAllowedError.
+  await page.evaluate(() => {
+    const original = navigator.credentials.create;
+    navigator.credentials.create = async () => { navigator.credentials.create = original; throw new DOMException('The operation either timed out or was not allowed.', 'NotAllowedError'); };
+  });
   await page.getByRole('button', { name: 'Create replacement passkey', exact: true }).click();
-  await page.getByRole('button', { name: 'Cancel prompt' }).click();
-  await contains('cancelled');
-  await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: true });
+  await contains('We couldn’t finish with your device');
   await page.getByRole('button', { name: 'Create replacement passkey', exact: true }).click();
   await contains('could not be confirmed');
   await page.getByRole('button', { name: 'Check again' }).click();

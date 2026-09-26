@@ -35,7 +35,7 @@ export function walletRecoveryPage(options: { base?: string } = {}) {
 <div class="actions"><button type="button" id="recovery-next" hidden></button>
 <button type="button" id="recovery-check" class="link" hidden>Check again</button>
 <button type="button" id="recovery-restart" class="link" hidden>Start again</button>
-<button type="button" id="recovery-cancel" class="link" hidden>Cancel prompt</button></div>
+</div>
 <section id="recovery-resume-section" hidden><details><summary>Resume a recovery you started</summary>
 <p class="hint">Use the replacement passkey and your backup. The reference is public and cannot approve anything on its own.</p>
 <label>Recovery reference<input id="recovery-id" maxlength="36" autocomplete="off" autocapitalize="off" spellcheck="false"></label>

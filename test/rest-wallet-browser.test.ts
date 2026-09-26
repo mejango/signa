@@ -474,13 +474,20 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(attempts.every(item => JSON.stringify(item.body) === JSON.stringify(attempts[0]!.body))).toBe(true);
   });
 
-  it("cancels a pending native prompt without sending a completion and permits a new click", async () => {
-    await loadAndEnroll(); await cdp.send("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId, enabled: false });
+  it("recovers from a native prompt cancelled in the OS without sending a completion and permits a new click", async () => {
+    await loadAndEnroll();
+    // The OS prompt owns cancellation; a cancelled prompt rejects with NotAllowedError.
+    await page.evaluate(() => {
+      const get = navigator.credentials.get.bind(navigator.credentials);
+      navigator.credentials.get = () => new Promise((_, reject) => {
+        (window as any).cancelOsPrompt = () => { navigator.credentials.get = get; reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError")); };
+      });
+    });
     await page.locator("#wallet-signin").click(); await status("authenticating");
     expect(await page.locator("#wallet-status").textContent()).toMatch(/^Use (Face ID|Touch ID|Windows Hello|your device) to sign in\.$/);
-    await page.locator("#wallet-cancel").click(); await status("ready");
+    expect(await page.locator("#wallet-cancel").count()).toBe(0);
+    await page.evaluate(() => (window as any).cancelOsPrompt()); await status("ready");
     expect(completions).toBe(0);
-    await cdp.send("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId, enabled: true });
     await page.locator("#wallet-signin").click(); await status("signed-in");
     expect(begins).toBe(2); expect(completions).toBe(1);
   });

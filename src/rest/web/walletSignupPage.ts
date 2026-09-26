@@ -31,7 +31,7 @@ export function walletSignupPage(options: { base?: string; framed?: boolean } = 
 <button type="button" id="recovery-restore">Restore backup password</button></details></div></section>
 <div class="actions"><button type="button" id="signup-next" hidden></button>
 <button type="button" id="signup-check" hidden>Check signup</button></div>
-<div id="signup-links"><button type="button" id="signup-cancel" class="quiet" hidden>Cancel prompt</button><button type="button" id="signup-restart" class="quiet" hidden>Reset signup</button><a href="#" id="signup-resume" hidden>Signa in</a><a id="signup-fullscreen" target="_top" rel="noopener" title="Fullscreen" hidden>Fullscreen</a></div>
+<div id="signup-links"><button type="button" id="signup-restart" class="quiet" hidden>Reset signup</button><a href="#" id="signup-resume" hidden>Signa in</a><a id="signup-fullscreen" target="_top" rel="noopener" title="Fullscreen" hidden>Fullscreen</a></div>
 <dialog id="signup-explain"><form method="dialog"><h2 id="explain-title"></h2><p id="explain-text"></p>
 <div class="actions"><button value="continue" id="explain-continue">Continue</button><button value="cancel" class="quiet">Cancel</button></div></form></dialog>
 <noscript><p>Enable JavaScript to create or resume your account.</p></noscript></main></body></html>`;

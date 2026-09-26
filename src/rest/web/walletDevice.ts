@@ -7,7 +7,7 @@ import type { WalletDeviceView } from '../wallet/deviceService.js';
 /** The second device: registers its own passkey, proves it, waits for the other device's approval
  * and the owner addition, then finishes. The link token lives in the URL fragment for this tab. */
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const status = el('wallet-status'), next = el<HTMLButtonElement>('device-next'), cancel = el<HTMLButtonElement>('device-cancel'), signIn = el<HTMLAnchorElement>('device-signin');
+const status = el('wallet-status'), next = el<HTMLButtonElement>('device-next'), signIn = el<HTMLAnchorElement>('device-signin');
 const details = el('device-details'), intro = el('device-intro');
 const steps: Record<WalletDeviceView['phase'], string> = {
   awaiting_registration: 'Create a passkey on this device.', awaiting_possession: 'Confirm the new passkey.',
@@ -49,7 +49,7 @@ function render() {
   if (view) { el('device-address').textContent = getAddress(view.walletAddress); el('device-name').textContent = view.passkeyName ?? ''; }
   const label = phase === 'awaiting_registration' ? 'Create passkey' : phase === 'awaiting_possession' ? 'Confirm passkey' : '';
   next.hidden = !label || busy; next.textContent = label; next.disabled = busy;
-  cancel.hidden = !native; signIn.hidden = phase !== 'ready';
+  signIn.hidden = phase !== 'ready';
   if (waiting() && status.dataset.state !== 'error') status.dataset.state = 'busy';
 }
 async function run(action: () => Promise<void>) {
@@ -122,7 +122,6 @@ async function poll() {
   catch { /* keep polling */ } finally { render(); }
 }
 next.addEventListener('click', () => void run(advance));
-cancel.addEventListener('click', () => native?.abort());
 setInterval(() => void poll(), 3000);
 window.addEventListener('pagehide', () => { disposed = true; });
 void run(async () => {

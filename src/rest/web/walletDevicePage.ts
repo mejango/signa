@@ -13,7 +13,7 @@ export function walletDevicePage(options: { base?: string } = {}) {
 <p id="wallet-status" role="status" aria-live="polite" aria-atomic="true">Checking the link…</p>
 <section id="device-details" hidden aria-label="Account"><dl><dt>Account address</dt><dd id="device-address"></dd><dt>Passkey name</dt><dd id="device-name"></dd></dl></section>
 <div class="actions"><button type="button" id="device-next" hidden></button>
-<button type="button" id="device-cancel" class="link" hidden>Cancel prompt</button></div>
+</div>
 <a id="device-signin" href="${base || '/'}" hidden>Signa in on this device</a>
 <noscript><p>Enable JavaScript to add this device.</p></noscript></main></body></html>`;
 }
