@@ -474,7 +474,7 @@ function renderBalance() {
   const shown = !!session && (!!balances || !!fundsOffer);
   element("wallet-balance-label").hidden = element("wallet-balance-row").hidden = !shown;
   element("wallet-balance").hidden = !balances;
-  if (!balances) return;
+  if (!balances) { element("wallet-balance-chains").hidden = true; return; }
   const mainnets = balances.chains.filter(chain => !chain.testnet && chain.eth !== null);
   const sum = (key: "eth" | "usdc") => mainnets.reduce((total, chain) => total + BigInt(chain[key]!), 0n);
   const cents = balances.totalUsdCents === null ? null : BigInt(balances.totalUsdCents);
@@ -487,6 +487,12 @@ function renderBalance() {
   if (unknown.length) lines.push(`Couldn't check ${unknown.join(", ")}.`);
   element("wallet-balance-chains").replaceChildren(...lines.map(line => Object.assign(document.createElement("li"), { textContent: line })));
 }
+// The total toggles its per-network breakdown, as a native <details> would but inline in every browser.
+const balanceTotal = element<HTMLButtonElement>("wallet-balance-total");
+balanceTotal.addEventListener("click", () => {
+  const open = balanceTotal.getAttribute("aria-expanded") !== "true";
+  balanceTotal.setAttribute("aria-expanded", String(open)); element("wallet-balance-chains").hidden = !open;
+});
 async function refreshBalances() {
   try {
     const value = record(await request(`${base}/balances`, undefined, undefined, 20_000));
