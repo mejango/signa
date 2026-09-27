@@ -575,22 +575,29 @@ function embedPayment(value: unknown) {
   payFrame.replaceChildren(frame); payFrame.hidden = false;
 }
 function closePayment() { payFrame.replaceChildren(); payFrame.hidden = true; }
+// Coinbase's frame reports progress and failures; its error messages are localized for display as they are.
+let merchantError: string | null = null;
 window.addEventListener("message", event => {
   if (event.origin !== "https://pay.coinbase.com" || payFrame.hidden) return;
-  let name: unknown, code: unknown;
-  try { const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data; name = data?.eventName; code = data?.data?.errorCode; } catch { return; }
-  if (name === "onramp_api.commit_success") setStatus("checking", "Payment approved. Coinbase is sending it to your account…");
-  else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The funds are in your account."); void refreshBalances(); }
-  else if (name === "onramp_api.cancel") { closePayment(); setStatus("ready", "Apple Pay cancelled."); }
+  let name: unknown, code: unknown, message: unknown;
+  try {
+    const data = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+    name = data?.eventName; code = data?.data?.errorCode; message = data?.data?.errorMessage;
+  } catch { return; }
+  const fail = (fallback: string) => { closePayment();
+    setStatus("error", typeof message === "string" && message.trim() ? message.trim().slice(0, 240) : fallback); };
+  if (name === "onramp_api.load_success") merchantError = null;
+  // Outside Safari the frame shows a QR code to pay from a phone; that is not a failure.
+  else if (name === "onramp_api.load_error" && code !== "ERROR_CODE_GUEST_APPLE_PAY_NOT_SUPPORTED") fail("Coinbase couldn't load Apple Pay. Try again.");
+  else if (name === "onramp_api.validate_merchant_error") merchantError = typeof message === "string" && message.trim() ? message.trim().slice(0, 240) : "Apple Pay couldn't start. Try again.";
+  // A failed merchant check is followed by cancel; the check's reason is the one to show.
+  else if (name === "onramp_api.cancel") { closePayment(); setStatus(merchantError ? "error" : "ready", merchantError ?? "Apple Pay cancelled."); merchantError = null; }
   else if (name === "onramp_api.verification_success") setStatus("checking", "Verified. Tap the Apple Pay button to pay.");
-  else if (name === "onramp_api.session_error") {
-    closePayment();
-    setStatus("error", code === "ERROR_CODE_GUEST_TRANSACTION_LIMIT" || code === "ERROR_CODE_GUEST_TRANSACTION_COUNT" || code === "ERROR_CODE_LIMITS_UPGRADE_BLOCKED"
-      ? "You've reached Coinbase's Apple Pay limit. Try a Coinbase account instead." : "Coinbase couldn't continue. Try again shortly.");
-  }
-  else if (name === "onramp_api.load_error" || name === "onramp_api.commit_error" || name === "onramp_api.polling_error") {
-    closePayment(); setStatus("error", "Coinbase couldn't complete the purchase. Try again, or use a Coinbase account.");
-  }
+  else if (name === "onramp_api.commit_success") setStatus("checking", "Payment approved. Coinbase is sending it to your account…");
+  else if (name === "onramp_api.polling_success") { closePayment(); setStatus("ready", "The funds are in your account."); void refreshBalances(); }
+  else if (name === "onramp_api.commit_error" || name === "onramp_api.polling_error") fail("Coinbase couldn't complete the purchase. Try again, or use a Coinbase account.");
+  else if (name === "onramp_api.session_error") fail(code === "ERROR_CODE_GUEST_TRANSACTION_LIMIT" || code === "ERROR_CODE_GUEST_TRANSACTION_COUNT" || code === "ERROR_CODE_LIMITS_UPGRADE_BLOCKED"
+    ? "You've reached Coinbase's Apple Pay limit. Try a Coinbase account instead." : "Coinbase couldn't continue. Try again shortly.");
 });
 function watchOrder(orderId: string) {
   if (orderTimer) clearInterval(orderTimer);
