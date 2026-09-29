@@ -1,5 +1,6 @@
 import type { HttpBindings } from '@hono/node-server';
 import { Hono } from 'hono';
+import { applePayDomainAssociation } from './applePayDomainAssociation.js';
 
 interface FetchApp {
   fetch(request: Request, bindings?: HttpBindings): Response | Promise<Response>;
@@ -45,6 +46,8 @@ export function createSignaApp(options: SignaAppOptions) {
     const host = request.headers.get('host') ?? new URL(request.url).host;
     const walletHost = host === wallet.host;
     if (!walletHost && c.req.method === 'GET' && c.req.path === '/healthz') return c.json({ ok: true });
+    if (walletHost && c.req.method === 'GET' && c.req.path === '/.well-known/apple-developer-merchantid-domain-association.txt')
+      return c.text(applePayDomainAssociation);
     const runtime = options.currentRuntime();
     if (!walletHost && c.req.method === 'GET' && c.req.path === '/readyz') {
       if (!runtime) return c.json({ ok: false }, 503);

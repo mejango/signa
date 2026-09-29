@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { keccak256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { createSignaApp, type SignaAppOptions, type SignaHttpRuntime } from '../src/signaApp.js';
+import { applePayDomainAssociation } from '../src/applePayDomainAssociation.js';
 import { createSignaServer, type SignaServer } from '../src/signaServer.js';
 import { assertWalletHttpRequest } from '../src/rest/wallet/http.js';
 import { accountIdFor, buildRequestTypedData, createRestAuth, MemoryAccountStore,
@@ -96,6 +97,15 @@ describe('Signa HTTP boundary', () => {
       expect(await (await app.request('https://signa.center/api/v1/accounts/me', { headers })).text()).toBe('wallet');
     }
     expect((await app.request('http://private.internal/session', { headers: { 'x-forwarded-host': 'signa.center', origin } })).status).toBe(404);
+  });
+
+  it('serves the Apple Pay domain association on the credential host only, with no runtime', async () => {
+    const { app } = fixture({ currentRuntime: () => undefined });
+    const path = '/.well-known/apple-developer-merchantid-domain-association.txt';
+    const response = await app.request(origin + path);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(applePayDomainAssociation);
+    expect((await app.request(audience + path)).status).toBe(404);
   });
 
   it('validates exact distinct credential and API origins', () => {
