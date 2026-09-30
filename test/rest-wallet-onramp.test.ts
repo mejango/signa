@@ -73,6 +73,9 @@ describe('hosted onramp', () => {
     await expect(service.session(address, {})).rejects.toMatchObject({ status: 429, code: 'WALLET_ONRAMP_LIMIT' });
     reply = [500, { errorType: 'internal', errorMessage: 'private' }];
     await expect(service.session(address, {})).rejects.toMatchObject({ status: 503, code: 'WALLET_ONRAMP_UNAVAILABLE' });
+    reply = [400, { errorType: 'invalid_request', errorMessage: 'x'.repeat(500) }];
+    await expect(service.session(address, {})).rejects.toMatchObject({ status: 503, message: 'Coinbase declined the onramp request.',
+      details: { upstreamStatus: 400, errorType: 'invalid_request', reason: 'x'.repeat(160) } });
   });
 });
 
@@ -89,7 +92,8 @@ describe('Apple Pay guest checkout', () => {
     const result = await service.order(address, input);
     expect(result).toEqual({ orderId: 'order-1', url: 'https://pay.coinbase.com/v2/api-onramp/apple-pay?x=1&useApplePaySandbox=true', userAuthToken: 'tok' });
     expect(calls[0]!.body).toEqual({ paymentAmount: '20', paymentCurrency: 'USD', purchaseCurrency: 'USDC', paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY',
-      destinationAddress: address, destinationNetwork: 'base', partnerUserRef: expect.stringMatching(/^sandbox-[0-9a-f]{32}$/) });
+      destinationAddress: address, destinationNetwork: 'base', partnerUserRef: expect.stringMatching(/^sandbox-[0-9a-f]{32}$/),
+      agreementAcceptedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) });
     await service.order(address, { ...input, embed: true, asset: 'ETH', userAuthToken: 'tok' });
     expect(calls[1]!.body).toMatchObject({ domain: 'signa.center', purchaseCurrency: 'ETH', userAuthToken: 'tok' });
     for (const bad of [{ agreed: false }, { amount: '0' }, { userAuthToken: 'has spaces' }, { asset: 'BTC' }])

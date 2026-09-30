@@ -84,7 +84,9 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
     if (response.ok && json && typeof json === 'object') return json;
     const type = typeof json?.errorType === 'string' ? json.errorType : '';
     const [status, code] = known[type] ?? [503, 'WALLET_ONRAMP_UNAVAILABLE'];
-    throw new RestError(status, code, 'Coinbase declined the onramp request.', { upstreamStatus: response.status, errorType: type.slice(0, 60) });
+    // Coinbase's message (e.g. which field it refused) goes to the log only, bounded; the person gets the code.
+    const reason = typeof json?.errorMessage === 'string' ? json.errorMessage.slice(0, 160) : '';
+    throw new RestError(status, code, 'Coinbase declined the onramp request.', { upstreamStatus: response.status, errorType: type.slice(0, 60), reason });
   };
   // Coinbase's per-user key: stable per account, opaque, under its 50-character bound.
   const userRef = (address: string) => (config.sandbox ? 'sandbox-' : '') + createHash('sha256').update('signa-onramp-v1\0' + address.toLowerCase()).digest('hex').slice(0, 32);
@@ -110,6 +112,7 @@ export function createWalletOnramp(config: WalletOnrampConfig) {
       const token = input.userAuthToken === undefined || input.userAuthToken === null ? undefined : text(input.userAuthToken, /^[A-Za-z0-9._~+/=-]{1,2048}$/);
       const result = await call('POST', '/orders', { paymentAmount: amount, paymentCurrency: 'USD', purchaseCurrency: asset(input.asset),
         paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY', destinationAddress: address, destinationNetwork: network, partnerUserRef: userRef(address),
+        agreementAcceptedAt: new Date().toISOString(),
         ...(input.embed === true ? { domain } : {}),
         ...(token ? { userAuthToken: token } : {}) });
       const order = result.order as Record<string, unknown> | undefined, link = result.paymentLink as Record<string, unknown> | undefined;
