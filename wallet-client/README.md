@@ -30,8 +30,9 @@ payments. Protocol details: https://juicebox.center/api/docs/client
 operation moves, so an app can wait on it instead of polling. A record whose app grant is gone and whose
 signed validity has passed can be cleared; it is archived as unknown and Center keeps the outcome.
 When Signa refuses to send an approved payment, `submitPayment()` throws the refusal (with
-`payFailure` when the calls say why) and the payment is already `refused`: Signa retired the approval
-and never sends it, so `clearPayment()` and a fresh `preparePayment()` can follow at once. The fresh
-payment takes the refused one's nonce, so at most one of them executes. If the answer was lost,
-`retirePayment()` does the same for an approved payment Signa has not sent; one already sent comes back
-as that submission.
+`payFailure` when the calls say why) after asking Signa to retire the approval. Read
+`pendingPayment()` next: `refused` means Signa retired it and never sends it, so `clearPayment()` and a
+fresh `preparePayment()` can follow at once; the fresh payment takes the refused one's nonce, so at most
+one of them executes. `pending` or `confirming` means a send won before the retirement: follow it.
+`unknown` means the retirement or the answer was lost: `retirePayment()` retires an approved payment
+Signa has not sent, or returns the submission that already claimed it.

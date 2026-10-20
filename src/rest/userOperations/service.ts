@@ -490,7 +490,7 @@ export class UserOperationService {
     ]);
     if (ahead) stages.aheadUsed = (await early) ? 1 : 0;
     stage("headMs");
-    await this.retiredNonceFree(actor, binding.wallet.chainId, binding.wallet.address, nonceKey, BigInt(nonce), evidence, signal);
+    await this.retiredClear(binding.wallet.chainId, binding.wallet.address, manifest.entryPoint!.address, BigInt(nonce), evidence, signal);
     // Never below the bundler's floor: a cheaper operation is accepted, then waits until it expires.
     const priority = max(uoQuantity(nodePriority, "priority fee"), floor?.maxPriorityFeePerGas ?? 0n);
     const fee = max(uoQuantity(baseFeePerGas, "base fee") * 2n + priority, floor?.maxFeePerGas ?? 0n);
@@ -665,23 +665,38 @@ export class UserOperationService {
     return view;
   }
 
-  /** A retired approval's signed bytes can execute until its validity ends on a canonical head, two
-   * minutes of blocks past it as the expiry proof requires. Until then a fresh operation under the same
-   * nonce key takes that very nonce, so the EntryPoint runs at most one of the two. A head past that
-   * nonce is safe only when Signa's own executed operation holds it; otherwise the retired one may have
-   * run, and nothing is prepared over it. */
-  // ponytail: bytes executed outside Signa after their window ended are only in the chain's history.
-  private async retiredNonceFree(actor: RestActor, chainId: number, sender: Address, key: bigint, nonce: bigint, head: RestBlockEvidence, signal?: AbortSignal) {
-    for (const old of await this.options.store.retired(actor.accountId, chainId, sender, this.now() - 3_600_000)) {
+  /** A retired approval's signed bytes are still out there (its app holds them). Until the chain
+   * settles it, Signa prepares or admits another operation from the same sender only at its very
+   * nonce, so the EntryPoint runs at most one of the two. It settles when its nonce is unchanged on a
+   * canonical head two minutes of blocks past its validity (it never ran and never can), or when
+   * Signa's own operation holding that nonce executed in a successful outer transaction. A nonce
+   * that moved any other way may have been the retired approval itself: nothing is prepared over it.
+   * Returns the retired operations checked, which the claim requires to be all there are. */
+  private async retiredClear(chainId: number, sender: Address, entryPoint: Address, nonce: bigint, head: RestBlockEvidence, signal?: AbortSignal) {
+    const checked: string[] = [];
+    for (const old of await this.options.store.retired(chainId, sender)) {
+      checked.push(old.id);
       const used = BigInt(old.operation.nonce);
-      if (used >> 64n !== key || used === nonce || BigInt(head.timestamp) > BigInt(Math.floor(old.expiresAt / 1000)) + 120n) continue;
-      // Its execution is rechecked against the chain here: a reorged block is no evidence.
-      const held = await this.options.store.nonceHolder(chainId, sender, used);
-      const holder = held && held.id !== old.id ? await this.refresh(held, signal) : undefined;
-      if (holder?.state === "confirmed" || holder?.state === "reverted") continue;
-      fail("USER_OPERATION_RETIRED_NONCE_USED",
-        "An earlier approval's nonce was used before its window ended. Check that payment before paying again.", 409);
+      if (used === nonce) continue;
+      const current = await this.chain(signal).readNonce(chainId, sender, used >> 64n, entryPoint, head);
+      let settled = false;
+      if (current === used) {
+        settled = BigInt(head.timestamp) > BigInt(Math.floor(old.expiresAt / 1000)) + 120n;
+        if (!settled) fail("USER_OPERATION_RETIRED_OPEN",
+          "An earlier approval from this wallet can still execute. Pay again from the same review flow, or wait until it ends.", 409);
+      } else {
+        // The holder's execution is rechecked against the chain here: a reorged block is no evidence.
+        const held = await this.options.store.nonceHolder(chainId, sender, used);
+        const holder = held && held.id !== old.id ? await this.refresh(held, signal) : undefined;
+        settled = (holder?.state === "confirmed" || holder?.state === "reverted") && holder.observation?.receipt?.status === "success";
+        if (!settled && holder && isRecoverable(holder)) fail("USER_OPERATION_RETIRED_CONFIRMING",
+          "The payment that replaced an earlier approval is still confirming. Try again in a few seconds.", 409);
+        if (!settled) fail("USER_OPERATION_RETIRED_NONCE_USED",
+          "An earlier approval's nonce was used outside Signa. Check that payment before paying again.", 409);
+      }
+      await this.options.store.settleRetired(old.id);
     }
+    return checked;
   }
 
   private session(
@@ -883,7 +898,7 @@ export class UserOperationService {
     this.speculated.delete(record.id);
     const carried = held && held.revision === record.revision && this.now() - held.at <= speculationMaxAgeMs ? held : undefined;
     if (carried) { stages.speculatedAgeMs = this.now() - carried.at; stages.speculatedHead = Number(carried.head.blockNumber); }
-    const { binding, manifest, preflight } = carried ?? await this.verifyAtHead({ record, plan, operation, policy, provider, planManifest, signal }, stage);
+    const { head, binding, manifest, preflight } = carried ?? await this.verifyAtHead({ record, plan, operation, policy, provider, planManifest, signal }, stage);
     if (manifest.id !== planManifest.id || manifest.revision !== planManifest.revision)
       fail("USER_OPERATION_ACCOUNT_CHANGED", "The plan's reviewed owner or module configuration changed.");
     const passkeyProfile = userOperationPasskeyProfile(binding, manifest);
@@ -969,6 +984,9 @@ export class UserOperationService {
       issuedAt: Math.max(requestAuthority.issuedAt, validAfter),
       expiresAt: Math.min(requestAuthority.expiresAt, validUntil),
     };
+    // A preparation made before an approval was retired is held to the same rule here, and the claim
+    // refuses if another one was retired meanwhile.
+    const retiredChecked = await this.retiredClear(record.chainId, record.sender, record.entryPoint, BigInt(operation.nonce), head, signal);
     const claimed = await this.options.store.claim({
       actor,
       id,
@@ -976,6 +994,7 @@ export class UserOperationService {
       operation,
       signedCommitment,
       authorization,
+      retiredChecked,
       ...(sessionObservationHash ? { sessionObservationHash } : {}),
       now: this.now(),
     });

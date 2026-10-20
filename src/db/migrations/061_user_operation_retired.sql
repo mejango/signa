@@ -9,3 +9,6 @@ ALTER TABLE rest_user_operations ADD CONSTRAINT rest_user_operations_check CHECK
   AND document->>'state' IN ('prepared','submitting','submission_unknown','pending','unknown','confirming','confirmed','reverted','expired','retired')
   AND (document->>'state'<>'retired' OR NOT document ? 'submission')
 );
+-- Unsettled retired operations by chain and sender, across every account that binds the Safe.
+CREATE INDEX rest_user_operations_retired_idx ON rest_user_operations(((document->>'chainId')::bigint),lower(document->>'sender'))
+  WHERE document->>'state'='retired' AND NOT document ? 'retiredSettledAt';

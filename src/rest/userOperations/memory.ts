@@ -23,6 +23,7 @@ import {
   owns,
   preparationKey,
   readCursor,
+  assertRetiredChecked,
   retiring,
   same,
   settled,
@@ -127,6 +128,7 @@ export class MemoryUserOperationStore implements UserOperationStore {
         if (used && used !== input.id) conflict();
         let result = claimed(record, { ...input, now: this.clock() }, defaultCodec);
         if (!result.dispatch) return result;
+        assertRetiredChecked(record, input, this.unsettled(record.chainId, record.sender));
         this.options.assertBindingAndSession(
           dispatchRecord(record, input),
           Math.floor(this.clock() / 1000),
@@ -171,9 +173,17 @@ export class MemoryUserOperationStore implements UserOperationStore {
       return clone(next);
     });
   }
-  async retired(accountId: string, chainId: number, sender: Address, since: number) {
-    return clone([...this.records.values()].filter((record) => record.actor.accountId === accountId &&
-      record.state === 'retired' && record.chainId === chainId && same(record.sender, sender) && record.expiresAt > since));
+  private unsettled(chainId: number, sender: Address) {
+    return [...this.records.values()].filter((record) => record.state === 'retired' && record.retiredSettledAt === undefined &&
+      record.chainId === chainId && same(record.sender, sender));
+  }
+  async retired(chainId: number, sender: Address) {
+    return clone(this.unsettled(chainId, sender));
+  }
+  async settleRetired(id: string) {
+    const record = this.records.get(id);
+    if (record?.state === 'retired' && record.retiredSettledAt === undefined)
+      this.records.set(id, { ...record, retiredSettledAt: this.clock(), revision: record.revision + 1 });
   }
   async nonceHolder(chainId: number, sender: Address, nonce: bigint) {
     const held = this.nonces.get(nonceKey({ chainId, sender, operation: { nonce: toHex(nonce) } }));

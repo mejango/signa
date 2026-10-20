@@ -18,7 +18,7 @@ function fixture() {
   const appKey = privateKeyToAccount(`0x${'37'.repeat(32)}`);
   let grant = { ...f.grant, signerAddress: appKey.address.toLowerCase() as typeof appKey.address }, active = true;
   let now = f.nowMs, href = f.origin + '/pay', state = '', loseReview = false, loseSubmission = false, reviewMissing = false, refusal: unknown;
-  let reviewStatus = 'approved', operation = { ...f.prepared, state: 'pending' } as any;
+  let loseRetirement = false, reviewStatus = 'approved', operation = { ...f.prepared, state: 'pending' } as any;
   let submissionBodyFailure: 'read' | 'truncated' | undefined;
   let heldSubmission: { started(): void; response: Response | undefined; promise: Promise<Response> } | undefined;
   let heldReview: typeof heldSubmission;
@@ -83,6 +83,7 @@ function fixture() {
     if (path === '/api/v1/user-operations/' + f.prepared.id) return Response.json(operation);
     if (path === '/api/v1/user-operations/' + f.prepared.id + '/retirement') {
       expect(body).toEqual({});
+      if (loseRetirement) { loseRetirement = false; throw new Error('retirement answer disappeared'); }
       // Retirement takes an unclaimed operation only; a claimed one comes back as it is.
       if (!operation.submission) operation = { ...structuredClone(f.prepared), state: 'retired', revision: 1 };
       return Response.json(operation);
@@ -105,7 +106,7 @@ function fixture() {
   return { ...f, data, calls, storage, options, transport, helper: () => createCenterWalletPaymentClient(options),
     input: () => ({ plan: f.plan, operation: f.prepared, expectedPayment: f.expected }),
     callback: () => { href = f.callbackUri + '?' + new URLSearchParams({ review: reviewId, state, iss: f.issuer }); return href; }, href: () => href,
-    loseReview: () => { loseReview = true; }, loseSubmission: () => { loseSubmission = true; }, refuseSubmission: (body: unknown) => { refusal = body; }, expireReview: () => { reviewMissing = true; },
+    loseReview: () => { loseReview = true; }, loseSubmission: () => { loseSubmission = true; }, loseRetirement: () => { loseRetirement = true; }, refuseSubmission: (body: unknown) => { refusal = body; }, expireReview: () => { reviewMissing = true; },
     loseSubmissionBody: (kind: 'read' | 'truncated') => { submissionBodyFailure = kind; },
     holdNextSubmission: () => holdNextResponse('submission'), holdNextReview: () => holdNextResponse('review'),
     replaceGrant: () => { grant = { ...grant, incarnation: '2' }; }, disconnect: () => { active = false; }, advance: (ms: number) => { now += ms; },
@@ -469,6 +470,16 @@ describe('Center browser payment review continuity', () => {
     await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
     expect(f.helper().pendingPayment()!.status).toBe('pending');
     expect(() => f.helper().clearPayment()).toThrow(expect.objectContaining({ code: 'WALLET_PAYMENT_UNRESOLVED' }));
+  });
+
+  it('keeps a refusal whose retirement answer was lost unknown, until the payer retires it again', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
+    f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED' }); f.loseRetirement();
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
+    expect(f.helper().pendingPayment()!.status).toBe('unknown');
+    expect(() => f.helper().clearPayment()).toThrow(expect.objectContaining({ code: 'WALLET_PAYMENT_UNRESOLVED' }));
+    expect((await f.helper().retirePayment()).status).toBe('refused');
+    f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
   });
 
   it('keeps a lost answer unknown, and retires it only when asked', async () => {

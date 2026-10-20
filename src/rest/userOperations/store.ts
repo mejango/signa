@@ -42,6 +42,8 @@ export interface UserOperationRecord {
     sessionObservationHash?: Hex;
   };
   observation?: UserOperationObservation;
+  /** When the chain settled a retired operation: it never ran and never can, or Signa's own operation took its nonce. */
+  retiredSettledAt?: number;
 }
 export interface UserOperationClaim {
   actor: RestActor;
@@ -51,6 +53,8 @@ export interface UserOperationClaim {
   signedCommitment: Hex;
   authorization: { issuedAt: number; expiresAt: number };
   sessionObservationHash?: Hex;
+  /** The unsettled retired operations of this sender the admission checked; any other with another nonce refuses the claim. */
+  retiredChecked?: string[];
   now: number;
 }
 export interface UserOperationStore {
@@ -71,8 +75,9 @@ export interface UserOperationStore {
   recoverable(limit: number, cursor?: string): Promise<UserOperationRecord[]>;
   /** Retires an unsent operation under the claim's lock; one something already claimed comes back as it is. */
   retire(actor: RestActor, id: string): Promise<UserOperationRecord>;
-  /** The account's retired operations from `sender` on `chainId` that expire after `since`. */
-  retired(accountId: string, chainId: number, sender: Address, since: number): Promise<UserOperationRecord[]>;
+  /** Every unsettled retired operation from `sender` on `chainId`, under any account. */
+  retired(chainId: number, sender: Address): Promise<UserOperationRecord[]>;
+  settleRetired(id: string): Promise<void>;
   /** The operation holding the full sender nonce, once one claimed it. */
   nonceHolder(chainId: number, sender: Address, nonce: bigint): Promise<UserOperationRecord | undefined>;
 }
@@ -295,6 +300,12 @@ export function claimed(
     }),
     dispatch: true,
   };
+}
+/** A claim admitted before another approval from its sender was retired is checked again: the claim refuses it. */
+export function assertRetiredChecked(record: UserOperationRecord, input: UserOperationClaim, retired: UserOperationRecord[]): void {
+  if (retired.some((old) => old.id !== record.id && !(input.retiredChecked ?? []).includes(old.id) &&
+    BigInt(old.operation.nonce) !== BigInt(record.operation.nonce)))
+    fail('USER_OPERATION_RETIRED_CHANGED', 'Another approval from this wallet was retired meanwhile. Submit again.');
 }
 export const retiredFailure = () =>
   fail('USER_OPERATION_RETIRED', 'This approval was refused and retired. Review a fresh payment.');

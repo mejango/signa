@@ -312,10 +312,13 @@ suite('PostgreSQL UserOperation persistence', () => {
     await expect(new PostgresUserOperationStore(pool).claim(claim(first.record, Date.now()))).rejects.toMatchObject({ code: 'USER_OPERATION_RETIRED' });
     expect(await store.retire(actor, first.record.id)).toEqual(retired);
     expect(await transportRows(first.plan.id)).toEqual([]);
-    expect((await store.retired(actor.accountId, first.record.chainId, first.record.sender, 0)).map((record) => record.id)).toContain(first.record.id);
+    expect((await store.retired(first.record.chainId, first.record.sender)).map((record) => record.id)).toContain(first.record.id);
     // A retired row can never carry a submission, at the SQL boundary too.
     await expect(pool.query(`UPDATE rest_user_operations SET document=jsonb_set(document,'{submission}','{}'::jsonb) WHERE id=$1`,
       [first.record.id])).rejects.toMatchObject({ code: '23514' });
+    // Settled once the chain shows it can never run; until then other claims from the sender must account for it.
+    await store.settleRetired(first.record.id);
+    expect((await store.get(actor, first.record.id))!.retiredSettledAt).toBeGreaterThan(0);
     const claimedFirst = await prepare('claim-first', 41n), input = claim(claimedFirst.record, Date.now());
     expect((await store.claim(input)).dispatch).toBe(true);
     const kept = await new PostgresUserOperationStore(pool).retire(actor, claimedFirst.record.id);
@@ -333,10 +336,22 @@ suite('PostgreSQL UserOperation persistence', () => {
         expect(dispatched).toHaveLength(0);
         expect((await store.get(actor, value.record.id))!.state).toBe('retired');
         expect(await store.nonceHolder(value.record.chainId, value.record.sender, nonce)).toBeUndefined();
+        await store.settleRetired(value.record.id);
       } else {
         expect(dispatched).toHaveLength(1); expect(final.submission).toBeDefined();
       }
     }
+    // The lookup spans every API account that binds the Safe: its nonce is the chain's.
+    const alias = await enroll(2), aliased = await prepare('retire-alias', 45n, alias);
+    await store.retire(alias, aliased.record.id);
+    const unsettled = await store.retired(aliased.record.chainId, aliased.record.sender);
+    expect(unsettled.map((record) => record.id)).toEqual([aliased.record.id]);
+    // A claim whose admission did not check every unsettled retirement of its sender is refused.
+    const late = await prepare('retire-late', 46n);
+    await expect(store.claim(claim(late.record, Date.now()))).rejects.toMatchObject({ code: 'USER_OPERATION_RETIRED_CHANGED' });
+    expect((await store.claim({ ...claim(late.record, Date.now()), retiredChecked: unsettled.map((record) => record.id) })).dispatch).toBe(true);
+    for (const record of unsettled) await store.settleRetired(record.id);
+    expect(await store.retired(aliased.record.chainId, aliased.record.sender)).toEqual([]);
   });
   it('rejects changed signatures and changed transaction fields against the immutable signed commitment', async () => {
     const value = await prepare('signed-identity', 3n);

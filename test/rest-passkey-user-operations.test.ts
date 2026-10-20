@@ -13,7 +13,7 @@ import type { ActiveActorGuard } from "../src/rest/transactions/store.js";
 import { TransactionService } from "../src/rest/transactions/service.js";
 import { MemoryTransportReservations } from "../src/rest/transactions/transport-reservations.js";
 import { ENTRY_POINT_V07_ABI } from "../src/rest/userOperations/chain.js";
-import { getUserOperationHash, unpackUserOperation } from "../src/rest/userOperations/codec.js";
+import { getUserOperationHash, unpackUserOperation, userOperationCommitment } from "../src/rest/userOperations/codec.js";
 import { MemoryUserOperationStore } from "../src/rest/userOperations/memory.js";
 import { passkeyDummyContractSignature, passkeyDummySignature, passkeyEstimateProvider, PASSKEY_MAX_SIGNATURE_BYTES } from "../src/rest/userOperations/passkeyEstimation.js";
 import { UserOperationProvider } from "../src/rest/userOperations/provider.js";
@@ -126,7 +126,8 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
       }
       if (call.to.toLowerCase() === safe) return "0x";
       const decoded = decodeFunctionData({ abi: ENTRY_POINT_V07_ABI, data: call.data });
-      if (decoded.functionName === "getNonce") return toHex(state.nonce, { size: 32 });
+      // Key zero follows `state.nonce`; any other key stays at its first sequence.
+      if (decoded.functionName === "getNonce") return toHex(decoded.args[1] === 0n ? state.nonce : decoded.args[1] << 64n, { size: 32 });
       if (decoded.functionName === "getUserOpHash") return getUserOperationHash(unpackUserOperation(decoded.args[0]), entryPoint, 8453);
       if (decoded.functionName === "balanceOf") return toHex(10n ** 18n, { size: 32 });
       if (decoded.functionName === "entryPoint") return encodeFunctionResult({ abi: ENTRY_POINT_V07_ABI, functionName: "entryPoint", result: entryPoint });
@@ -805,7 +806,7 @@ describe("retiring a refused approval", () => {
     expect((await f.service.submit(f.principal, fresh.id, f.signature(fresh), "submit")).state).toBe("pending");
   });
 
-  it("prepares nothing over a retired approval whose nonce moved before its window ended on the chain", async () => {
+  it("prepares nothing over a retired approval whose nonce moved outside Signa, even after its window", async () => {
     const started = now;
     try {
       const f = await fixture({ steps: 2, planLifetimeMs: 3_600_000 }), old = await f.prepare();
@@ -813,34 +814,101 @@ describe("retiring a refused approval", () => {
       // The nonce moved and nothing Signa sent holds it: the retired bytes may have run.
       f.state.nonce = 1n;
       await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED", status: 409 });
-      // Server time past the window is not enough while the chain's head is still inside it.
-      now = old.expiresAt + 121_000; f.state.headLagSeconds = 60;
+      now = old.expiresAt + 600_000;
       await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED" });
-      // A canonical head two minutes past its validity ends it: the EntryPoint refuses it from then on.
-      f.state.headLagSeconds = 0;
-      expect(BigInt((await prepareAs(f, "fresh")).operation.nonce)).toBe(1n);
     } finally {
       now = started;
     }
   });
 
-  it("prepares past a retired approval's nonce when Signa's own executed payment holds it, and not once that execution is reorged out", async () => {
+  it("settles a retired approval under another nonce key only on a canonical head two minutes past its window, its nonce unchanged", async () => {
+    const started = now;
+    try {
+      const f = await fixture({ steps: 2, planLifetimeMs: 3_600_000 }), old = await f.prepare();
+      await f.service.retire(f.principal, old.id);
+      // As if it had been signed under nonce key one: a key-zero replacement cannot exclude it.
+      const records = (f.store as unknown as { records: Map<string, { operation: { nonce: Hex } }> }).records;
+      records.get(old.id)!.operation.nonce = toHex(1n << 64n);
+      await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_OPEN", status: 409 });
+      // Server time past the window is not enough while the chain's head is still inside it.
+      now = old.expiresAt + 121_000; f.state.headLagSeconds = 60;
+      await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_OPEN" });
+      f.state.headLagSeconds = 0;
+      expect((await prepareAs(f, "fresh")).state).toBe("prepared");
+      expect((await f.store.get(f.actor, old.id))!.retiredSettledAt).toBeDefined();
+      expect(await f.store.retired(8453, old.operation.sender)).toEqual([]);
+    } finally {
+      now = started;
+    }
+  });
+
+  const executedReplacement = async (outer: "success" | "reverted") => {
     const f = await fixture({ steps: 2 }), old = await f.prepare();
     await f.service.retire(f.principal, old.id);
     const replacement = await prepareAs(f, "replacement", [1]);
     const submitted = await f.service.submit(f.principal, replacement.id, f.signature(replacement), "submit");
     const transactionHash = h("replacement-transaction");
-    await f.store.observe(replacement.id, submitted.revision, { state: "confirmed", operationHash: replacement.operationHash, transactionHash,
-      receipt: { transactionHash, blockHash: h("passkey-block"), blockNumber: "90", status: "success", canonical: true, confirmations: 10,
+    await f.store.observe(replacement.id, submitted.revision, { state: outer === "success" ? "confirmed" : "reverted",
+      operationHash: replacement.operationHash, transactionHash,
+      receipt: { transactionHash, blockHash: h("passkey-block"), blockNumber: "90", status: outer, canonical: true, confirmations: 10,
         observedAt: now, logs: [], logsStored: false, logCount: 1, logsHash: h("logs") } });
     f.state.nonce = 1n;
+    // A re-observation finds no bundle on the chain.
+    f.rpc.mockImplementation(async (chain, method, params, signal) =>
+      ["eth_getTransactionByHash", "eth_getTransactionReceipt"].includes(method) ? null : f.rpcDefault(chain, method, params, signal));
+    return { f, old, replacement };
+  };
+
+  it("prepares past a retired approval's nonce once Signa's own payment holding it executed", async () => {
+    const { f, old } = await executedReplacement("success");
     expect(BigInt((await prepareAs(f, "after")).operation.nonce)).toBe(1n);
-    // The block that executed it is no longer canonical: its execution is no evidence any more.
+    expect((await f.store.get(f.actor, old.id))!.retiredSettledAt).toBeDefined();
+  });
+
+  it("asks to wait while the payment that took a retired approval's nonce is still confirming", async () => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    await f.service.retire(f.principal, old.id);
+    const replacement = await prepareAs(f, "replacement", [1]);
+    await f.service.submit(f.principal, replacement.id, f.signature(replacement), "submit");
+    f.state.nonce = 1n;
+    f.rpc.mockImplementation(async (chain, method, params, signal) =>
+      ["eth_getTransactionByHash", "eth_getTransactionReceipt"].includes(method) ? null : f.rpcDefault(chain, method, params, signal));
+    await expect(prepareAs(f, "after")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CONFIRMING" });
+  });
+
+  it("is not settled by a holder whose whole bundle reverted, which rolled its nonce back", async () => {
+    const { f } = await executedReplacement("reverted");
+    await expect(prepareAs(f, "after")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CONFIRMING" });
+  });
+
+  it("is not settled by a holder's execution a reorg removed", async () => {
+    const { f, replacement } = await executedReplacement("success");
     f.rpc.mockImplementation(async (chain, method, params, signal) => method === "eth_getBlockByNumber" && params[0] === "0x5a"
       ? { number: "0x5a", hash: h("other-block"), timestamp: toHex(now / 1000), baseFeePerGas: "0x0" }
       : ["eth_getTransactionByHash", "eth_getTransactionReceipt"].includes(method) ? null : f.rpcDefault(chain, method, params, signal));
-    await expect(prepareAs(f, "after-reorg")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED" });
+    await expect(prepareAs(f, "after-reorg")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CONFIRMING" });
     expect((await f.store.get(f.actor, replacement.id))!.state).toBe("pending");
     expect(await f.store.find(f.actor, "after-reorg", h("after-reorg"))).toBeUndefined();
+  });
+
+  it("holds a preparation made before the retirement to the same rule when it is submitted", async () => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    // The approval's bytes ran outside Signa while it was still prepared; another payment was prepared after.
+    f.state.nonce = 1n;
+    const other = await prepareAs(f, "other", [1]);
+    await f.service.retire(f.principal, old.id);
+    await expect(f.service.submit(f.principal, other.id, f.signature(other), "submit")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED" });
+    expect(f.state.sends).toBe(0);
+  });
+
+  it("refuses a claim when another approval from the sender was retired after its admission checked them", async () => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    f.state.nonce = 1n;
+    const other = await prepareAs(f, "other", [1]);
+    await f.service.retire(f.principal, old.id);
+    const operation = { ...other.operation, signature: f.signature(other) };
+    await expect(f.store.claim({ actor: f.actor, id: other.id, key: "late", operation,
+      signedCommitment: userOperationCommitment(operation, entryPoint, 8453), retiredChecked: [],
+      authorization: { issuedAt: now / 1000, expiresAt: now / 1000 + 60 }, now })).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CHANGED" });
   });
 });
