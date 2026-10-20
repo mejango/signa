@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { decodePayFailure } from "@bananapus/nana-sdk-core/v6";
 import { Hono } from "hono";
 import { encodeAbiParameters, encodeFunctionData, erc20Abi, keccak256, parseAbi, toFunctionSelector, type Address, type Hex } from "viem";
 import { RestError, type RestRpc } from "../src/rest/core.js";
@@ -35,10 +36,14 @@ describe("payment failure reasons", () => {
     const said = (text: string) => encodeFunctionData({ abi: parseAbi(["function Error(string)"]), functionName: "Error", args: [text] });
     expect(payFailureOf(said(`JBMultiTerminal_UnderMin(812, 900) ${underMin}`))).toBeUndefined();
     // Nothing to receive is never a minimum to lower.
-    const none = payFailureOf(`0x6b2bb382${encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [0n, 900n]).slice(2)}`);
+    const nothing = `0x6b2bb382${encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [0n, 900n]).slice(2)}` as Hex;
+    const none = payFailureOf(nothing);
     expect(none).toMatchObject({ reason: "TERMINAL_UNDER_MIN", received: "0", minimum: "900" });
     expect(none!.message).not.toMatch(/lower your minimum/i);
-    expect(clientPayFailureOf(none)).toEqual(none);
+    // The client hands the app the SDK's own reading: a zero fill, nothing a lower minimum would fix.
+    expect(clientPayFailureOf(none)).toEqual(decodePayFailure(nothing));
+    expect(clientPayFailureOf(none)).toMatchObject({ received: 0n, minimum: 900n, zeroFill: true });
+    expect(clientPayFailureOf(none)).not.toHaveProperty("adjustable");
   });
 
   it("simulates a refused payment's calls from the account and reads the failing one", async () => {
@@ -144,15 +149,18 @@ describe("payment failure reasons", () => {
       const served = payFailureOf(data);
       expect(served, data).toBeTruthy();
       reasons.add(served!.reason);
-      expect(clientPayFailureOf(served), `${served!.reason} ${served!.message}`).toEqual(served);
+      // The client's reading is exactly what the SDK decodes from the same revert, flags included.
+      expect(clientPayFailureOf(served), `${served!.reason} ${served!.message}`).toEqual(decodePayFailure(data));
     }
     expect(reasons.size).toBe(17);
   });
 
   it("keeps a served reason on the client only in its exact shape", () => {
     const served = payFailureOf(underMin)!;
-    expect(clientPayFailureOf(served)).toEqual(served);
-    expect(new RestClientError("USER_OPERATION_PROVIDER_REJECTED", "Refused.", 502, served).payFailure).toEqual(served);
+    const decoded = decodePayFailure(underMin)!;
+    expect(clientPayFailureOf(served)).toEqual(decoded);
+    expect(decoded).toMatchObject({ received: 812n, minimum: 900n, zeroFill: false, adjustable: "minimum" });
+    expect(new RestClientError("USER_OPERATION_PROVIDER_REJECTED", "Refused.", 502, decoded).payFailure).toEqual(decoded);
     expect(new RestClientError("X", "Refused.").payFailure).toBeUndefined();
     for (const bad of [null, "TERMINAL_UNDER_MIN", { ...served, url: "https://node.example" }, { ...served, received: "8.5" },
       { ...served, minimum: 900 }, { ...served, reason: "not a reason" }, { reason: served.reason },
@@ -162,7 +170,9 @@ describe("payment failure reasons", () => {
       { ...served, received: "901" }, { ...served, received: "900" }, { reason: "PAYMENTS_PAUSED", message: served.message, received: "1", minimum: "2" },
       { reason: served.reason, message: served.message, received: "812" }, { ...served, message: "Lower it by 100 tokens." },
       { ...served, message: "This payment has settled successfully." }, { ...served, message: `${served.message} Lower your minimum.` },
-      { ...served, received: "0" }, { reason: served.reason, message: served.message }])
+      { ...served, received: "0" }, { reason: served.reason, message: served.message },
+      // The wire stays strict: the flags are the SDK's to derive, never the server's to serve.
+      { ...served, zeroFill: false }, { ...served, adjustable: "minimum" }, decoded])
       expect(clientPayFailureOf(bad)).toBeUndefined();
   });
 });

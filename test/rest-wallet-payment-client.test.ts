@@ -430,7 +430,8 @@ describe('Center browser payment review continuity', () => {
     const reverted = f.observedOperation('reverted');
     f.observed({ ...reverted, observation: { ...reverted.observation, payFailure } });
     const status = await f.helper().refreshPayment();
-    expect(status).toMatchObject({ status: 'reverted', payFailure, observation: { payFailure } });
+    // The status carries the SDK's reading; the observation keeps what Signa served.
+    expect(status).toMatchObject({ status: 'reverted', payFailure: { ...payFailure, received: 812n, minimum: 900n, zeroFill: false, adjustable: 'minimum' }, observation: { payFailure } });
     f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
   });
 
@@ -438,7 +439,7 @@ describe('Center browser payment review continuity', () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
     const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
     f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', detail: 'Refused.', payFailure });
-    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, received: 812n, minimum: 900n, zeroFill: false, adjustable: 'minimum' } });
     f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, message: 'https://node.example/key' } });
     const g = fixture(); await g.helper().preparePayment(g.input()); await g.helper().completePayment(g.callback());
     g.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, message: 'https://node.example/key' } });
@@ -451,7 +452,7 @@ describe('Center browser payment review continuity', () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
     const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
     f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
-    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, received: 812n, minimum: 900n, zeroFill: false, adjustable: 'minimum' } });
     // No clock moved: Signa retired the approval under its claim lock, so nothing can send it any more.
     expect(f.calls.at(-1)!.path).toBe('/api/v1/user-operations/' + f.prepared.id + '/retirement');
     expect(f.helper().pendingPayment()!.status).toBe('refused');

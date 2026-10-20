@@ -6,6 +6,6 @@ export type { CenterWalletExpectedPayment, CenterWalletPaymentInput, CenterWalle
 export { assertReviewedOperation, ownerOperationSigning, ownerOperationSignature,
   type PreparedUserOperation, type SmartWalletPlan } from './smartAccounts.js';
 export { RestClientError, type PreparedRequest } from './index.js';
-export type { PayFailure } from '../userOperations/types.js';
+export type { PayFailure } from './payFailure.js';
 export { userOperationMaximumCost } from '../userOperations/codec.js';
 export { sponsoredCallsCommitment, type SponsoredCall } from '../userOperations/sponsoredCalls.js';

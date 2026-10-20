@@ -49,6 +49,10 @@ fresh `preparePayment()` can follow at once; the fresh payment takes the refused
 one of them executes. `pending` or `confirming` means a send won before the retirement: follow it.
 `unknown` means the retirement or the answer was lost: `retirePayment()` retires an approved payment
 Signa has not sent, or returns the submission that already claimed it.
+A reverted payment's status and a refused submission's `RestClientError` carry `payFailure`: the SDK's own
+`PayFailure`, as `decodePayFailure` reads the same revert (bigint `received` and `minimum`, plus `zeroFill`
+and `adjustable` for a shortfall), so it goes straight to the SDK's `payRetrySlippageBps` and to the same
+display as an external-wallet payment. `observation.payFailure` keeps the reason as Signa served it.
 
 ## Connect
 

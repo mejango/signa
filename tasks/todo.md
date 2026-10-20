@@ -30,3 +30,36 @@ jango, 2026-10-20: "go ahead and do the queued real fix". Follows PR #18 (4162e5
 - Codex pass 2 FIX: session retirement refused (no signed deadline). Outer-revert reservation is main's behavior; an observer change for it caused regressions in pass 3 and was reverted, left as a follow-up.
 - Codex pass 4 FIX: retirement requires an approved payment review and live relay authority in the transaction. Pass 5 SHIP.
 - Follow-up: an outer-reverted bundle keeps its nonce reservation forever (main behavior); fix needs plan-step and session-aware expiry together.
+
+# Move nana-sdk-connect into @me.jango/signa, and ship #20 plus SDK-derived payFailure flags in 0.4.0 (2026-10-20)
+
+jango ruled 2026-10-20: all of `@bananapus/nana-sdk-connect` (core, wagmi, react, including the modal's
+plain external-wallet option) moves into `@me.jango/signa` as `/core`, `/wagmi`, `/react`; the SDK
+package is then deprecated.
+
+## Plan refinement
+
+- **Objective:** A consumer switches from `@bananapus/nana-sdk-connect/{core,wagmi,react}` to `@me.jango/signa/{core,wagmi,react}` by changing only the import specifier (same export names, same behavior, same protocol strings), Signa 0.4.0 is on npm with provenance, nana-sdk-connect gets a final "moved" patch plus an npm deprecation, and Sticky runs on Signa 0.4.0; Homerun is untouched (report only).
+- **System fit:** Outcome (sign in with a Signa passkey or an external wallet) -> capability (connect controller, passkey option, popup/frame callback, read-only wagmi connector, modal) -> owner moves from juice-sdk-v4/packages/connect to signa/wallet-client, next to the wallet client and server whose protocol strings it must match -> publish via the existing CI-gated publish.yml (provenance) -> verified by npm view + clean-install import of every subpath -> consumers Sticky (switched here) and Homerun (its agent switches after #53). Server, payment review, PR #20 server files and the root wallet client code are unaffected.
+- **Reuse and simplicity:** Port the SDK source and tests verbatim (only the `@me.jango/signa` self-import becomes a relative import of `src/rest/client/wallet-package.ts`, built as `../index.js`); reuse the existing esbuild + rollup-plugin-dts build in scripts/rest/build-client.mjs and the existing publish workflow; no new abstraction. React, wagmi, jsdom and coverage join as devDependencies only; React and wagmi are optional peers. User-visible copy that names the destination ("Juicebox Center", "Juicebox account") says Signa, matching the Signa pages the user lands on; wire ids and message types (`juicebox-center`, `juicebox-center:*`) stay.
+- **Evidence and unknowns:** Source of truth is juice-sdk-v4 main 8fc9bb4 (connect 0.6.0, on npm). Signa main c64a0ab (0.3.8 on npm). Unknowns to settle by test: whether the connect code passes Signa's stricter tsconfig flags, whether rollup-dts renders the relative re-export cleanly, wagmi devDependency weight in the Docker build stage. Root entry must be byte-identical before and after (diff the built index.js and index.d.ts).
+- **Verification:** connect vitest suite with the SDK's coverage bar (100/95/100/100) in the release check; tsc for connect; `npm run check` green in CI; root bundle byte-diff; packed tarball installed into a clean directory resolving `.`, `/core`, `/wagmi`, `/react` (ESM import + tsc types, root import without react/wagmi installed); Codex gpt-6.1-sol adversarial review to SHIP; after merge, npm view shows 0.4.0 with provenance attestation; Sticky full gates under Node 26 + npm 12 and CI green.
+- **Scope added mid-task (coordinator):** ship #20's client changes (`refused`, `retirePayment()`) in the same 0.4.0; make the client's validated `payFailure` the SDK decoder's own `PayFailure` (bigint amounts, `zeroFill`, `adjustable`) so Homerun drops its revert-data rebuild. Wire payload stays strict (served flags rejected); `observation.payFailure` keeps the served form so storage stays JSON; d.ts inlines the SDK types.
+- **Resource budget:** One Signa PR, one SDK PR, one Sticky PR, each in a fresh worktree under the session scratchpad; no edits to PR #20 server files; rebase if #20 merges first; replan if the stricter tsconfig or the dts build forces source changes beyond types, or if Codex finds behavior issues needing a design change.
+
+## Steps
+
+- [x] Signa: port connect source + tests to wallet-client/src/{core,wagmi,react}, own tsconfig + vitest config with coverage bar
+- [x] Signa: build subpaths in build-client.mjs ("use client" banner on subpaths only), exports + optional peers in wallet-client/package.json, bump 0.4.0
+- [x] Signa: wire connect typecheck + tests into `npm run typecheck` / `npm run check`; update rest-wallet-package test
+- [x] Signa: README updates (wallet-client README carries the connect docs; Center -> Signa where Signa is meant)
+- [x] Verify root bundle unchanged by connect, clean-install resolution of every subpath
+- [x] Rebase on #20; client payFailure = SDK PayFailure with flags; d.ts inlines SDK types; clean-install interop with payRetrySlippageBps
+- [ ] Codex review until SHIP; PR; merge when green; confirm 0.4.0 + provenance on npm
+- [ ] SDK: final nana-sdk-connect patch (README: moved), changeset, merge, publish; npm deprecate (or hand jango the command)
+- [ ] Sticky: switch web/ to @me.jango/signa@0.4.0, gates on Node 26 + npm 12, merge when CI green
+- [ ] Report Homerun import changes
+
+## Review
+
+(filled in at the end)
