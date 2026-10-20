@@ -13,12 +13,12 @@ import type { ActiveActorGuard } from "../src/rest/transactions/store.js";
 import { TransactionService } from "../src/rest/transactions/service.js";
 import { MemoryTransportReservations } from "../src/rest/transactions/transport-reservations.js";
 import { ENTRY_POINT_V07_ABI } from "../src/rest/userOperations/chain.js";
-import { getUserOperationHash, unpackUserOperation } from "../src/rest/userOperations/codec.js";
+import { getUserOperationHash, unpackUserOperation, userOperationCommitment } from "../src/rest/userOperations/codec.js";
 import { MemoryUserOperationStore } from "../src/rest/userOperations/memory.js";
 import { passkeyDummyContractSignature, passkeyDummySignature, passkeyEstimateProvider, PASSKEY_MAX_SIGNATURE_BYTES } from "../src/rest/userOperations/passkeyEstimation.js";
 import { UserOperationProvider } from "../src/rest/userOperations/provider.js";
 import { UserOperationService } from "../src/rest/userOperations/service.js";
-import { assertPlan } from "../src/rest/userOperations/store.js";
+import { assertPlan, retiring } from "../src/rest/userOperations/store.js";
 import type { UserOperationGasEstimate, UserOperationGasPolicy, UserOperationV07 } from "../src/rest/userOperations/types.js";
 import { account, binding, entryPoint, h, owner, ownerKey, plan, safe, target } from "./fixtures/user-operations.js";
 
@@ -37,7 +37,7 @@ const gas: UserOperationGasPolicy = {
 
 // Real service, storage, codecs and EOA signatures; RPC/provider I/O is synthetic here.
 // The separate pinned-Anvil suite establishes actual passkey/FCL execution compatibility.
-async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint; paymentMetadata?: Hex; paymentLabel?: string } = {}) {
+async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint; paymentMetadata?: Hex; paymentLabel?: string; steps?: number; planLifetimeMs?: number } = {}) {
   const apiAccount = account(now, 8453);
   if (!options.legacy) { apiAccount.id = `eip155:8453:${safe}`; apiAccount.ownerAddress = safe; }
   const actor = owner(apiAccount), wallet = binding(apiAccount, now);
@@ -83,7 +83,8 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
   } } : authority;
   const transports = new MemoryTransportReservations();
   const transactionStore = new MemoryTransactionStore(actorGuard, transports);
-  const preparedPlan = plan("passkey-plan", actor, wallet, now);
+  const preparedPlan = plan("passkey-plan", actor, wallet, now, options.steps);
+  if (options.planLifetimeMs) preparedPlan.expiresAt = now + options.planLifetimeMs;
   preparedPlan.smartAccount!.chainId = 8453;
   for (const call of preparedPlan.draft.calls) call.chainId = 8453;
   if (options.paymentMetadata !== undefined) {
@@ -109,11 +110,11 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
     estimateTimeout: false, signedEstimate: undefined as Partial<UserOperationGasEstimate> | undefined,
     bundlerFees: null as { maxFeePerGas: Hex; maxPriorityFeePerGas: Hex } | null, bundlerDown: false,
     estimated: [] as UserOperationV07[], sent: undefined as UserOperationV07 | undefined,
-    baseFee: "0x0" as Hex, finalGasBump: false,
+    baseFee: "0x0" as Hex, finalGasBump: false, nonce: 0n, headLagSeconds: 0, approved: true,
   };
   const rpcDefault: RestRpc["request"] = async (_chain, method, params) => {
     if (method === "eth_chainId") return toHex(8453);
-    if (method === "eth_getBlockByNumber") return { number: "0x64", hash: state.reorg ? h("reorg") : h("passkey-block"), timestamp: toHex(now / 1000), baseFeePerGas: state.baseFee };
+    if (method === "eth_getBlockByNumber") return { number: "0x64", hash: state.reorg ? h("reorg") : h("passkey-block"), timestamp: toHex(Math.floor(now / 1000) - state.headLagSeconds), baseFeePerGas: state.baseFee };
     if (method === "eth_maxPriorityFeePerGas") return "0x1";
     if (method === "eth_getCode") return state.runtimeFailure && params[0] === signer ? "0x6001" : code;
     if (method === "eth_getBalance") return toHex(10n ** 18n);
@@ -125,7 +126,8 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
       }
       if (call.to.toLowerCase() === safe) return "0x";
       const decoded = decodeFunctionData({ abi: ENTRY_POINT_V07_ABI, data: call.data });
-      if (decoded.functionName === "getNonce") return toHex(0n, { size: 32 });
+      // Key zero follows `state.nonce`; any other key stays at its first sequence.
+      if (decoded.functionName === "getNonce") return toHex(decoded.args[1] === 0n ? state.nonce : decoded.args[1] << 64n, { size: 32 });
       if (decoded.functionName === "getUserOpHash") return getUserOperationHash(unpackUserOperation(decoded.args[0]), entryPoint, 8453);
       if (decoded.functionName === "balanceOf") return toHex(10n ** 18n, { size: 32 });
       if (decoded.functionName === "entryPoint") return encodeFunctionResult({ abi: ENTRY_POINT_V07_ABI, functionName: "entryPoint", result: entryPoint });
@@ -181,7 +183,7 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
   const transactions = new TransactionService({ store: transactionStore, rpc: { request: rpc }, now: () => now,
     externalObservers: [{ kind: "erc4337", observePlanStep: (plan, index, bindingId, request) => service.observePlanStep(plan, index, bindingId, request) }] });
   service = new UserOperationService({
-    rpc: { request: rpc }, provider, store, transactionStore, transactions,
+    rpc: { request: rpc }, provider, store, transactionStore, transactions, approvedReview: async () => state.approved,
     policies: [{ chainId: 8453, gas: { ...gas,
       ...(options.maximumPreVerificationGas !== undefined ? { maximumPreVerificationGas: options.maximumPreVerificationGas } : {}),
     }, confirmations: 1 }],
@@ -753,5 +755,173 @@ describe("passkey UserOperation owner admission", () => {
     expect((await f.service.submit(f.principal, view.id, f.signature(view), "submit")).state).toBe("submission_unknown");
     await expect(f.service.submit(f.principal, view.id, f.signature(view, "0x5678"), "submit")).rejects.toMatchObject({ code: "USER_OPERATION_CONFLICT" });
     expect(f.state.sends).toBe(1);
+  });
+});
+
+describe("retiring a refused approval", () => {
+  const approvedBy = (f: Awaited<ReturnType<typeof fixture>>, view: { id: string }, signature: Hex, key: string) => f.service.submitApproved({
+    actor: f.actor, operationId: view.id, signature, key, authority: { issuedAt: now / 1000, expiresAt: now / 1000 + 300 } });
+  const prepareAs = (f: Awaited<ReturnType<typeof fixture>>, key: string, stepIndexes = [0]) =>
+    f.service.prepare(f.principal, { planId: f.preparedPlan.id, stepIndexes }, key, h(key));
+
+  it("never claims or sends an approval retired after its refusal, though another replica was admitting it", async () => {
+    const f = await fixture(), view = await f.prepare(), signature = f.signature(view);
+    f.state.estimateFailure = true;
+    await expect(f.service.submit(f.principal, view.id, signature, "submit")).rejects.toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED" });
+    // The approval's own send is admitting the same bytes on another replica when the app retires them.
+    f.state.estimateFailure = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    f.currentBindingAt.mockImplementationOnce(async () => { await held; return f.wallet; });
+    const other = approvedBy(f, view, signature, "review:one");
+    await vi.waitFor(() => expect(f.currentBindingAt).toHaveBeenCalledTimes(2));
+    (f.service as unknown as { inflight: Map<string, unknown> }).inflight.clear();
+    const retired = await f.service.retire(f.principal, view.id);
+    expect(retired).toMatchObject({ state: "retired", revision: 1 }); expect(retired).not.toHaveProperty("submission");
+    release();
+    await expect(other).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED" });
+    // A reopened approval page or a retried hand-back is refused before any chain or bundler work.
+    const reads = f.rpc.mock.calls.length, estimates = f.state.estimated.length;
+    await expect(approvedBy(f, view, signature, "review:again")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED" });
+    await expect(f.service.submit(f.principal, view.id, signature, "submit-again")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED" });
+    expect(f.rpc.mock.calls.length).toBe(reads); expect(f.state.estimated.length).toBe(estimates);
+    expect(f.state.sends).toBe(0);
+    // Retiring again is the same answer.
+    expect(await f.service.retire(f.principal, view.id)).toEqual(retired);
+  });
+
+  it("hands back the submission a claim already made instead of retiring it", async () => {
+    const f = await fixture(), view = await f.prepare();
+    expect((await f.service.submit(f.principal, view.id, f.signature(view), "submit")).state).toBe("pending");
+    const kept = await f.service.retire(f.principal, view.id);
+    expect(kept.state).toBe("pending"); expect(kept.submission).toBeDefined(); expect(f.state.sends).toBe(1);
+  });
+
+  it("prepares a fresh payment over a retired approval at that approval's own nonce, at once", async () => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    await f.service.retire(f.principal, old.id);
+    const started = Date.now(), fresh = await prepareAs(f, "fresh");
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(fresh.state).toBe("prepared"); expect(BigInt(fresh.operation.nonce)).toBe(BigInt(old.operation.nonce));
+    expect((await f.service.submit(f.principal, fresh.id, f.signature(fresh), "submit")).state).toBe("pending");
+  });
+
+  it("prepares nothing over a retired approval whose nonce moved outside Signa, even after its window", async () => {
+    const started = now;
+    try {
+      const f = await fixture({ steps: 2, planLifetimeMs: 3_600_000 }), old = await f.prepare();
+      await f.service.retire(f.principal, old.id);
+      // The nonce moved and nothing Signa sent holds it: the retired bytes may have run.
+      f.state.nonce = 1n;
+      await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED", status: 409 });
+      now = old.expiresAt + 600_000;
+      await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED" });
+    } finally {
+      now = started;
+    }
+  });
+
+  it("settles a retired approval under another nonce key only on a canonical head two minutes past its window, its nonce unchanged", async () => {
+    const started = now;
+    try {
+      const f = await fixture({ steps: 2, planLifetimeMs: 3_600_000 }), old = await f.prepare();
+      await f.service.retire(f.principal, old.id);
+      // As if it had been signed under nonce key one: a key-zero replacement cannot exclude it.
+      const records = (f.store as unknown as { records: Map<string, { operation: { nonce: Hex } }> }).records;
+      records.get(old.id)!.operation.nonce = toHex(1n << 64n);
+      await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_OPEN", status: 409 });
+      // Server time past the window is not enough while the chain's head is still inside it.
+      now = old.expiresAt + 121_000; f.state.headLagSeconds = 60;
+      await expect(prepareAs(f, "fresh")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_OPEN" });
+      f.state.headLagSeconds = 0;
+      expect((await prepareAs(f, "fresh")).state).toBe("prepared");
+      expect((await f.store.get(f.actor, old.id))!.retiredSettledAt).toBeDefined();
+      expect(await f.store.retired(8453, old.operation.sender)).toEqual([]);
+    } finally {
+      now = started;
+    }
+  });
+
+  const executedReplacement = async (outer: "success" | "reverted") => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    await f.service.retire(f.principal, old.id);
+    const replacement = await prepareAs(f, "replacement", [1]);
+    const submitted = await f.service.submit(f.principal, replacement.id, f.signature(replacement), "submit");
+    const transactionHash = h("replacement-transaction");
+    await f.store.observe(replacement.id, submitted.revision, { state: outer === "success" ? "confirmed" : "reverted",
+      operationHash: replacement.operationHash, transactionHash,
+      receipt: { transactionHash, blockHash: h("passkey-block"), blockNumber: "90", status: outer, canonical: true, confirmations: 10,
+        observedAt: now, logs: [], logsStored: false, logCount: 1, logsHash: h("logs") } });
+    f.state.nonce = 1n;
+    // A re-observation finds no bundle on the chain.
+    f.rpc.mockImplementation(async (chain, method, params, signal) =>
+      ["eth_getTransactionByHash", "eth_getTransactionReceipt"].includes(method) ? null : f.rpcDefault(chain, method, params, signal));
+    return { f, old, replacement };
+  };
+
+  it("prepares past a retired approval's nonce once Signa's own payment holding it executed", async () => {
+    const { f, old } = await executedReplacement("success");
+    expect(BigInt((await prepareAs(f, "after")).operation.nonce)).toBe(1n);
+    expect((await f.store.get(f.actor, old.id))!.retiredSettledAt).toBeDefined();
+  });
+
+  it("never retires an operation the owner did not approve, which would hold the wallet's nonce for nothing", async () => {
+    const f = await fixture(), old = await f.prepare();
+    f.state.approved = false;
+    await expect(f.service.retire(f.principal, old.id)).rejects.toMatchObject({ code: "USER_OPERATION_NOT_RETIRABLE" });
+    expect((await f.store.get(f.actor, old.id))!.state).toBe("prepared");
+  });
+
+  it("never retires a session operation, which no signed deadline would settle", async () => {
+    const f = await fixture(), old = await f.prepare();
+    const record = (await f.store.get(f.actor, old.id))!;
+    expect(() => retiring({ ...record, session: {} as NonNullable<typeof record.session> })).toThrow(expect.objectContaining({ code: "USER_OPERATION_NOT_RETIRABLE" }));
+  });
+
+  it("asks to wait while the payment that took a retired approval's nonce is still confirming", async () => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    await f.service.retire(f.principal, old.id);
+    const replacement = await prepareAs(f, "replacement", [1]);
+    await f.service.submit(f.principal, replacement.id, f.signature(replacement), "submit");
+    f.state.nonce = 1n;
+    f.rpc.mockImplementation(async (chain, method, params, signal) =>
+      ["eth_getTransactionByHash", "eth_getTransactionReceipt"].includes(method) ? null : f.rpcDefault(chain, method, params, signal));
+    await expect(prepareAs(f, "after")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CONFIRMING" });
+  });
+
+  it("is not settled by a holder whose whole bundle reverted, which rolled its nonce back", async () => {
+    const { f } = await executedReplacement("reverted");
+    await expect(prepareAs(f, "after")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CONFIRMING" });
+  });
+
+  it("is not settled by a holder's execution a reorg removed", async () => {
+    const { f, replacement } = await executedReplacement("success");
+    f.rpc.mockImplementation(async (chain, method, params, signal) => method === "eth_getBlockByNumber" && params[0] === "0x5a"
+      ? { number: "0x5a", hash: h("other-block"), timestamp: toHex(now / 1000), baseFeePerGas: "0x0" }
+      : ["eth_getTransactionByHash", "eth_getTransactionReceipt"].includes(method) ? null : f.rpcDefault(chain, method, params, signal));
+    await expect(prepareAs(f, "after-reorg")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CONFIRMING" });
+    expect((await f.store.get(f.actor, replacement.id))!.state).toBe("pending");
+    expect(await f.store.find(f.actor, "after-reorg", h("after-reorg"))).toBeUndefined();
+  });
+
+  it("holds a preparation made before the retirement to the same rule when it is submitted", async () => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    // The approval's bytes ran outside Signa while it was still prepared; another payment was prepared after.
+    f.state.nonce = 1n;
+    const other = await prepareAs(f, "other", [1]);
+    await f.service.retire(f.principal, old.id);
+    await expect(f.service.submit(f.principal, other.id, f.signature(other), "submit")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED" });
+    expect(f.state.sends).toBe(0);
+  });
+
+  it("refuses a claim when another approval from the sender was retired after its admission checked them", async () => {
+    const f = await fixture({ steps: 2 }), old = await f.prepare();
+    f.state.nonce = 1n;
+    const other = await prepareAs(f, "other", [1]);
+    await f.service.retire(f.principal, old.id);
+    const operation = { ...other.operation, signature: f.signature(other) };
+    await expect(f.store.claim({ actor: f.actor, id: other.id, key: "late", operation,
+      signedCommitment: userOperationCommitment(operation, entryPoint, 8453), retiredChecked: [],
+      authorization: { issuedAt: now / 1000, expiresAt: now / 1000 + 60 }, now })).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CHANGED" });
   });
 });

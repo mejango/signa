@@ -124,7 +124,7 @@ export function sessionSchemas(): Record<string, Schema> {
       stepIndexes: array({ type: "integer", minimum: 0, maximum: 31 }, { minItems: 1, maxItems: 16, uniqueItems: true }), chainId: chain, entryPoint: ref("Address"),
       operation: ref("UserOperationV07"), operationHash: ref("Hash"), commitment: ref("Hash"), accountBindingId: ref("Hash"), accountStateHash: ref("Hash"),
       session: ref("UserOperationSessionBinding"), gasPolicyId: text, providerId: text, createdAt: ref("UnixMilliseconds"), expiresAt: ref("UnixMilliseconds"), revision: integer,
-      state: { type: "string", enum: ["prepared", "submitting", "submission_unknown", "pending", "unknown", "confirming", "confirmed", "reverted", "expired"] },
+      state: { type: "string", enum: ["prepared", "submitting", "submission_unknown", "pending", "unknown", "confirming", "confirmed", "reverted", "expired", "retired"] },
       signing: { oneOf: [ref("SafeOwnerUserOperationSigning"), ref("PasskeyOwnerUserOperationSigning"), ref("SessionUserOperationSigning")] },
       submission: object({ commitment: ref("Hash"), startedAt: ref("UnixMilliseconds") }), observation: ref("UserOperationObservation"),
     }, ["id", "planId", "planCommitment", "stepIndexes", "chainId", "entryPoint", "operation", "operationHash", "commitment", "accountBindingId", "accountStateHash", "gasPolicyId", "providerId", "createdAt", "expiresAt", "revision", "state", "signing"]),

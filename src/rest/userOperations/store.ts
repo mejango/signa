@@ -32,7 +32,8 @@ export interface UserOperationRecord {
   createdAt: number;
   expiresAt: number;
   revision: number;
-  state: 'prepared' | 'submitting' | 'submission_unknown' | UserOperationObservation['state'];
+  /** `retired`: approved, never sent, and refused for good; nothing claims or resends it. */
+  state: 'prepared' | 'submitting' | 'submission_unknown' | 'retired' | UserOperationObservation['state'];
   submission?: {
     key: string;
     commitment: Hex;
@@ -41,6 +42,8 @@ export interface UserOperationRecord {
     sessionObservationHash?: Hex;
   };
   observation?: UserOperationObservation;
+  /** When the chain settled a retired operation: it never ran and never can, or Signa's own operation took its nonce. */
+  retiredSettledAt?: number;
 }
 export interface UserOperationClaim {
   actor: RestActor;
@@ -50,6 +53,8 @@ export interface UserOperationClaim {
   signedCommitment: Hex;
   authorization: { issuedAt: number; expiresAt: number };
   sessionObservationHash?: Hex;
+  /** The unsettled retired operations of this sender the admission checked; any other with another nonce refuses the claim. */
+  retiredChecked?: string[];
   now: number;
 }
 export interface UserOperationStore {
@@ -68,6 +73,13 @@ export interface UserOperationStore {
     observation: UserOperationObservation,
   ): Promise<UserOperationRecord>;
   recoverable(limit: number, cursor?: string): Promise<UserOperationRecord[]>;
+  /** Retires an unsent operation under the claim's lock; one something already claimed comes back as it is. */
+  retire(actor: RestActor, id: string): Promise<UserOperationRecord>;
+  /** Every unsettled retired operation from `sender` on `chainId`, under any account. */
+  retired(chainId: number, sender: Address): Promise<UserOperationRecord[]>;
+  settleRetired(id: string): Promise<void>;
+  /** The operation holding the full sender nonce, once one claimed it. */
+  nonceHolder(chainId: number, sender: Address, nonce: bigint): Promise<UserOperationRecord | undefined>;
 }
 
 /** The codec is a trusted pure local dependency; it never calls a bundler. */
@@ -268,6 +280,7 @@ export function claimed(
       conflict();
     return { record: clone(record), dispatch: false };
   }
+  if (record.state === 'retired') retiredFailure();
   if (record.state !== 'prepared' || record.expiresAt <= input.now)
     fail('USER_OPERATION_EXPIRED', 'Prepare a fresh UserOperation before submission.');
   assertDispatchAuthorization(input.authorization, input.now);
@@ -287,6 +300,22 @@ export function claimed(
     }),
     dispatch: true,
   };
+}
+/** A claim admitted before another approval from its sender was retired is checked again: the claim refuses it. */
+export function assertRetiredChecked(record: UserOperationRecord, input: UserOperationClaim, retired: UserOperationRecord[]): void {
+  if (retired.some((old) => old.id !== record.id && !(input.retiredChecked ?? []).includes(old.id) &&
+    BigInt(old.operation.nonce) !== BigInt(record.operation.nonce)))
+    fail('USER_OPERATION_RETIRED_CHANGED', 'Another approval from this wallet was retired meanwhile. Submit again.');
+}
+export const retiredFailure = () =>
+  fail('USER_OPERATION_RETIRED', 'This approval was refused and retired. Review a fresh payment.');
+/** An unsent operation becomes retired; a claimed one stays exactly as it is. */
+export function retiring(record: UserOperationRecord): UserOperationRecord {
+  if (record.submission || record.state === 'retired') return clone(record);
+  if (record.state !== 'prepared') conflict();
+  // A session signature has no signed deadline, so expiry could never settle it.
+  if (record.session) fail('USER_OPERATION_NOT_RETIRABLE', 'Only an owner-approved operation can be retired.', 409);
+  return clone({ ...record, state: 'retired', revision: record.revision + 1 });
 }
 /** Refresh observation evidence without changing the immutable compiled session or operation. */
 export function dispatchRecord(
@@ -355,7 +384,7 @@ export function observed(
     fail('INVALID_USER_OPERATION', 'Reverted execution requires canonical failure evidence.', 400);
   return clone({ ...record, state: observation.state, revision: record.revision + 1, observation });
 }
-export function nonceKey(record: UserOperationRecord): string {
+export function nonceKey(record: Pick<UserOperationRecord, 'chainId' | 'sender'> & { operation: { nonce: Hex } }): string {
   return canonical([
     record.chainId,
     record.sender.toLowerCase(),

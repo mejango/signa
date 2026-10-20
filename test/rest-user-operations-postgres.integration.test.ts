@@ -305,6 +305,54 @@ suite('PostgreSQL UserOperation persistence', () => {
       true,
     );
   });
+  it('retires an unclaimed operation under the claim lock: no replica claims it after, and one a claim took stays claimed', async () => {
+    const first = await prepare('retire-first', 40n);
+    const retired = await store.retire(actor, first.record.id);
+    expect(retired).toMatchObject({ state: 'retired', revision: 1 }); expect(retired.submission).toBeUndefined();
+    await expect(new PostgresUserOperationStore(pool).claim(claim(first.record, Date.now()))).rejects.toMatchObject({ code: 'USER_OPERATION_RETIRED' });
+    expect(await store.retire(actor, first.record.id)).toEqual(retired);
+    expect(await transportRows(first.plan.id)).toEqual([]);
+    expect((await store.retired(first.record.chainId, first.record.sender)).map((record) => record.id)).toContain(first.record.id);
+    // A retired row can never carry a submission, at the SQL boundary too.
+    await expect(pool.query(`UPDATE rest_user_operations SET document=jsonb_set(document,'{submission}','{}'::jsonb) WHERE id=$1`,
+      [first.record.id])).rejects.toMatchObject({ code: '23514' });
+    // Settled once the chain shows it can never run; until then other claims from the sender must account for it.
+    await store.settleRetired(first.record.id);
+    expect((await store.get(actor, first.record.id))!.retiredSettledAt).toBeGreaterThan(0);
+    const claimedFirst = await prepare('claim-first', 41n), input = claim(claimedFirst.record, Date.now());
+    expect((await store.claim(input)).dispatch).toBe(true);
+    const kept = await new PostgresUserOperationStore(pool).retire(actor, claimedFirst.record.id);
+    expect(kept.state).toBe('submitting'); expect(kept.submission!.commitment).toBe(input.signedCommitment);
+    expect((await store.nonceHolder(claimedFirst.record.chainId, claimedFirst.record.sender, 41n))!.id).toBe(claimedFirst.record.id);
+    // Racing replicas: exactly one of retirement or a single dispatch wins, never both.
+    for (const nonce of [42n, 43n, 44n]) {
+      const value = await prepare(`race-${nonce}`, nonce), raced = claim(value.record, Date.now());
+      const [retirement, ...claims] = await Promise.allSettled([new PostgresUserOperationStore(pool).retire(actor, value.record.id),
+        ...Array.from({ length: 8 }, () => new PostgresUserOperationStore(pool).claim(raced))]);
+      expect(retirement.status).toBe('fulfilled');
+      const final = (retirement as PromiseFulfilledResult<UserOperationRecord>).value;
+      const dispatched = claims.filter((result) => result.status === 'fulfilled' && result.value.dispatch);
+      if (final.state === 'retired') {
+        expect(dispatched).toHaveLength(0);
+        expect((await store.get(actor, value.record.id))!.state).toBe('retired');
+        expect(await store.nonceHolder(value.record.chainId, value.record.sender, nonce)).toBeUndefined();
+        await store.settleRetired(value.record.id);
+      } else {
+        expect(dispatched).toHaveLength(1); expect(final.submission).toBeDefined();
+      }
+    }
+    // The lookup spans every API account that binds the Safe: its nonce is the chain's.
+    const alias = await enroll(2), aliased = await prepare('retire-alias', 45n, alias);
+    await store.retire(alias, aliased.record.id);
+    const unsettled = await store.retired(aliased.record.chainId, aliased.record.sender);
+    expect(unsettled.map((record) => record.id)).toEqual([aliased.record.id]);
+    // A claim whose admission did not check every unsettled retirement of its sender is refused.
+    const late = await prepare('retire-late', 46n);
+    await expect(store.claim(claim(late.record, Date.now()))).rejects.toMatchObject({ code: 'USER_OPERATION_RETIRED_CHANGED' });
+    expect((await store.claim({ ...claim(late.record, Date.now()), retiredChecked: unsettled.map((record) => record.id) })).dispatch).toBe(true);
+    for (const record of unsettled) await store.settleRetired(record.id);
+    expect(await store.retired(aliased.record.chainId, aliased.record.sender)).toEqual([]);
+  });
   it('rejects changed signatures and changed transaction fields against the immutable signed commitment', async () => {
     const value = await prepare('signed-identity', 3n);
     const input = claim(value.record, Date.now());
@@ -402,6 +450,7 @@ suite('PostgreSQL UserOperation persistence', () => {
     await expect(store.claim(claim(value.record, Date.now()))).rejects.toMatchObject({
       status: 403,
     });
+    await expect(store.retire(bot, value.record.id)).rejects.toMatchObject({ status: 403 });
     expect(await store.get(actor, value.record.id)).toEqual(value.record);
     await expectUnclaimed(value);
   });

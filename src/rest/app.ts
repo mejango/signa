@@ -1391,6 +1391,12 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       202,
     );
   });
+  app.post("/user-operations/:id/retirement", async (context) => {
+    query(context, []);
+    const { input, principal } = await authenticate(context, ["relay"]);
+    object(jsonBody(input), []);
+    return response(context, await userOperations().retire(principal, context.req.param("id"), context.get("restSignal")));
+  });
   app.get("/user-operations/:id", async (context) => {
     // `wait` (seconds, at most 20) holds the answer until the record moves past `since`.
     const params = query(context, ["wait", "since"]);

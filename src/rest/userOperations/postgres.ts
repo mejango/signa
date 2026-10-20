@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import type { Hex } from 'viem';
+import type { Address, Hex } from 'viem';
 import type { RestActor } from '../core.js';
 import { assertRestActorActive } from '../auth/postgres.js';
 import { assertActor, assertText } from '../transactions/store.js';
@@ -26,7 +26,10 @@ import {
   key,
   missing,
   observed,
+  assertRetiredChecked,
+  owns,
   readCursor,
+  retiring,
   same,
   settled,
   type UserOperationClaim,
@@ -203,6 +206,9 @@ export class PostgresUserOperationStore implements UserOperationStore {
       input.now = await databaseNow(client);
       const initial = claimed(record, input, defaultCodec);
       if (!initial.dispatch) return initial;
+      // Serialized with a retirement of the same sender's other approvals by the sender's advisory lock.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`user-operation-sender:${record.chainId}:${record.sender.toLowerCase()}`]);
+      assertRetiredChecked(record, input, await this.retiredIn(client, record.chainId, record.sender));
       await this.currentAuthority(client, dispatchRecord(record, input), input.now);
       await claimPostgresTransport(client, record.planId, record.stepIndexes, 'erc4337', record.id);
       const nonce = BigInt(record.operation.nonce).toString();
@@ -263,6 +269,45 @@ export class PostgresUserOperationStore implements UserOperationStore {
         await client.query('DELETE FROM rest_user_operation_nonces WHERE user_operation_id=$1', [next.id]);
       return this.save(client, next);
     });
+  }
+  async retire(actor: RestActor, id: string) {
+    assertActor(actor);
+    return this.transaction(async (client) => {
+      await assertRestActorActive(client, actor, ['relay'], Math.floor((await databaseNow(client)) / 1000));
+      // The claim's own row lock: whichever of the two commits first, the other sees it.
+      const record = await this.required(client, id);
+      if (!owns(record, actor)) missing();
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`user-operation-sender:${record.chainId}:${record.sender.toLowerCase()}`]);
+      const next = retiring(record);
+      return next.revision === record.revision ? next : this.save(client, next);
+    });
+  }
+  private async retiredIn(client: Pick<PoolClient, 'query'>, chainId: number, sender: Address) {
+    // Across every API account: one Safe can be bound under several, and its nonce is the chain's.
+    const result = await client.query<{ document: UserOperationRecord }>(
+      `SELECT document FROM rest_user_operations WHERE document->>'state'='retired' AND NOT document ? 'retiredSettledAt'
+       AND (document->>'chainId')::bigint=$1 AND lower(document->>'sender')=$2`,
+      [chainId, sender.toLowerCase()],
+    );
+    return result.rows.map((row) => clone(row.document));
+  }
+  async retired(chainId: number, sender: Address) {
+    return this.retiredIn(this.pool, chainId, sender);
+  }
+  async settleRetired(id: string) {
+    await this.transaction(async (client) => {
+      const record = await this.required(client, id);
+      if (record.state !== 'retired' || record.retiredSettledAt !== undefined) return;
+      await this.save(client, { ...record, retiredSettledAt: await databaseNow(client), revision: record.revision + 1 });
+    });
+  }
+  async nonceHolder(chainId: number, sender: Address, nonce: bigint) {
+    const result = await this.pool.query<{ document: UserOperationRecord }>(
+      `SELECT o.document FROM rest_user_operation_nonces n JOIN rest_user_operations o ON o.id=n.user_operation_id
+       WHERE n.chain_id=$1 AND n.sender=$2 AND n.nonce=$3`,
+      [chainId, sender.toLowerCase(), nonce.toString()],
+    );
+    return result.rows[0] ? clone(result.rows[0].document) : undefined;
   }
   async recoverable(limit: number, cursor?: string) {
     assertLimit(limit);

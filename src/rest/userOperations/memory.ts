@@ -1,4 +1,4 @@
-import type { Hex } from 'viem';
+import { toHex, type Address, type Hex } from 'viem';
 import type { RestActor } from '../core.js';
 import { assertActor, assertText, type ActiveActorGuard } from '../transactions/store.js';
 import { MemoryTransportReservations } from '../transactions/transport-reservations.js';
@@ -23,6 +23,8 @@ import {
   owns,
   preparationKey,
   readCursor,
+  assertRetiredChecked,
+  retiring,
   same,
   settled,
   type UserOperationClaim,
@@ -126,6 +128,7 @@ export class MemoryUserOperationStore implements UserOperationStore {
         if (used && used !== input.id) conflict();
         let result = claimed(record, { ...input, now: this.clock() }, defaultCodec);
         if (!result.dispatch) return result;
+        assertRetiredChecked(record, input, this.unsettled(record.chainId, record.sender));
         this.options.assertBindingAndSession(
           dispatchRecord(record, input),
           Math.floor(this.clock() / 1000),
@@ -162,6 +165,30 @@ export class MemoryUserOperationStore implements UserOperationStore {
     if (next.state === 'expired') this.nonces.delete(nonceKey(next));
     this.records.set(id, next);
     return clone(next);
+  }
+  async retire(actor: RestActor, id: string) {
+    return this.authority.withActiveActor(actor, ['relay'], Math.floor(this.clock() / 1000), async () => {
+      const next = retiring(this.required(actor, id));
+      this.records.set(id, next);
+      return clone(next);
+    });
+  }
+  private unsettled(chainId: number, sender: Address) {
+    return [...this.records.values()].filter((record) => record.state === 'retired' && record.retiredSettledAt === undefined &&
+      record.chainId === chainId && same(record.sender, sender));
+  }
+  async retired(chainId: number, sender: Address) {
+    return clone(this.unsettled(chainId, sender));
+  }
+  async settleRetired(id: string) {
+    const record = this.records.get(id);
+    if (record?.state === 'retired' && record.retiredSettledAt === undefined)
+      this.records.set(id, { ...record, retiredSettledAt: this.clock(), revision: record.revision + 1 });
+  }
+  async nonceHolder(chainId: number, sender: Address, nonce: bigint) {
+    const held = this.nonces.get(nonceKey({ chainId, sender, operation: { nonce: toHex(nonce) } }));
+    const record = held && this.records.get(held.id);
+    return record ? clone(record) : undefined;
   }
   async recoverable(limit: number, cursor?: string) {
     assertLimit(limit);

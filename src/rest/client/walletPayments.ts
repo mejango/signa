@@ -22,8 +22,9 @@ export interface CenterWalletPaymentInput {
   operation: PreparedUserOperation;
   expectedPayment: CenterWalletExpectedPayment;
 }
-/** `expired`: published but never included before its signed validity ended; it cannot execute. */
-export type CenterWalletPaymentState = 'reviewing' | 'approved' | 'submitting' | 'pending' | 'confirming' | 'paid' | 'reverted' | 'cancelled' | 'unknown' | 'expired';
+/** `expired`: published but never included before its signed validity ended; it cannot execute.
+ * `refused`: Signa refused to send it and retired the approval; Signa never sends it, and a fresh payment takes its nonce. */
+export type CenterWalletPaymentState = 'reviewing' | 'approved' | 'submitting' | 'pending' | 'confirming' | 'paid' | 'reverted' | 'cancelled' | 'unknown' | 'expired' | 'refused';
 export interface CenterWalletPaymentStatus {
   status: CenterWalletPaymentState;
   accountId: string;
@@ -73,8 +74,8 @@ const maximumBytes = 1_048_576;
 const reviewPath = '/api/v1/wallet/payment-reviews';
 const reviewIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const paymentFields = ['kind', 'chainId', 'account', 'token', 'terminal', 'projectId', 'amount', 'beneficiary', 'minimumReturnedTokens', 'memo', 'metadata'] as const;
-const states = ['reviewing', 'approved', 'submitting', 'pending', 'confirming', 'paid', 'reverted', 'cancelled', 'unknown', 'expired'];
-const terminal = (status: string) => ['paid', 'reverted', 'cancelled', 'expired'].includes(status);
+const states = ['reviewing', 'approved', 'submitting', 'pending', 'confirming', 'paid', 'reverted', 'cancelled', 'unknown', 'expired', 'refused'];
+const terminal = (status: string) => ['paid', 'reverted', 'cancelled', 'expired', 'refused'].includes(status);
 const hex32 = (value: unknown): value is Hex => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value);
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
@@ -179,7 +180,7 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
         v.expiresAtMs > saved.grant.expiresAt * 1000 || v.expiresAtMs > v.createdAtMs + 300_000 ||
         (saved.review && (v.createdAtMs !== saved.review.createdAtMs || v.expiresAtMs !== saved.review.expiresAtMs)) ||
         !['pending', 'approved', 'cancelled'].includes(String(v.status)) ||
-        !['prepared', 'submitting', 'submission_unknown', 'pending', 'unknown', 'confirming', 'confirmed', 'reverted', 'expired'].includes(String(v.operationState))) mismatch();
+        !['prepared', 'submitting', 'submission_unknown', 'pending', 'unknown', 'confirming', 'confirmed', 'reverted', 'expired', 'retired'].includes(String(v.operationState))) mismatch();
       if (v.status === 'approved' ? !integer(v.approvedAtMs) || v.cancelledAtMs !== null : v.approvedAtMs !== null) mismatch();
       if (v.status === 'cancelled' ? !integer(v.cancelledAtMs) : v.cancelledAtMs !== null) mismatch();
       for (const at of [v.approvedAtMs, v.cancelledAtMs])
@@ -308,6 +309,7 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
       if (operation.state === 'reverted' && observation?.state === 'reverted' && canonical &&
         (receipt?.status === 'reverted' || observation.semantic?.status === 'failed')) result = 'reverted';
       if (operation.state === 'expired' && observation?.state === 'expired' && observation.transactionHash === undefined && !receipt) result = 'expired';
+      if (operation.state === 'retired' && !operation.submission && !observation) result = 'refused';
       return save({ ...saved.value, status: result, ...(observation ? { observation } : {}) }, saved.encoded);
     } catch (error) {
       if (error instanceof RestClientError && ['WALLET_PAYMENT_STORAGE_UNAVAILABLE', 'WALLET_PAYMENT_CHANGED'].includes(error.code)) throw error;
@@ -327,9 +329,23 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
       const result = await client.smartAccounts().submitUserOperation(saved.value.operation.id, saved.value.approval!.signature, saved.value.submissionKey);
       return status(receiveOperation(result, saved).value);
     } catch (error) {
-      save({ ...saved.value, status: 'unknown' }, saved.encoded);
+      saved = save({ ...saved.value, status: 'unknown' }, saved.encoded);
+      // Signa answered with a refusal: the approval is retired at once so a fresh payment can be
+      // reviewed, unless a claim won meanwhile, which comes back as that submission. A lost answer
+      // stays unknown: its send may still be under way.
+      if (error instanceof RestClientError && error.status !== undefined && error.status >= 400) await retire(saved).catch(() => undefined);
       throw error;
     }
+  }
+  function retire(saved: Saved): Promise<Saved> {
+    return live(saved.value).client.smartAccounts().retireUserOperation(saved.value.operation.id).then(result => receiveOperation(result, saved));
+  }
+  /** Retires an approved payment Signa has not sent (a refusal, or an answer lost before any send) so a
+   * fresh one can be reviewed: `refused`, or the submission that already claimed it. */
+  async function retirePayment(): Promise<CenterWalletPaymentStatus> {
+    const saved = pending();
+    if (!saved.value.approval || terminal(saved.value.status)) fail('WALLET_PAYMENT_NOT_APPROVED', 'Only an approved payment that has not settled can be retired.');
+    return status((await retire(saved)).value);
   }
   // The revision of the last operation view received here, per operation: a waiting read waits past it.
   const revisions = new Map<string, number>();
@@ -355,7 +371,7 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
           client.smartAccounts().userOperation(saved.value.operation.id),
         ]);
         const reviewed = receiveView(value, saved, true);
-        if (!snapshot(operation).submission) return status(reviewed.value);
+        if (!snapshot(operation).submission && operation.state !== 'retired') return status(reviewed.value);
         return status(receiveOperation(operation, save({ ...reviewed.value, submissionStarted: true, status: 'submitting' }, reviewed.encoded)).value);
       }
       const value = await client.request({ requestTarget: reviewPath + '/' + saved.value.review.id });
@@ -409,5 +425,5 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
       if (storage.getItem(key) !== null) throw new Error();
     } catch { fail('WALLET_PAYMENT_STORAGE_UNAVAILABLE', 'The original payment must be archived before clearing this tab’s pending record.'); }
   }
-  return Object.freeze({ preparePayment, reviewUrl, completePayment, submitPayment, refreshPayment, pendingPayment, clearPayment });
+  return Object.freeze({ preparePayment, reviewUrl, completePayment, submitPayment, refreshPayment, retirePayment, pendingPayment, clearPayment });
 }
