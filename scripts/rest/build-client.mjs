@@ -23,7 +23,7 @@ await writeFile(join(destination, 'node.js'), `import { CenterClient } from './i
 await writeFile(join(destination, 'node.d.ts'), `import { CenterClient, ClientOptions } from './index.js';\nexport declare function connect(filename: string, options?: Pick<ClientOptions, 'fetch' | 'timeoutMs' | 'now'>): Promise<CenterClient>;\n`);
 const packed = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--cache', join(root, '.generated/npm-cache'), '--json', '--pack-destination', join(root, '.generated/rest')], { cwd: destination, encoding: 'utf8' }));
 console.log('Client package:', packed[0].filename);
-// The npm package `@me.jango/center-wallet` is the browser-only connection and payment slice. Both
+// The npm package `@me.jango/signa` is the browser-only connection and payment slice. Both
 // packages keep viem as their only dependency: the SDK's payment-failure decoder is bundled in.
 const walletDestination = join(root, '.generated/rest/wallet-client');
 await mkdir(walletDestination, { recursive: true });

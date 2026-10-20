@@ -12,7 +12,7 @@ describe('published wallet package', () => {
   });
   it('is a browser package with viem as its only dependency and no executable', () => {
     const manifest = JSON.parse(readFileSync(new URL('../wallet-client/package.json', import.meta.url), 'utf8'));
-    expect(manifest.name).toBe('@me.jango/center-wallet');
+    expect(manifest.name).toBe('@me.jango/signa');
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(Object.keys(manifest.dependencies)).toEqual(['viem']);
     expect(manifest.bin).toBeUndefined();

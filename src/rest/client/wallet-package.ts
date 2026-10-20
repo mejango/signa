@@ -1,4 +1,4 @@
-/** Entry for the `@me.jango/center-wallet` npm package: connect a Juicebox Center account to an
+/** Entry for the `@me.jango/signa` npm package: connect a Juicebox Center account to an
  * app and review payments. Bot registration, the CLI and node helpers stay in the full client. */
 export { createCenterWalletClient, type CenterWalletClientOptions, type CenterWalletConnection,
   type CenterWalletPreparedConnection, type CenterWalletStorage } from './wallet.js';

@@ -1,5 +1,5 @@
 {
-  "name": "@me.jango/center-wallet",
+  "name": "@me.jango/signa",
   "version": "0.3.8",
   "description": "Connect a Juicebox Center account to your app and review passkey payments",
   "repository": { "type": "git", "url": "https://github.com/mejango/signa.git", "directory": "wallet-client" },

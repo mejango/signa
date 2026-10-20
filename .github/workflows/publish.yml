@@ -23,7 +23,7 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: npm ci --ignore-scripts && npm --prefix mcp ci --ignore-scripts
       - run: npm run build:mcp && npx tsc && npm run build:client
-      - name: Publish @me.jango/center-wallet when its version is new
+      - name: Publish @me.jango/signa when its version is new
         working-directory: .generated/rest/wallet-client
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
