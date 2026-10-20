@@ -64,6 +64,7 @@ import {
   digest,
   isRecoverable,
   recoveryCursor,
+  retiredFailure,
   type UserOperationRecord,
   type UserOperationStore,
 } from "./store.js";
@@ -489,6 +490,7 @@ export class UserOperationService {
     ]);
     if (ahead) stages.aheadUsed = (await early) ? 1 : 0;
     stage("headMs");
+    await this.retiredNonceFree(actor, binding.wallet.chainId, binding.wallet.address, nonceKey, BigInt(nonce), evidence, signal);
     // Never below the bundler's floor: a cheaper operation is accepted, then waits until it expires.
     const priority = max(uoQuantity(nodePriority, "priority fee"), floor?.maxPriorityFeePerGas ?? 0n);
     const fee = max(uoQuantity(baseFeePerGas, "base fee") * 2n + priority, floor?.maxFeePerGas ?? 0n);
@@ -663,6 +665,25 @@ export class UserOperationService {
     return view;
   }
 
+  /** A retired approval's signed bytes can execute until its validity ends on a canonical head, two
+   * minutes of blocks past it as the expiry proof requires. Until then a fresh operation under the same
+   * nonce key takes that very nonce, so the EntryPoint runs at most one of the two. A head past that
+   * nonce is safe only when Signa's own executed operation holds it; otherwise the retired one may have
+   * run, and nothing is prepared over it. */
+  // ponytail: bytes executed outside Signa after their window ended are only in the chain's history.
+  private async retiredNonceFree(actor: RestActor, chainId: number, sender: Address, key: bigint, nonce: bigint, head: RestBlockEvidence, signal?: AbortSignal) {
+    for (const old of await this.options.store.retired(actor.accountId, chainId, sender, this.now() - 3_600_000)) {
+      const used = BigInt(old.operation.nonce);
+      if (used >> 64n !== key || used === nonce || BigInt(head.timestamp) > BigInt(Math.floor(old.expiresAt / 1000)) + 120n) continue;
+      // Its execution is rechecked against the chain here: a reorged block is no evidence.
+      const held = await this.options.store.nonceHolder(chainId, sender, used);
+      const holder = held && held.id !== old.id ? await this.refresh(held, signal) : undefined;
+      if (holder?.state === "confirmed" || holder?.state === "reverted") continue;
+      fail("USER_OPERATION_RETIRED_NONCE_USED",
+        "An earlier approval's nonce was used before its window ended. Check that payment before paying again.", 409);
+    }
+  }
+
   private session(
     principal: RestPrincipal,
     id: string,
@@ -711,6 +732,7 @@ export class UserOperationService {
       record.chainId,
     );
     if (record.submission) return this.replayed(record, signedCommitment, signal);
+    if (record.state === "retired") retiredFailure();
     const requestAuthority = await this.options.authorizeRequest(
       actor,
       id,
@@ -719,6 +741,19 @@ export class UserOperationService {
     const plan = await this.plan(actor, record.planId, true);
     await this.options.sessions?.assertOwnerPlan(principal, plan);
     return this.dispatch({ actor, principal, record, plan, operation, signedCommitment, key, authority: requestAuthority, signal });
+  }
+
+  /** An approval Signa refused is retired before a fresh one is reviewed: under the claim's own row
+   * lock, so no replica claims it afterwards and no reopened approval page resends it. One a claim
+   * already took comes back as that submission, to be followed instead. */
+  async retire(principal: RestPrincipal, id: string, signal?: AbortSignal) {
+    const actor = actorOf(principal);
+    const record = (await this.options.store.get(actor, id)) ??
+      fail("USER_OPERATION_NOT_FOUND", "UserOperation preparation was not found.", 404);
+    exactActor(actor, record);
+    appOperation(principal, record.chainId, record.session !== undefined);
+    const current = await this.options.store.retire(actor, id);
+    return this.view(current.submission ? await this.refresh(current, signal) : current);
   }
 
   /** The same signed bytes are published once: a second caller carrying them under another
@@ -750,6 +785,7 @@ export class UserOperationService {
     const operation = normalizeUserOperation({ ...record.operation, signature: input.signature });
     const signedCommitment = userOperationCommitment(operation, record.entryPoint, record.chainId);
     if (record.submission) return this.replayed(record, signedCommitment, signal);
+    if (record.state === "retired") retiredFailure();
     const plan = await this.plan(input.actor, record.planId, true);
     return this.dispatch({ actor: input.actor, principal: undefined, record, plan, operation, signedCommitment, key: input.key, authority: input.authority, signal });
   }

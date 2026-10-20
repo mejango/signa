@@ -427,6 +427,10 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin,
     description: "Submit only the complete account signature envelope for the returned operation; all other fields remain immutable. Outside a session, current Safe-owner threshold signatures bind a fresh finite validity window. Inside a session, the installed bot key signs the exact operation and admission rechecks grant, generation and canonical counters. The API request signature is separate in both modes. Nonce and plan transport are reserved before publication. A timeout becomes submission_unknown and never permits an automatic second provider POST.",
     extra: { "x-runtime-capability": "userOperations.relay", "x-signature-schemas": [ref("SafeOwnerUserOperationSigning"), ref("SessionUserOperationSigning")] },
   });
+  add("/user-operations/{id}/retirement", "POST", "retireUserOperation", "Retire an approved operation that was refused before any send", "UserOperations", "relay", {
+    parameters: [pathParameter("id", ref("ResourceId"))], body: object({}), result: ref("UserOperation"), idempotent: true,
+    description: "Under the same lock as the nonce claim, an operation nothing has claimed becomes retired: it is never claimed, sent or approved again, and a fresh operation from the same account takes its nonce while its signed window is open, so at most one of them executes. One a submission already claimed comes back unchanged with that submission; follow it instead.",
+  });
   add("/user-operations/{id}", "GET", "getUserOperation", "Reconcile a stored UserOperation using canonical execution evidence", "UserOperations", "read", {
     parameters: [pathParameter("id", ref("ResourceId"))], result: ref("UserOperation"),
     description: "Refreshes submitted operations. A provider receipt is a location hint; confirmed requires the exact EntryPoint operation and its scoped account-call evidence. Submitted signature bytes remain omitted. Reconcile the source plan for dependency status and distinguish bridge settlement from execution.",

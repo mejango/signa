@@ -32,7 +32,8 @@ export interface UserOperationRecord {
   createdAt: number;
   expiresAt: number;
   revision: number;
-  state: 'prepared' | 'submitting' | 'submission_unknown' | UserOperationObservation['state'];
+  /** `retired`: approved, never sent, and refused for good; nothing claims or resends it. */
+  state: 'prepared' | 'submitting' | 'submission_unknown' | 'retired' | UserOperationObservation['state'];
   submission?: {
     key: string;
     commitment: Hex;
@@ -68,6 +69,12 @@ export interface UserOperationStore {
     observation: UserOperationObservation,
   ): Promise<UserOperationRecord>;
   recoverable(limit: number, cursor?: string): Promise<UserOperationRecord[]>;
+  /** Retires an unsent operation under the claim's lock; one something already claimed comes back as it is. */
+  retire(actor: RestActor, id: string): Promise<UserOperationRecord>;
+  /** The account's retired operations from `sender` on `chainId` that expire after `since`. */
+  retired(accountId: string, chainId: number, sender: Address, since: number): Promise<UserOperationRecord[]>;
+  /** The operation holding the full sender nonce, once one claimed it. */
+  nonceHolder(chainId: number, sender: Address, nonce: bigint): Promise<UserOperationRecord | undefined>;
 }
 
 /** The codec is a trusted pure local dependency; it never calls a bundler. */
@@ -268,6 +275,7 @@ export function claimed(
       conflict();
     return { record: clone(record), dispatch: false };
   }
+  if (record.state === 'retired') retiredFailure();
   if (record.state !== 'prepared' || record.expiresAt <= input.now)
     fail('USER_OPERATION_EXPIRED', 'Prepare a fresh UserOperation before submission.');
   assertDispatchAuthorization(input.authorization, input.now);
@@ -287,6 +295,14 @@ export function claimed(
     }),
     dispatch: true,
   };
+}
+export const retiredFailure = () =>
+  fail('USER_OPERATION_RETIRED', 'This approval was refused and retired. Review a fresh payment.');
+/** An unsent operation becomes retired; a claimed one stays exactly as it is. */
+export function retiring(record: UserOperationRecord): UserOperationRecord {
+  if (record.submission || record.state === 'retired') return clone(record);
+  if (record.state !== 'prepared') conflict();
+  return clone({ ...record, state: 'retired', revision: record.revision + 1 });
 }
 /** Refresh observation evidence without changing the immutable compiled session or operation. */
 export function dispatchRecord(
@@ -355,7 +371,7 @@ export function observed(
     fail('INVALID_USER_OPERATION', 'Reverted execution requires canonical failure evidence.', 400);
   return clone({ ...record, state: observation.state, revision: record.revision + 1, observation });
 }
-export function nonceKey(record: UserOperationRecord): string {
+export function nonceKey(record: Pick<UserOperationRecord, 'chainId' | 'sender'> & { operation: { nonce: Hex } }): string {
   return canonical([
     record.chainId,
     record.sender.toLowerCase(),

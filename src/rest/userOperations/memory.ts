@@ -1,4 +1,4 @@
-import type { Hex } from 'viem';
+import { toHex, type Address, type Hex } from 'viem';
 import type { RestActor } from '../core.js';
 import { assertActor, assertText, type ActiveActorGuard } from '../transactions/store.js';
 import { MemoryTransportReservations } from '../transactions/transport-reservations.js';
@@ -23,6 +23,7 @@ import {
   owns,
   preparationKey,
   readCursor,
+  retiring,
   same,
   settled,
   type UserOperationClaim,
@@ -162,6 +163,22 @@ export class MemoryUserOperationStore implements UserOperationStore {
     if (next.state === 'expired') this.nonces.delete(nonceKey(next));
     this.records.set(id, next);
     return clone(next);
+  }
+  async retire(actor: RestActor, id: string) {
+    return this.authority.withActiveActor(actor, ['relay'], Math.floor(this.clock() / 1000), async () => {
+      const next = retiring(this.required(actor, id));
+      this.records.set(id, next);
+      return clone(next);
+    });
+  }
+  async retired(accountId: string, chainId: number, sender: Address, since: number) {
+    return clone([...this.records.values()].filter((record) => record.actor.accountId === accountId &&
+      record.state === 'retired' && record.chainId === chainId && same(record.sender, sender) && record.expiresAt > since));
+  }
+  async nonceHolder(chainId: number, sender: Address, nonce: bigint) {
+    const held = this.nonces.get(nonceKey({ chainId, sender, operation: { nonce: toHex(nonce) } }));
+    const record = held && this.records.get(held.id);
+    return record ? clone(record) : undefined;
   }
   async recoverable(limit: number, cursor?: string) {
     assertLimit(limit);

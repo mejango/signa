@@ -81,6 +81,12 @@ function fixture() {
       return Response.json(operation);
     }
     if (path === '/api/v1/user-operations/' + f.prepared.id) return Response.json(operation);
+    if (path === '/api/v1/user-operations/' + f.prepared.id + '/retirement') {
+      expect(body).toEqual({});
+      // Retirement takes an unclaimed operation only; a claimed one comes back as it is.
+      if (!operation.submission) operation = { ...structuredClone(f.prepared), state: 'retired', revision: 1 };
+      return Response.json(operation);
+    }
     throw new Error('Unexpected request.');
   }) as typeof fetch;
   const client = new CenterClient({ audience: f.audience, accountId: f.accountId, grantId: f.grant.id, signer: appKey, fetch: transport, now: () => Math.floor(now / 1000) });
@@ -433,11 +439,55 @@ describe('Center browser payment review continuity', () => {
     f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', detail: 'Refused.', payFailure });
     await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
     f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, message: 'https://node.example/key' } });
-    const error = await f.helper().submitPayment().catch((failure: unknown) => failure);
+    const g = fixture(); await g.helper().preparePayment(g.input()); await g.helper().completePayment(g.callback());
+    g.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, message: 'https://node.example/key' } });
+    const error = await g.helper().submitPayment().catch((failure: unknown) => failure);
     expect(error).toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
     expect((error as { payFailure?: unknown }).payFailure).toBeUndefined();
-    // A reason never retires the approval: the payment stays held until Center shows its outcome.
+  });
+
+  it('retires a refused payment at once, so the payer reviews a fresh one right away', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
+    f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
+    // No clock moved: Signa retired the approval under its claim lock, so nothing can send it any more.
+    expect(f.calls.at(-1)!.path).toBe('/api/v1/user-operations/' + f.prepared.id + '/retirement');
+    expect(f.helper().pendingPayment()!.status).toBe('refused');
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'WALLET_PAYMENT_NOT_APPROVED' });
+    f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
+    const history = JSON.parse(f.data.get([...f.data.keys()].find(key => key.endsWith(':history'))!)!);
+    expect(history.at(-1)).toMatchObject({ status: 'refused', operationId: f.prepared.id });
+    expect((await f.helper().preparePayment(f.input())).status).toBe('reviewing');
+  });
+
+  it('follows the submission a claim made before the refusal reached the app, instead of retiring it', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
+    // Another replica claimed and sent the approval while this request was refused.
+    f.observed(f.observedOperation('pending'));
+    f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
+    expect(f.helper().pendingPayment()!.status).toBe('pending');
     expect(() => f.helper().clearPayment()).toThrow(expect.objectContaining({ code: 'WALLET_PAYMENT_UNRESOLVED' }));
+  });
+
+  it('keeps a lost answer unknown, and retires it only when asked', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); f.loseSubmission();
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    expect(f.calls.some(call => call.path.endsWith('/retirement'))).toBe(false);
+    expect(f.helper().pendingPayment()!.status).toBe('unknown');
+    f.observed({ ...structuredClone(f.prepared), state: 'prepared' });
+    expect((await f.helper().refreshPayment()).status).toBe('unknown');
+    expect((await f.helper().retirePayment()).status).toBe('refused');
+    f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
+    await expect(f.helper().retirePayment()).rejects.toMatchObject({ code: 'WALLET_PAYMENT_MISSING' });
+  });
+
+  it('reads an approval whose own send Signa refused and retired as refused', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
+    f.observed({ ...structuredClone(f.prepared), state: 'retired', revision: 1 });
+    expect((await f.helper().refreshPayment()).status).toBe('refused');
+    f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
   });
 
   it('shows a payment reason only while the payment stands reverted', async () => {

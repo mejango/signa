@@ -256,6 +256,29 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
     await new Promise(resolve => setTimeout(resolve, 50)); expect(submissions).toHaveLength(3);
   });
 
+  it("never resends, approves or reviews again an operation retired after Signa refused its approval", async () => {
+    const value = await pendingReview(), submissions: unknown[] = [], operations = new PostgresUserOperationStore(pool);
+    value.store.attachSubmission(async input => { submissions.push(input); return {}; });
+    await value.store.approve(value.view.draft.id, value.assertion);
+    await vi.waitFor(() => expect(submissions).toHaveLength(1));
+    expect((await operations.retire(value.actor, value.record.id)).state).toBe("retired");
+    // The approval page reopened: the same proof again, and a read of the approved review. Neither sends.
+    expect((await value.store.approve(value.view.draft.id, value.assertion)).replayed).toBe(true);
+    expect((await value.store.get(value.view.draft.id)).operationState).toBe("retired");
+    expect((await value.store.getForApp(value.actor, value.view.draft.id)).operationState).toBe("retired");
+    await new Promise(resolve => setTimeout(resolve, 50)); expect(submissions).toHaveLength(1);
+    // A pending review of a retired operation is never approved, and a retired operation gets no new review.
+    const pending = await preparedOperation(value, 120_000, 2n), state = token();
+    const view = await value.store.prepare(value.actor, { operationId: pending.record.id, state }, "review:retire-pending");
+    await operations.retire(value.actor, pending.record.id);
+    const assertion = signGet({ ...value.login.credential, challenge: view.draft.signing.digest, rpId: walletLoginFixtureRpId, origin: issuer, signCount: 3 });
+    await expect(value.store.approve(view.draft.id, assertion)).rejects.toMatchObject({ status: 409 });
+    const unreviewed = await preparedOperation(value, 120_000, 3n);
+    await operations.retire(value.actor, unreviewed.record.id);
+    await expect(value.store.prepare(value.actor, { operationId: unreviewed.record.id, state: token() }, "review:retired")).rejects.toMatchObject({ status: 409 });
+    expect(submissions).toHaveLength(1);
+  });
+
   it("asks the operation's admission checks to run ahead when a review is created and when its page is read, never for a settled review, never failing either", async () => {
     const context = await appContext(30_000), prepared = await preparedOperation(context, 120_000);
     const store = new PostgresWalletPaymentReviewStore(pool, options()), speculations: unknown[] = [];

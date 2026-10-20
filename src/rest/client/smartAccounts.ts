@@ -249,6 +249,10 @@ export class SmartAccountClient {
     );
   }
   /** With `wait`, the answer is held (up to 20 s) until the operation moves past the revision seen. */
+  /** Retires an operation nothing has sent, so it is never claimed or sent again; one already claimed comes back with its submission. */
+  retireUserOperation(operationId: string) {
+    return this.post<PreparedUserOperation>(`/user-operations/${id(operationId)}/retirement`, {});
+  }
   userOperation(operationId: string, wait?: { seconds: number; since: number }) {
     if (wait && (!Number.isInteger(wait.seconds) || wait.seconds < 1 || wait.seconds > 20 || !Number.isInteger(wait.since) || wait.since < 0))
       invalid("Wait 1–20 seconds past a revision already seen.");

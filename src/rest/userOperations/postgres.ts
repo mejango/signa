@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import type { Hex } from 'viem';
+import type { Address, Hex } from 'viem';
 import type { RestActor } from '../core.js';
 import { assertRestActorActive } from '../auth/postgres.js';
 import { assertActor, assertText } from '../transactions/store.js';
@@ -26,7 +26,9 @@ import {
   key,
   missing,
   observed,
+  owns,
   readCursor,
+  retiring,
   same,
   settled,
   type UserOperationClaim,
@@ -263,6 +265,32 @@ export class PostgresUserOperationStore implements UserOperationStore {
         await client.query('DELETE FROM rest_user_operation_nonces WHERE user_operation_id=$1', [next.id]);
       return this.save(client, next);
     });
+  }
+  async retire(actor: RestActor, id: string) {
+    assertActor(actor);
+    return this.transaction(async (client) => {
+      // The claim's own row lock: whichever of the two commits first, the other sees it.
+      const record = await this.required(client, id);
+      if (!owns(record, actor)) missing();
+      const next = retiring(record);
+      return next.revision === record.revision ? next : this.save(client, next);
+    });
+  }
+  async retired(accountId: string, chainId: number, sender: Address, since: number) {
+    const result = await this.pool.query<{ document: UserOperationRecord }>(
+      `SELECT document FROM rest_user_operations WHERE account_id=$1 AND document->>'state'='retired'
+       AND (document->>'chainId')::bigint=$2 AND lower(document->>'sender')=$3 AND (document->>'expiresAt')::bigint>$4`,
+      [accountId, chainId, sender.toLowerCase(), since],
+    );
+    return result.rows.map((row) => clone(row.document));
+  }
+  async nonceHolder(chainId: number, sender: Address, nonce: bigint) {
+    const result = await this.pool.query<{ document: UserOperationRecord }>(
+      `SELECT o.document FROM rest_user_operation_nonces n JOIN rest_user_operations o ON o.id=n.user_operation_id
+       WHERE n.chain_id=$1 AND n.sender=$2 AND n.nonce=$3`,
+      [chainId, sender.toLowerCase(), nonce.toString()],
+    );
+    return result.rows[0] ? clone(result.rows[0].document) : undefined;
   }
   async recoverable(limit: number, cursor?: string) {
     assertLimit(limit);
