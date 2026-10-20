@@ -769,6 +769,7 @@ export class PaymentService {
       warnings.push(
         'The registry-selected gateway takes custody before forwarding to its immutable router. Only failed zero-minimum calls with a valid source-project opt-in can be retained; ordinary failed payments revert. A queued fee is pending, not paid or forgiven.',
       );
+    let explicitMinimum: bigint | undefined;
     for (const spec of hooks) {
       if (spec.noop) continue;
       if (context.tieredHook && same(spec.hook, context.tieredHook)) {
@@ -798,18 +799,37 @@ export class PaymentService {
       const skipSplits = legacy111 ? false : decoded[15];
       if (!same(previewController, context.controller))
         unsupported('The buyback preview names a different controller.');
-      if (amountToMintWith !== 0n || skipSplits)
-        unsupported(
-          'Partial buyback payments and skip-reserved-split metadata need a dedicated quote adapter.',
-        );
+      if (amountToMintWith !== 0n)
+        unsupported('Partial buyback payments need a dedicated quote adapter.');
       if (quoteBasis === 'buyback-hook-indicative-output')
         unsupported('Multiple active buyback pay specifications are not supported.');
       // An active canonical buyback hook returns weight=0: all fungible output
       // comes through this hook. The router may already have normalized its
       // returned counts (even using raw TWAP diagnostics). Replace those counts
       // with this indicative executable quote basis; never add it a second time.
-      beneficiaryTokenCount = decoded[11];
-      reservedTokenCount = decoded[12];
+      if (skipSplits) {
+        // 1.4 hands swapped tokens to the beneficiary with no reserved split and checks an
+        // explicit minimum against the swap plus the beneficiary share of any leftover mint.
+        // Without one, it swaps only above the beneficiary's share of a mint
+        // (tokenCountWithoutHook) and mints the rest; the swap and that mint each round down
+        // once, as the SDK's prepareUserPay allows for.
+        const hasUserSpecifiedQuote = decoded[3];
+        beneficiaryTokenCount = hasUserSpecifiedQuote
+          ? decoded[2]
+          : decoded[5] > 2n
+            ? decoded[5] - 2n
+            : 0n;
+        reservedTokenCount = 0n;
+        if (hasUserSpecifiedQuote) explicitMinimum = decoded[2];
+        warnings.push(
+          hasUserSpecifiedQuote
+            ? 'The payer skips the reserved split on pool buys. The hook reverts unless the beneficiary receives at least the metadata minimum (swap plus any leftover mint), so that minimum is the payment minimum. A leftover mint still goes through the reserved split, so the reserved count shown is a lower bound.'
+            : 'The payer skips the reserved split on pool buys. Without a metadata minimum the hook routes by its TWAP floor; this quote counts only the beneficiary share of a mint, and a leftover mint still goes through the reserved split.',
+        );
+      } else {
+        beneficiaryTokenCount = decoded[11];
+        reservedTokenCount = decoded[12];
+      }
       quoteBasis = 'buyback-hook-indicative-output';
       warnings.push(
         legacy111
@@ -817,7 +837,7 @@ export class PaymentService {
           : 'Buyback output is indicative. Buyback 1.4.0 pay quotes encode three words (amountToSwapWith, minimumSwapAmountOut, skipSplits); two-word quotes revert. A pool failure or swap below the TWAP floor falls back to issuance; the transaction reverts if the final beneficiary balance increase is below its reviewed minimum.',
       );
     }
-    const minimum = slippageFloor(beneficiaryTokenCount, slippage);
+    const minimum = explicitMinimum ?? slippageFloor(beneficiaryTokenCount, slippage);
     if (beneficiaryTokenCount === 0n)
       warnings.push(
         'The verified preview returns zero fungible project tokens for the beneficiary. The payment has a zero minimum and may still transfer funds.',

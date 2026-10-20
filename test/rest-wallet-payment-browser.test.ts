@@ -5,6 +5,8 @@ import { build } from 'esbuild';
 import { chromium, type Browser, type Page, type CDPSession } from 'playwright';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
+import { buildUserPayMetadata } from '@bananapus/nana-sdk-core/v6';
+import type { Hex } from 'viem';
 import type { WalletPaymentCentralPublic } from '../src/rest/wallet/paymentPublic.js';
 import { parseWalletRegistration, type WalletRegistrationCandidate } from '../src/rest/wallet/registration.js';
 import { verifyWalletAssertion } from '../src/rest/wallet/webauthn.js';
@@ -83,7 +85,8 @@ describe('central payment review browser, virtual authenticator', () => {
       safe7579: f.safe7579, payment: f.payment,
       signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
       createdAtMs: f.prepared.createdAt, expiresAtMs: f.prepared.expiresAt, status: 'pending', approvedAtMs: null, cancelledAtMs: null,
-      operationState: 'prepared', passkey: { rpId: 'localhost', credentialId: 'pending', challenge: encode(decode('AA')), userVerification: 'required' } };
+      operationState: 'prepared', passkey: { rpId: 'localhost', credentialId: 'pending', challenge: encode(decode('AA')), userVerification: 'required' },
+      buybackMinimum: null };
     // The HTTP fixture supplies trusted derived review fields; executable-byte checks live in domain tests.
     const context = await browser.newContext({ viewport: { width: 360, height: 780 } });
     page = await context.newPage(); page.setDefaultTimeout(5000);
@@ -142,6 +145,28 @@ describe('central payment review browser, virtual authenticator', () => {
     await page.locator('#payment-return').click(); await expect.poll(() => page.url()).toBe(callback()); expect(errors).toEqual([]);
   });
 
+  it('shows the server-decoded buyback minimum only when it is bound to the metadata and the terminal minimum', async () => {
+    const withMetadata = (metadata: Hex, buybackMinimum: string | null) => {
+      const f = createWalletPaymentClientFixture(Date.now(), metadata);
+      if (!('signedData' in f.prepared.signing)) throw new Error('Fixture must use a passkey owner');
+      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment, buybackMinimum,
+        signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
+        passkey: { ...review.passkey, challenge: encode(Buffer.from(f.prepared.signing.digest.slice(2), 'hex')) } };
+    };
+    const refused = async () => {
+      await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+      expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+    };
+    await load(); expect(await page.locator('#payment-buyback').textContent()).toBe('None');
+    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }), '5'); await load();
+    expect(await page.locator('#payment-buyback').textContent()).toBe('Requests pool buys without the reserved split (hooks older than 1.4 ignore this). Pool minimum: 5 project tokens (base units), covered by the minimum above.');
+    withMetadata(buildUserPayMetadata({ chainId: 8453 }), '0'); await load();
+    expect(await page.locator('#payment-buyback').textContent()).toBe('Requests pool buys without the reserved split (hooks older than 1.4 ignore this).');
+    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }), '4'); await refused();
+    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }), null); await refused();
+    withMetadata('0x', '0'); await refused();
+    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }), '6'); await refused();
+  });
   it('cancels the native prompt without approving and permits another explicit click', async () => {
     await load(); await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: false });
     await page.locator('#payment-approve').click(); await status('authenticating');

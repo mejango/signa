@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NATIVE_TOKEN, jbMultiTerminalAbi } from '@bananapus/nana-sdk-core';
+import {
+  NATIVE_TOKEN,
+  createHookMetadata,
+  hookMetadataId,
+  jbMultiTerminalAbi,
+} from '@bananapus/nana-sdk-core';
 import {
   build721PayMetadata,
   buildBuybackCashOutMetadata,
@@ -201,7 +206,12 @@ function fixture(
 }
 
 function payHookMetadata(
-  overrides: { beneficiaryCount?: bigint; skipSplits?: boolean; partialMint?: bigint } = {},
+  overrides: {
+    beneficiaryCount?: bigint;
+    skipSplits?: boolean;
+    partialMint?: bigint;
+    explicit?: boolean;
+  } = {},
 ): Hex {
   return encodeAbiParameters(
     parseAbiParameters(
@@ -211,7 +221,7 @@ function payHookMetadata(
       false,
       overrides.partialMint ?? 0n,
       300n,
-      false,
+      overrides.explicit ?? false,
       controller,
       200n,
       1n,
@@ -700,11 +710,63 @@ describe('payment quotes and approval plans', () => {
             hook: buybackHook,
             noop: false,
             amount: 100n,
-            metadata: payHookMetadata({ skipSplits: true }),
+            metadata: payHookMetadata({ skipSplits: true, partialMint: 1n }),
           },
         ],
       }).service.preparePay(payInput),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_CONFIGURATION' });
+  });
+
+  it('plans a skipSplits payment at the payer metadata minimum, or the beneficiary mint share without one', async () => {
+    // The pay card's request (SDK buildUserPayMetadata): the registry's (0, minimum, skipSplits).
+    const request = (minimum: bigint) =>
+      createHookMetadata(
+        [hookMetadataId(registry, 'pay')],
+        [encodeAbiParameters(parseAbiParameters('uint256,uint256,bool'), [0n, minimum, true])],
+      ) as Hex;
+    const skipping = (explicit: boolean, slippageBps = 100, noop = false) =>
+      fixture({
+        dataHook: registry,
+        beneficiaryCount: noop ? 400n : 0n,
+        payHooks: [
+          {
+            hook: buybackHook,
+            noop,
+            amount: noop ? 0n : 100n,
+            metadata: payHookMetadata({ skipSplits: true, explicit }),
+          },
+        ],
+      }).service.preparePay({ ...payInput, slippageBps, metadata: request(explicit ? 300n : 0n) });
+    const explicit = await skipping(true);
+    expect(
+      decodeFunctionData({ abi: jbMultiTerminalAbi, data: explicit.calls[0]!.data }).args?.[6],
+    ).toBe(request(300n));
+    expect(explicit.summary).toMatchObject({
+      beneficiaryTokenCount: '300',
+      reservedTokenCount: '0',
+      minimumBeneficiaryTokenCount: '300',
+    });
+    expect(
+      decodeFunctionData({ abi: jbMultiTerminalAbi, data: explicit.calls[0]!.data }).args?.[4],
+    ).toBe(300n);
+    expect(explicit.warnings.join(' ')).toContain('skips the reserved split');
+    const derived = await skipping(false);
+    expect(derived.summary).toMatchObject({
+      beneficiaryTokenCount: '198',
+      minimumBeneficiaryTokenCount: '196',
+    });
+    // The swap and the leftover mint each round down once, so even zero slippage keeps two units.
+    expect((await skipping(false, 0)).summary).toMatchObject({
+      minimumBeneficiaryTokenCount: '198',
+    });
+    expect((await skipping(true, 0)).summary).toMatchObject({
+      minimumBeneficiaryTokenCount: '300',
+    });
+    // A noop spec leaves the payment on the mint path: the terminal's own preview counts.
+    expect((await skipping(false, 100, true)).summary).toMatchObject({
+      beneficiaryTokenCount: '400',
+      minimumBeneficiaryTokenCount: '396',
+    });
   });
 
   it('checks registry forwarding targets even when the outer call goes directly to the canonical router', async () => {

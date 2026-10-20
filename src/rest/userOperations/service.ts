@@ -1,6 +1,6 @@
 import type {UserOperationSponsorRoutes} from './sponsorRoutes.js';
 import { randomUUID } from "node:crypto";
-import { toHex, type Address, type Hex } from "viem";
+import { decodeFunctionData, toHex, type Address, type Hex } from "viem";
 import { detachedFromRequest } from "../context.js";
 import type { RestPrincipal } from "../auth/store.js";
 import {
@@ -50,7 +50,8 @@ import {
   userOperationCommitment,
 } from "./codec.js";
 import { observeUserOperation } from "./execution.js";
-import { walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
+import { terminalAbi, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
+import { passkeyPayMinimumOf } from "./userPayMetadata.js";
 import { UserOperationProvider } from "./provider.js";
 import { createSessionGasEstimation } from "./estimation.js";
 import { passkeyDummySignature, passkeyEstimateProvider } from "./passkeyEstimation.js";
@@ -223,6 +224,26 @@ export class UserOperationService {
       ...(signal ? { signal } : {}),
     });
   }
+  /** Every selected call that pays the reviewed token through the reviewed terminal carries only
+   * metadata a payment review admits, whatever the plan is labeled and whichever path prepares
+   * or submits it. */
+  private passkeyPayMetadata(plan: StoredPlan, stepIndexes: readonly number[]): void {
+    const config = this.options.v6UsdcPayment;
+    if (!config) return;
+    for (const index of stepIndexes) {
+      const call = plan.draft.calls[index];
+      if (!call || call.chainId !== config.chainId || !same(call.to, config.directV6Terminal)) continue;
+      let args: readonly unknown[] | undefined;
+      try {
+        const decoded = decodeFunctionData({ abi: terminalAbi, data: call.data as Hex });
+        if (decoded.functionName === "pay") args = decoded.args;
+      } catch { continue; }
+      if (!args || !same(args[1] as string, config.token)) continue;
+      try { passkeyPayMinimumOf(args[6] as string, args[4] as bigint); }
+      catch { fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries only empty or pay-card buyback metadata, under a terminal minimum at least its own.", 422); }
+    }
+  }
+
   private policy(chainId: number) {
     return (
       this.options.policies.find((p) => p.chainId === chainId) ??
@@ -412,6 +433,7 @@ export class UserOperationService {
     const passkeyProfile = userOperationPasskeyProfile(binding, manifest);
     if (passkeyProfile && input.sessionId)
       fail("USER_OPERATION_PASSKEY_SESSION_UNAVAILABLE", "The passkey pilot requires fresh owner approval for every operation.", 422);
+    if (passkeyProfile) this.passkeyPayMetadata(plan, input.stepIndexes);
     const policy = this.policy(binding.wallet.chainId);
     if (input.sessionId && input.sponsorAuthorization !== undefined)
       fail('SPONSOR_OWNER_REQUIRED', 'Application sponsorship requires fresh owner approval.', 403);
@@ -825,6 +847,7 @@ export class UserOperationService {
     const passkeyProfile = userOperationPasskeyProfile(binding, manifest);
     if (passkeyProfile && record.session)
       fail("USER_OPERATION_PASSKEY_SESSION_UNAVAILABLE", "The passkey pilot requires fresh owner approval for every operation.", 422);
+    if (passkeyProfile) this.passkeyPayMetadata(plan, record.stepIndexes);
     let sessionObservationHash: Hex | undefined;
     let validAfter = Math.floor(record.createdAt / 1000),
       validUntil = Math.floor(record.expiresAt / 1000);

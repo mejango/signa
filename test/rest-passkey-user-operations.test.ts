@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { decodeAbiParameters, decodeFunctionData, encodeFunctionResult, keccak256, parseAbi, size, sliceHex, toHex, type Address, type Hex } from "viem";
+import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, encodeFunctionResult, erc20Abi, keccak256, parseAbi, size, sliceHex, toHex, type Address, type Hex } from "viem";
+import { buildUserPayMetadata } from "@bananapus/nana-sdk-core/v6";
 import { MemoryAccountStore } from "../src/rest/auth/memory.js";
 import type { RestPrincipal } from "../src/rest/auth/store.js";
 import { privateKeyToAccount } from "viem/accounts";
@@ -22,6 +23,8 @@ import type { UserOperationGasEstimate, UserOperationGasPolicy, UserOperationV07
 import { account, binding, entryPoint, h, owner, ownerKey, plan, safe, target } from "./fixtures/user-operations.js";
 
 const signer = "0x4444444444444444444444444444444444444444" as Address;
+const usdc = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as Address;
+const payAbi = parseAbi(["function pay(uint256 projectId,address token,uint256 amount,address beneficiary,uint256 minReturnedTokens,string memo,bytes metadata) payable returns(uint256)"]);
 const code = "0x6000" as Hex;
 let now = 1_800_000_000_000;
 const legacy1271 = parseAbi(["function isValidSignature(bytes data, bytes signature) view returns(bytes4)"]);
@@ -34,7 +37,7 @@ const gas: UserOperationGasPolicy = {
 
 // Real service, storage, codecs and EOA signatures; RPC/provider I/O is synthetic here.
 // The separate pinned-Anvil suite establishes actual passkey/FCL execution compatibility.
-async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint } = {}) {
+async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint; paymentMetadata?: Hex; paymentLabel?: string } = {}) {
   const apiAccount = account(now, 8453);
   if (!options.legacy) { apiAccount.id = `eip155:8453:${safe}`; apiAccount.ownerAddress = safe; }
   const actor = owner(apiAccount), wallet = binding(apiAccount, now);
@@ -83,6 +86,18 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
   const preparedPlan = plan("passkey-plan", actor, wallet, now);
   preparedPlan.smartAccount!.chainId = 8453;
   for (const call of preparedPlan.draft.calls) call.chainId = 8453;
+  if (options.paymentMetadata !== undefined) {
+    // A full Base USDC pay through the reviewed terminal: exact approval, then pay.
+    const project = { chainId: 8453, projectId: "7", version: 6 as const };
+    preparedPlan.draft = { operation: options.paymentLabel ?? "pay", account: safe, project, evidence: [], warnings: [], calls: [
+      { chainId: 8453, to: usdc, value: "0", label: "Approve", dependsOn: [], decoded: {},
+        data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [target, 1_000_000n] }) },
+      { chainId: 8453, to: target, value: "0", label: "Pay", dependsOn: [0], decoded: {},
+        data: encodeFunctionData({ abi: payAbi, functionName: "pay", args: [7n, usdc, 1_000_000n, safe, 5n, "", options.paymentMetadata] }) },
+    ], summary: { operation: "pay", project, account: safe, terminal: target, terminalPath: [target], routerGateway: null, route: "multi-terminal",
+      payment: { token: usdc, amount: "1000000", unit: "token-base-units" }, beneficiary: safe, minimumBeneficiaryTokenCount: "5", metadata: options.paymentMetadata } };
+    preparedPlan.steps = [{ index: 0, state: "waiting" }, { index: 1, state: "waiting" }];
+  }
   await transactionStore.create(preparedPlan, { key: "plan", requestHash: h("plan"), operation: "fixture" }, now);
   const store = new MemoryUserOperationStore(actorGuard, transports, {
     now: () => now, assertBindingAndSession: (record, clock) => assertPlan(record, preparedPlan, clock * 1000),
@@ -173,8 +188,9 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
     currentBinding, currentBindingAt, manifestFor: () => manifest, manifestForPlan: () => manifest,
     verifyHistoricalAccount: async () => {}, semanticVerifier: { verify: async () => ({ status: "verified" }) },
     now: () => now, authorizeRequest: async () => ({ issuedAt: now / 1000, expiresAt: now / 1000 + 60 }),
+    ...(options.paymentMetadata !== undefined ? { v6UsdcPayment: { chainId: 8453 as const, token: usdc, directV6Terminal: target } } : {}),
   });
-  const prepare = (extra = {}) => service.prepare(principal, { planId: preparedPlan.id, stepIndexes: [0], ...extra }, "prepare", h("prepare"));
+  const prepare = (extra = {}) => service.prepare(principal, { planId: preparedPlan.id, stepIndexes: options.paymentMetadata !== undefined ? [0, 1] : [0], ...extra }, "prepare", h("prepare"));
   const signature = (view: Awaited<ReturnType<typeof prepare>>, body: Hex = "0x1234") => encodeSafe7579PasskeyOwnerSignature({
     validAfter: String(view.createdAt / 1000), validUntil: String(view.expiresAt / 1000), signatures: [{ kind: "contract", owner: signer, signature: body }],
   });
@@ -259,6 +275,14 @@ describe("app UserOperation owner boundary", () => {
     await expect(f.service.submit(f.principal, view.id, signature, "submit"))
       .rejects.toMatchObject({ code: variant === "session" ? "USER_OPERATION_APP_SESSION_UNAVAILABLE" : "USER_OPERATION_APP_CHAIN_UNAVAILABLE" });
     expect(f.state.sends).toBe(1);
+  });
+
+  it("prepares a passkey pay only with empty or pay-card buyback metadata", async () => {
+    for (const metadata of ["0x", buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n })] as Hex[])
+      expect((await (await fixture({ paymentMetadata: metadata })).prepare()).state).toBe("prepared");
+    for (const options of [{ paymentMetadata: "0x1234" as Hex }, { paymentMetadata: "0x1234" as Hex, paymentLabel: "contract_calls" },
+      { paymentMetadata: buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }) }])
+      await expect((await fixture(options)).prepare()).rejects.toMatchObject({ code: "USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED" });
   });
 
   it("rejects a non-Base app plan before account/provider work", async () => {

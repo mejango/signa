@@ -9,7 +9,7 @@ export function paymentProjectionFixture(): WalletPaymentReviewAppView {
       authority:{accountId:'eip155:8453:0x0000000000000000000000000000000000000003',credential:{rpId:'wallet.example.test',credentialId:'selected-credential',userHandle:'private-user-handle',publicKey:{x:'private-x',y:'private-y'}},authorityEpoch:'private-authority-epoch',bindingId:'private-binding-id'},
       planId:'plan-id',planCommitment:'plan-commitment',operationId:'operation-id',operationCommitment:'operation-commitment',operationHash:'operation-hash',
       stepIndexes:[0,1],operation:{sender:'wallet-address',callData:'exact-call-data'},chainId:8453,entryPoint:'entry-point',safe7579:'adapter',
-      payment:{amount:'1000000',beneficiary:'recipient',projectId:'1'},signing:{digest:`0x${'ab'.repeat(32)}`,signedData:'safe-op-preimage',validAfter:'10',validUntil:'20'},
+      payment:{amount:'1000000',beneficiary:'recipient',projectId:'1',minimumReturnedTokens:'5',metadata:'0x'},signing:{digest:`0x${'ab'.repeat(32)}`,signedData:'safe-op-preimage',validAfter:'10',validUntil:'20'},
       createdAtMs:10_000,expiresAtMs:20_000,ceremony:{id:'private-ceremony',challenge:'private-random-challenge'} },
     status:'approved',approvedAtMs:12_000,cancelledAtMs:null,operationState:'prepared',approval:{signature:'0x1234',signedCommitment:'0x4321'},
   } as unknown as WalletPaymentReviewAppView;

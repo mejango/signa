@@ -1,7 +1,8 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 
-await build({
+/** The browser bundles Center serves; test/rest-web-bundle-budget.test.ts holds their size budgets. */
+export const webBuildOptions = {
   absWorkingDir: fileURLToPath(new URL("../../", import.meta.url)),
   entryPoints: {
     "wallet-recovery": "src/rest/web/walletRecoveryJourney.ts",
@@ -20,4 +21,6 @@ await build({
   minify: true,
   sourcemap: false,
   legalComments: "eof",
-});
+};
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) await build(webBuildOptions);

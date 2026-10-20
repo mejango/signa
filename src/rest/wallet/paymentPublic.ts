@@ -2,6 +2,7 @@ import type { WalletPaymentReviewView, WalletPaymentReviewAppView } from './paym
 import type { Address, Hex } from 'viem';
 import type { UserOperationV07 } from '../userOperations/types.js';
 import type { WalletV6UsdcPayment } from '../userOperations/semantics.js';
+import { passkeyPayMinimumOf } from '../userOperations/userPayMetadata.js';
 
 export interface WalletPaymentReviewPublic {
   version: 'center-wallet-payment-review-v1';
@@ -34,6 +35,8 @@ export interface WalletPaymentAppPublic extends WalletPaymentReviewPublic {
 }
 export interface WalletPaymentCentralPublic extends WalletPaymentReviewPublic {
   passkey: { rpId: string; credentialId: string; challenge: string; userVerification: 'required' };
+  /** The pay-card metadata's buyback minimum, decoded here so the page does not bundle the SDK; `null` for empty metadata. */
+  buybackMinimum: string | null;
 }
 
 /** Project an already validated durable review. No internal authority or credential document
@@ -55,5 +58,6 @@ export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView):
   const d = view.draft;
   return { ...publicWalletPaymentReview(view), passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId,
-    challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' } };
+    challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' },
+    buybackMinimum: passkeyPayMinimumOf(d.payment.metadata, BigInt(d.payment.minimumReturnedTokens))?.toString() ?? null };
 }
