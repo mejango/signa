@@ -667,13 +667,14 @@ function renderDevice() {
 async function deviceBegin() {
   setStatus("checking", "Preparing a link for the other device…");
   // The QR code is drawn by its own bundle, fetched alongside the link (most visitors only sign in).
-  const qr = lazyModule<typeof Qr>("wallet-qr");
+  // A failed load is handled here at once, so it never surfaces as an unhandled rejection, whatever the request below does.
+  const qr = lazyModule<typeof Qr>("wallet-qr").catch(() => null);
   const result = record(await request(`${base}/devices/begin`, { passkeyName: null }, csrf, 60_000)), view = record(result.view) as unknown as DeviceView, link = string(result.link, 4096);
   if (!link.startsWith(`${location.origin}${base}/add#`)) throw new InvalidResponse();
   device = { view, link };
   const anchor = element<HTMLAnchorElement>("wallet-device-link"); anchor.href = link; anchor.textContent = "Open the link on this device instead";
   // The code is drawn when its bundle arrives; until then, or if it never does, the link works on its own.
-  qr.then(({ qrSvg }) => { if (device?.link === link) element("wallet-device-code").innerHTML = qrSvg(link, "Link for the other device"); }, () => {});
+  void qr.then(module => { if (module && device?.link === link) element("wallet-device-code").innerHTML = module.qrSvg(link, "Link for the other device"); });
   setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
 async function devicePoll() {

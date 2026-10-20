@@ -105,6 +105,20 @@ describe("served device pages", () => {
     await expect.poll(() => fallback.locator("#wallet-status").textContent()).toContain("Waiting for the other device");
     expect(await fallback.locator("#wallet-device-code svg").count()).toBe(0);
     await fallback.close();
+    // A failed bundle shows the same link and raises no page error.
+    const failed = await account.newPage(), failedErrors: string[] = []; failed.on("pageerror", error => failedErrors.push(String(error)));
+    // The link request is held until the bundle has failed, so the failure lands while it is pending.
+    let qrFailed!: () => void; const qrFailure = new Promise<void>(resolve => { qrFailed = resolve; });
+    await failed.route("**/wallet/assets/wallet-qr.js", async route => { await route.abort(); setTimeout(qrFailed, 200); });
+    await failed.route("**/wallet/devices/begin", async route => { await qrFailure; await route.continue(); });
+    await failed.goto(`${origin}/wallet`);
+    await expect.poll(() => failed.locator("#wallet-device-add").isVisible()).toBe(true);
+    await failed.locator("#wallet-device-add").click();
+    await expect.poll(() => failed.locator("#wallet-device-link").getAttribute("href")).toBe(`${origin}/wallet/add#${link}`);
+    await expect.poll(() => failed.locator("#wallet-status").textContent()).toContain("Waiting for the other device");
+    expect(await failed.locator("#wallet-device-code svg").count()).toBe(0);
+    expect(failedErrors).toEqual([]);
+    await failed.close();
     expect(await accountPage.locator("#wallet-device-link").getAttribute("href")).toBe(`${origin}/wallet/add#${link}`);
     expect(await accountPage.locator("#wallet-status").textContent()).toContain("Waiting for the other device");
 
