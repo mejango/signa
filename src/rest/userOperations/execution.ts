@@ -309,17 +309,19 @@ export async function observeUserOperation(
     logs: [],
   };
   await chain.canonical(evidence);
-  if (status === 0n)
+  if (status === 0n) {
+    // The whole bundle rolled back, nonce included: the signed operation can be bundled again until
+    // its validity ends, so only the expiry proof finishes it and frees its nonce.
+    const late = await unincluded("The entire EntryPoint bundle reverted; the operation can still be included until its validity ends.", head);
+    if (late.state === "expired") return late;
     return {
-      ...base,
+      ...late,
       transactionHash,
       receipt,
-      state: confirmations >= options.confirmations ? "reverted" : "confirming",
-      semantic: {
-        status: "failed",
-        details: "The entire EntryPoint bundle reverted.",
-      },
+      state: late.state === "unknown" ? "unknown" : "confirming",
+      semantic: { status: "failed", details: "The entire EntryPoint bundle reverted." },
     };
+  }
   const events: {
     position: number;
     hash: Hex;

@@ -18,7 +18,7 @@ import { MemoryUserOperationStore } from "../src/rest/userOperations/memory.js";
 import { passkeyDummyContractSignature, passkeyDummySignature, passkeyEstimateProvider, PASSKEY_MAX_SIGNATURE_BYTES } from "../src/rest/userOperations/passkeyEstimation.js";
 import { UserOperationProvider } from "../src/rest/userOperations/provider.js";
 import { UserOperationService } from "../src/rest/userOperations/service.js";
-import { assertPlan } from "../src/rest/userOperations/store.js";
+import { assertPlan, retiring } from "../src/rest/userOperations/store.js";
 import type { UserOperationGasEstimate, UserOperationGasPolicy, UserOperationV07 } from "../src/rest/userOperations/types.js";
 import { account, binding, entryPoint, h, owner, ownerKey, plan, safe, target } from "./fixtures/user-operations.js";
 
@@ -863,6 +863,21 @@ describe("retiring a refused approval", () => {
     const { f, old } = await executedReplacement("success");
     expect(BigInt((await prepareAs(f, "after")).operation.nonce)).toBe(1n);
     expect((await f.store.get(f.actor, old.id))!.retiredSettledAt).toBeDefined();
+  });
+
+  it("never retires a session operation, which no signed deadline would settle", async () => {
+    const f = await fixture(), old = await f.prepare();
+    const record = (await f.store.get(f.actor, old.id))!;
+    expect(() => retiring({ ...record, session: {} as NonNullable<typeof record.session> })).toThrow(expect.objectContaining({ code: "USER_OPERATION_NOT_RETIRABLE" }));
+  });
+
+  it("lets a fresh payment take the nonce once a replacement whose whole bundle reverted has expired", async () => {
+    const f = await fixture({ steps: 3 }), old = await f.prepare();
+    await f.service.retire(f.principal, old.id);
+    const replacement = await prepareAs(f, "replacement", [1]);
+    const submitted = await f.service.submit(f.principal, replacement.id, f.signature(replacement), "submit");
+    await f.store.observe(replacement.id, submitted.revision, { state: "expired", operationHash: replacement.operationHash });
+    expect(BigInt((await prepareAs(f, "after", [2])).operation.nonce)).toBe(0n);
   });
 
   it("asks to wait while the payment that took a retired approval's nonce is still confirming", async () => {

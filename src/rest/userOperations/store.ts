@@ -313,6 +313,8 @@ export const retiredFailure = () =>
 export function retiring(record: UserOperationRecord): UserOperationRecord {
   if (record.submission || record.state === 'retired') return clone(record);
   if (record.state !== 'prepared') conflict();
+  // A session signature has no signed deadline, so expiry could never settle it.
+  if (record.session) fail('USER_OPERATION_NOT_RETIRABLE', 'Only an owner-approved operation can be retired.', 409);
   return clone({ ...record, state: 'retired', revision: record.revision + 1 });
 }
 /** Refresh observation evidence without changing the immutable compiled session or operation. */
