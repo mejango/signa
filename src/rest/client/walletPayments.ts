@@ -1,5 +1,6 @@
 import { sha256, stringToHex, type Hex } from 'viem';
-import { RestClientError, newRequestNonce, payFailureOf } from './index.js';
+import { RestClientError, newRequestNonce } from './index.js';
+import { payFailureOf } from './payFailure.js';
 import type { CenterClient } from './center.js';
 import { assertReviewedOperation, type PreparedUserOperation, type SmartWalletPlan } from './smartAccounts.js';
 import type { CenterWalletStorage } from './wallet.js';
@@ -36,7 +37,7 @@ export interface CenterWalletPaymentStatus {
   /** An observed outer transaction identifier, never an alias for operationHash. */
   transactionHash?: Hex;
   observation?: UserOperationObservation;
-  /** Why a reverted payment reverted, when its trace says: the payer can adjust the minimum and retry. */
+  /** Why this payment reverted, when its trace says; shown only while it stands reverted. Advisory: a changed minimum needs a fresh preparation and review. */
   payFailure?: PayFailure;
 }
 /** Internal composition used by wallet.payments(). No owner or app private key crosses this seam. */

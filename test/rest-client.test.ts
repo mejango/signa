@@ -11,6 +11,7 @@ import {
   REST_AUTH_HEADERS as H, verifyBotProof, verifyRequestSignature, type SignedRequestInput,
 } from "../src/rest/auth/index.js";
 import { accountsPage } from "../src/rest/web/page.js";
+import { CenterClient } from "../src/rest/client/center.js";
 import type { BotScope } from "../src/rest/auth/store.js";
 
 const owner = privateKeyToAccount(`0x${"01".padStart(64, "0")}`);
@@ -164,11 +165,15 @@ describe("signed REST client request binding", () => {
 
   it("keeps a served payment failure reason in its exact shape, and nothing else", async () => {
     const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "This payment would get fewer tokens than your minimum, so lower your minimum or try again." };
-    const served = (body: unknown) => new SignedRestClient({ ...config, fetch: async () => Response.json(body, { status: 502 }) })
+    const served = (body: unknown, reader = true) => (reader
+      ? new CenterClient({ ...config, fetch: async () => Response.json(body, { status: 502 }) })
+      : new SignedRestClient({ ...config, fetch: async () => Response.json(body, { status: 502 }) }))
       .request({ requestTarget: "/api/v1/accounts/me" }).then(() => undefined, (error: { payFailure?: unknown }) => error);
     const refused = await served({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure });
     expect(refused).toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure });
     expect((await served({ code: "X", payFailure: { ...payFailure, detail: "https://node.example/key" } }))?.payFailure).toBeUndefined();
+    // A bare signed client, as the served pages use it, reads no reason.
+    expect((await served({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure }, false))?.payFailure).toBeUndefined();
   });
 });
 
