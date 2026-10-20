@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * account page approves with its passkey, and both pages finish. */
 describe("served device pages", () => {
   let server: Server, browser: Browser, origin: string;
+  let qrScript: string, qrRequests = 0;
   let accountScript: string, deviceScript: string, accountHtml: string, deviceHtml: string, css: string;
   const encode = (value: Buffer) => value.toString("base64url");
   const csrf = encode(Buffer.alloc(32, 9)), walletAddress = `0x${"03".repeat(20)}`, link = encode(Buffer.alloc(32, 21));
@@ -26,6 +27,8 @@ describe("served device pages", () => {
   beforeAll(async () => {
     const bundle = async (entry: string) => (await build({ entryPoints: [new URL(entry, import.meta.url).pathname], bundle: true, platform: "browser", format: "esm", target: "es2022", write: false })).outputFiles[0]!.text;
     accountScript = await bundle("../src/rest/web/wallet.ts"); deviceScript = await bundle("../src/rest/web/walletDevice.ts");
+    // The account page draws the device link's QR code with its own bundle, from the URL the page names.
+    qrScript = await bundle("../src/rest/web/qr.ts");
     const pages = await import("../src/rest/web/walletPage.js"), devicePage = await import("../src/rest/web/walletDevicePage.js");
     accountHtml = pages.walletPage(); css = pages.walletCss(); deviceHtml = devicePage.walletDevicePage();
     server = createServer(async (request, response) => {
@@ -35,6 +38,7 @@ describe("served device pages", () => {
       if (path === "/wallet") return html(accountHtml);
       if (path === "/wallet/add") return html(deviceHtml);
       if (path === "/wallet/assets/wallet.js") { response.writeHead(200, { "content-type": "text/javascript" }); return response.end(accountScript); }
+      if (path === "/wallet/assets/wallet-qr.js") { qrRequests++; response.writeHead(200, { "content-type": "text/javascript" }); return response.end(qrScript); }
       if (path === "/wallet/assets/wallet-device.js") { response.writeHead(200, { "content-type": "text/javascript" }); return response.end(deviceScript); }
       if (path.endsWith(".css")) { response.writeHead(200, { "content-type": "text/css" }); return response.end(css); }
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -87,8 +91,10 @@ describe("served device pages", () => {
     const errors: string[] = []; accountPage.on("pageerror", error => errors.push(String(error)));
     await accountPage.goto(`${origin}/wallet`);
     await expect.poll(() => accountPage.locator("#wallet-device-add").isVisible()).toBe(true);
+    expect(qrRequests).toBe(0);
     await accountPage.locator("#wallet-device-add").click();
     await expect.poll(() => accountPage.locator("#wallet-device-code svg").count()).toBe(1);
+    expect(qrRequests).toBe(1);
     expect(await accountPage.locator("#wallet-device-link").getAttribute("href")).toBe(`${origin}/wallet/add#${link}`);
     expect(await accountPage.locator("#wallet-status").textContent()).toContain("Waiting for the other device");
 

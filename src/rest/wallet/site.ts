@@ -37,6 +37,8 @@ export interface WalletSiteOptions {
   /** Mount path of the wallet pages: (base || '/') beside other routes, '' on a dedicated host. */
   basePath?: string;
   browserScript: string;
+  /** The QR code the signed-in page draws when adding a device (wallet-qr.js). */
+  qrScript?: string;
   paymentBrowserScript?: string;
   signup?: WalletSignupSiteOptions['signup'];
   signupBrowserScript?: string;
@@ -266,6 +268,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   app.get(base || '/', landing);
   if (base) app.get(`${base}/`, landing);
   const assets = mountAssets(app, base, { 'wallet.js': browserScript, 'wallet.css': walletCss(),
+    ...(options.qrScript ? { 'wallet-qr.js': options.qrScript } : {}),
     ...(options.payments && options.paymentBrowserScript ? { 'wallet-payment.js': options.paymentBrowserScript, 'wallet-payment.css': walletPaymentCss() } : {}) });
   app.get(`${base}/assets/favicon.svg`, c => c.body(FAVICON_SVG, 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' }));
   app.get(`${base}/config`, async c => {

@@ -580,7 +580,7 @@ export async function createRestRuntime(options: {
   const walletSite = wallet ? createWalletSite({ origin: wallet.origin, audience: auth.audience, ...(options.wallet?.legacyOrigins ? { legacyOrigins: options.wallet.legacyOrigins } : {}),
     ...(options.wallet?.frameableAppOrigins ? { frameableAppOrigins: options.wallet.frameableAppOrigins } : {}),
     ...(options.wallet?.basePath !== undefined ? { basePath: options.wallet.basePath } : {}),
-    browserScript: assets.walletScript, login: wallet.login, policy: wallet.policy,
+    browserScript: assets.walletScript, qrScript: assets.walletQrScript, login: wallet.login, policy: wallet.policy,
     handoff: wallet.handoff, refresh: wallet.refresh,
     ...(walletPayments ? { payments: walletPayments, paymentBrowserScript: assets.walletPaymentScript } : {}),
     ...(wallet.signup || wallet.recovery ? { recoveryKitScript: assets.walletRecoveryKitScript } : {}),

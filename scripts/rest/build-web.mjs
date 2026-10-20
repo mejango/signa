@@ -15,6 +15,7 @@ export const webBuildOptions = {
     // Loaded on demand from the URL its page names in <meta name="module:..."> (src/rest/web/lazyModule.ts).
     "wallet-recovery-kit": "src/rest/web/walletRecoveryKit.ts",
     "accounts-signed-in": "src/rest/web/accountsSignedIn.ts",
+    "wallet-qr": "src/rest/web/qr.ts",
   },
   outdir: ".generated/rest",
   bundle: true,

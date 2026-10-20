@@ -1,6 +1,7 @@
 import { nativePasskeyError, takeSignInNotice } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
-import { qrSvg } from "./qr.js";
+import type * as Qr from "./qr.js";
+import { lazyModule } from "./lazyModule.js";
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
 /** No credentials, assertions, CSRF values or handoff codes are persisted by this page. It keeps only Coinbase's
  * returning-user token for Apple Pay (no personal data), per account, on this device. */
@@ -665,8 +666,11 @@ function renderDevice() {
 }
 async function deviceBegin() {
   setStatus("checking", "Preparing a link for the other device…");
+  // The QR code is drawn by its own bundle, fetched alongside the link (most visitors only sign in).
+  const qr = lazyModule<typeof Qr>("wallet-qr"); qr.catch(() => {});
   const result = record(await request(`${base}/devices/begin`, { passkeyName: null }, csrf, 60_000)), view = record(result.view) as unknown as DeviceView, link = string(result.link, 4096);
   if (!link.startsWith(`${location.origin}${base}/add#`)) throw new InvalidResponse();
+  const { qrSvg } = await qr;
   device = { view, link };
   element("wallet-device-code").innerHTML = qrSvg(link, "Link for the other device");
   const anchor = element<HTMLAnchorElement>("wallet-device-link"); anchor.href = link; anchor.textContent = "Open the link on this device instead";
