@@ -44,6 +44,8 @@ export interface RestSite {
   docsScript?: string;
   clientPackage?: Uint8Array;
   docsHtml: string;
+  /** Each endpoint's parameter and schema tables, by operationId; /api loads one when it is opened. */
+  apiReference?: ReadonlyMap<string, string>;
   docsCss: string;
   documents: ReadonlyMap<string, string>;
 }
@@ -91,6 +93,10 @@ export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
   app.get("/api", (context) =>
     context.html(site.docsHtml, 200, REST_PAGE_HEADERS),
   );
+  app.get("/api/reference/:operationId", (context) => {
+    const page = site.apiReference?.get(context.req.param("operationId"));
+    return page ? context.html(page, 200, REST_PAGE_HEADERS) : context.notFound();
+  });
   app.get("/api/docs/:name", (context) => {
     const name = context.req.param("name").replace(/\.md$/i, "").toLowerCase();
     const document = site.documents.get(name);

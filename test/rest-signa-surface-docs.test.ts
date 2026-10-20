@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { JbcenterEnv } from "../src/types.js";
 import { operationDescriptors } from "../src/rest/app.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { apiDocsCss, apiDocsPage, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
 import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { mountRestSite, type RestSite } from "../src/rest/site.js";
 
@@ -95,8 +95,12 @@ describe("Signa wallet API documentation", () => {
     expect(html).toContain('href="https://juicebox.center/api"');
     expect(html).toContain('href="https://juicebox.center/api/docs/client"');
     expect(html).toContain('rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg?v=signa"');
-    for (const text of ["/api/v1/accounts/me", "/api/v1/user-operations", "Request body", "Response 201", "&lt;img"])
+    for (const text of ["/api/v1/accounts/me", "/api/v1/user-operations", "&lt;img"])
       expect(html).toContain(text);
+    // Each endpoint's tables are a small Signa-branded page the reference loads when it is opened.
+    const pages = [...apiReferencePages(unsafe, "wallet").values()].join("");
+    for (const text of ["Request body", "Response 201", "| Signa</title>", 'href="/assets/accounts-icon.svg?v=signa"']) expect(pages).toContain(text);
+    expect(pages).not.toContain("| Juicebox Center</title>");
     for (const text of ["<img", "Choose a data source", 'href="/api/v1/catalog/', 'class="route">/api/v1/projects/', 'href="/"', "·"])
       expect(html).not.toContain(text);
     expect(apiDocsPage(full)).toContain("Choose a data source");

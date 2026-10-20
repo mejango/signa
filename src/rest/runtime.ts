@@ -16,7 +16,7 @@ import { createContractOwnerVerifier } from "./contractOwner.js";
 import { getContractCatalog, type ContractCatalog } from "./contracts/catalog.js";
 import { RestError, type RestRpc } from "./core.js";
 import { restRequest } from "./context.js";
-import { apiDocsCss, apiDocsPage, buildRestOpenApi } from "./docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, buildRestOpenApi, docsAssetNames } from "./docs/index.js";
 import {
   createTransactionDispatchAuthorizer,
   createSponsorshipDispatchAuthorizer,
@@ -29,7 +29,6 @@ import { createProtocolReadService } from "./protocol/index.js";
 import { createProtocolSemanticVerifier } from "./protocol/semantics.js";
 import { createRestRpc } from "./rpc.js";
 import { readRestAssets, type RestSite } from "./site.js";
-import { hashedAssetName } from "./web/assets.js";
 import {
   RelayrSponsorshipService,
   PostgresSponsorshipStore,
@@ -699,13 +698,15 @@ export async function createRestRuntime(options: {
   if (options.startMaintenance !== false) void warmRoutes();
   if (options.startMaintenance !== false) void warmAccounts();
   if (options.startMaintenance !== false) wallet?.refresh.start();
+  const docsAssets = docsAssetNames(assets.docsScript);
   return {
     site: {
       ...(options.surface ? { surface: options.surface } : {}),
       ...(walletSite ? { wallet: walletSite, walletOrigins: [wallet!.origin, ...(options.wallet?.legacyOrigins ?? [])] } : {}),
       app,
       audience: auth.audience,
-      docsHtml: apiDocsPage(openapi, options.surface, { "docs.js": hashedAssetName("docs.js", assets.docsScript), "api.css": hashedAssetName("api.css", apiDocsCss) }),
+      docsHtml: apiDocsPage(openapi, options.surface, docsAssets),
+      apiReference: apiReferencePages(openapi, options.surface, docsAssets),
       docsCss: apiDocsCss,
       ...assets,
     },

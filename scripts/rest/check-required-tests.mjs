@@ -36,6 +36,7 @@ export const requiredVitestSuites = [
   "test/rest-user-pay-metadata.test.ts",
   "test/rest-web-assets.test.ts",
   "test/rest-accounts-browser.test.ts",
+  "test/rest-docs-browser.test.ts",
   "test/rest-wallet-dependency-funding.test.ts",
   "test/rest-relayr-payment-evm.test.ts",
   "test/rest-relayr-payment-source.test.ts",

@@ -1,6 +1,10 @@
-import { assetHref, type AssetNames } from "../web/assets.js";
+import { assetHref, hashedAssetName, type AssetNames } from "../web/assets.js";
 import { BRAND_CSS, BRAND_ICON, FAVICON_LINK } from "../../branding.js";
 import type { OpenApiDocument, OpenApiOperation } from "./openapi.js";
+
+/** Hashed names for a deploy's docs script and the shared stylesheet, as mountAssets serves them. */
+export const docsAssetNames = (docsScript: string): AssetNames =>
+  ({ "docs.js": hashedAssetName("docs.js", docsScript), "api.css": hashedAssetName("api.css", apiDocsCss) });
 
 const escape = (value: unknown): string => String(value).replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -69,13 +73,33 @@ function endpointFields(operation: OpenApiOperation, spec: OpenApiDocument): str
   return params + showSchema("Request body", request) + showSchema(`Response ${escape(success?.[0] ?? "")}`, result);
 }
 
+const operationRows = (spec: OpenApiDocument) => Object.entries(spec.paths).flatMap(([path, methods]) => Object.entries(methods).map(([method, operation]) => ({ path, method: method.toUpperCase(), operation })));
+export const apiReferencePath = (operationId: string) => `/api/reference/${encodeURIComponent(operationId)}`;
+
+/** Each endpoint's parameter and schema tables, as small pages /api loads when an endpoint is opened. */
+export function apiReferencePages(spec: OpenApiDocument, surface?: "wallet", assets?: AssetNames): Map<string, string> {
+  const brand = surface === "wallet" ? 'Signa</title><link rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg?v=signa">' : `Juicebox Center</title>${FAVICON_LINK}`;
+  const pages = new Map<string, string>();
+  for (const { path, method, operation } of operationRows(spec)) {
+    const fields = endpointFields(operation, spec);
+    if (fields) pages.set(operation.operationId, `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(method)} ${escape(path)} | ${brand}<link rel="stylesheet" href="${assetHref("", "api.css", assets)}"></head>
+<body><main id="main" class="endpoint"><p><a href="/api#reference">Endpoint reference</a></p><h1><span class="verb">${escape(method)}</span> ${escape(path)}</h1><div class="endpoint-fields">${fields}</div></main></body></html>`);
+  }
+  return pages;
+}
+
 /** Server-rendered documentation with optional search and copy controls. Descriptions are escaped and never executed. */
 export function apiDocsPage(spec: OpenApiDocument, surface?: "wallet", assets?: AssetNames): string {
-  const rows = Object.entries(spec.paths).flatMap(([path, methods]) => Object.entries(methods).map(([method, operation]) => ({ path, method: method.toUpperCase(), operation })));
+  const rows = operationRows(spec);
   const groups = spec.tags.map((tag) => {
     const entries = rows.filter((row) => row.operation.tags.includes(tag.name));
-    return `<details class="group" id="${escape(tag.name.toLowerCase())}"><summary>${escape(tag.name)} <span class="muted">(${entries.length})</span></summary><p class="muted">${renderProse(tag.description)}</p>${entries.map(({ path, method, operation }) =>
-      `<details class="endpoint"><summary><span class="verb">${escape(method)}</span><span class="route">${escape(path)}</span> <span class="auth">${escape(authLabel(operation))}</span></summary><p>${renderProse(operation.summary)}</p>${operation.description ? `<p class="muted">${renderProse(operation.description)}</p>` : ""}${endpointFields(operation, spec)}<p><code>operationId: ${escape(operation.operationId)}</code></p></details>`).join("")}</details>`;
+    return `<details class="group" id="${escape(tag.name.toLowerCase())}"><summary>${escape(tag.name)} <span class="muted">(${entries.length})</span></summary><p class="muted">${renderProse(tag.description)}</p>${entries.map(({ path, method, operation }) => {
+      const fields = endpointFields(operation, spec);
+      // Field names stay searchable; the tables themselves load when the endpoint is opened.
+      const terms = [...new Set(Array.from(fields.matchAll(/<th scope="row"><code>([^<]*)<\/code>/g), match => match[1]))].join(" ");
+      return `<details class="endpoint"${terms ? ` data-terms="${terms}"` : ""}><summary><span class="verb">${escape(method)}</span><span class="route">${escape(path)}</span> <span class="auth">${escape(authLabel(operation))}</span></summary><p>${renderProse(operation.summary)}</p>${operation.description ? `<p class="muted">${renderProse(operation.description)}</p>` : ""}${fields ? `<div class="endpoint-fields"><p><a href="${escape(apiReferencePath(operation.operationId))}">Parameters and schemas</a></p></div>` : ""}<p><code>operationId: ${escape(operation.operationId)}</code></p></details>`;
+    }).join("")}</details>`;
   }).join("");
   if (surface === "wallet") {
     const origin = escape(spec.servers[0]!.url);
