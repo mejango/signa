@@ -40,6 +40,7 @@ export interface RestSite {
   walletOrigins?: readonly string[];
   audience: string;
   accountsScript: string;
+  accountsSignedInScript?: string;
   docsScript?: string;
   clientPackage?: Uint8Array;
   docsHtml: string;
@@ -61,6 +62,7 @@ export async function readRestAssets() {
     documents.set(name.toLowerCase(), content);
     documents.set(name.toLowerCase().replaceAll("_", "-"), content);
   }
+  const accountsSignedInScript = await readFile(new URL("../../.generated/rest/accounts-signed-in.js", import.meta.url), "utf8");
   const walletScript = await readFile(new URL("../../.generated/rest/wallet.js", import.meta.url), "utf8");
   const walletPaymentScript = await readFile(new URL("../../.generated/rest/wallet-payment.js", import.meta.url), "utf8");
   const walletSignupScript = await readFile(new URL("../../.generated/rest/wallet-signup.js", import.meta.url), "utf8");
@@ -69,7 +71,7 @@ export async function readRestAssets() {
   const walletDeviceScript = await readFile(new URL("../../.generated/rest/wallet-device.js", import.meta.url), "utf8");
   const docsScript = await readFile(new URL("../../.generated/rest/docs.js", import.meta.url), "utf8");
   const clientPackage = new Uint8Array(await readFile(new URL("../../.generated/rest/juicebox-center-client-0.1.0.tgz", import.meta.url)));
-  return { accountsScript, walletScript, walletPaymentScript, walletSignupScript, walletRecoveryScript, walletRecoveryKitScript, walletDeviceScript, documents, docsScript, clientPackage };
+  return { accountsScript, accountsSignedInScript, walletScript, walletPaymentScript, walletSignupScript, walletRecoveryScript, walletRecoveryKitScript, walletDeviceScript, documents, docsScript, clientPackage };
 }
 
 export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
@@ -78,7 +80,8 @@ export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
     app.use("*", async (c, next) => walletHost(c.req.header("host")) || walletHost(new URL(c.req.url).host) ? site.wallet!.fetch(c.req.raw, c.env) : next());
   } else if (site.wallet) app.route("/", site.wallet);
   app.route("/api/v1", site.app);
-  mountAccountsSite(app, { audience: site.audience, accountsScript: site.accountsScript });
+  mountAccountsSite(app, { audience: site.audience, accountsScript: site.accountsScript,
+    ...(site.accountsSignedInScript ? { accountsSignedInScript: site.accountsSignedInScript } : {}) });
   const assets = mountAssets(app, "", { "docs.js": site.docsScript ?? "", "api.css": site.docsCss });
   app.get("/api/client/juicebox-center-client-0.1.0.tgz", (context) => {
     if (!site.clientPackage) return context.notFound();

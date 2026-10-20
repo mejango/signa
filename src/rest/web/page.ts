@@ -3,10 +3,11 @@ import { externalWalletDialogHtml, externalWalletCss } from "./externalWalletPag
 import { escapeHtml } from "./html.js";
 import { smartWalletSections } from "./smartPage.js";
 
-export function accountsPage(options: { scriptPath?: string; stylePath?: string; faviconPath?: string; audience?: string } = {}): string {
+export function accountsPage(options: { scriptPath?: string; stylePath?: string; signedInPath?: string; faviconPath?: string; audience?: string } = {}): string {
   const referenceOrigin = options.audience ?? "";
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">
+<meta name="module:accounts-signed-in" content="${escapeHtml(options.signedInPath ?? "/assets/accounts-signed-in.js")}">
 <title>Accounts | Signa</title><link rel="icon" type="image/svg+xml" href="${escapeHtml(options.faviconPath ?? "/favicon.svg")}"><link rel="stylesheet" href="${escapeHtml(options.stylePath ?? "/assets/accounts.css")}"><script type="module" src="${escapeHtml(options.scriptPath ?? "/assets/accounts.js")}"></script></head>
 <body data-audience="${escapeHtml(options.audience ?? "")}"><main>
 <header><a class="brand" href="${escapeHtml(referenceOrigin)}/api">${BRAND_ICON} <span class="brand-label">SIGNA</span></a><span>V6 / ACCOUNTS</span></header>

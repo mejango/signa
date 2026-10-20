@@ -28,7 +28,7 @@ function exactOrigin(value: string): URL {
 }
 
 // The API host's assets, under their plain or content-hashed names (see src/rest/web/assets.ts).
-const apiAsset = /^\/assets\/(?:accounts\.(?:[0-9a-f]{12}\.)?(?:css|js)|docs\.(?:[0-9a-f]{12}\.)?js|api\.(?:[0-9a-f]{12}\.)?css|accounts-icon\.svg)$/;
+const apiAsset = /^\/assets\/(?:accounts\.(?:[0-9a-f]{12}\.)?(?:css|js)|accounts-signed-in\.(?:[0-9a-f]{12}\.)?js|docs\.(?:[0-9a-f]{12}\.)?js|api\.(?:[0-9a-f]{12}\.)?css|accounts-icon\.svg)$/;
 const apiPath = (path: string) => path === '/api' || path.startsWith('/api/') || path === '/accounts' || apiAsset.test(path);
 
 /** Credential pages and the public signed API have separate, exact HTTP hosts. */

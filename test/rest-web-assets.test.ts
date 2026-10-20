@@ -13,7 +13,7 @@ function signa(files: Record<string, string>) {
   wallet.use("*", async (c, next) => { c.header("Cache-Control", "no-store"); await next(); });
   const names = mountAssets(wallet, "", files);
   const api = new Hono<JbcenterEnv>();
-  mountAccountsSite(api, { audience, accountsScript: "/* accounts */" });
+  mountAccountsSite(api, { audience, accountsScript: "/* accounts */", accountsSignedInScript: "/* signed in */" });
   const app = createSignaApp({ apiAudience: audience, walletOrigin, currentRuntime: () => ({ api, wallet, ready() {} }) });
   return { app, names };
 }
@@ -48,8 +48,8 @@ describe("static assets", () => {
     const { app } = signa({});
     const page = await app.request(audience + "/accounts"), html = await page.text();
     expect(page.headers.get("cache-control")).toBe("no-store");
-    const refs = [...html.matchAll(/(?:src|href)="(\/assets\/accounts\.[0-9a-f]{12}\.(?:js|css))"/g)].map(match => match[1]!);
-    expect(refs).toHaveLength(2);
+    const refs = [...html.matchAll(/(?:src|href|content)="(\/assets\/accounts(?:-signed-in)?\.[0-9a-f]{12}\.(?:js|css))"/g)].map(match => match[1]!);
+    expect(refs).toHaveLength(3);
     for (const ref of refs) expect((await app.request(audience + ref)).headers.get("cache-control")).toBe(IMMUTABLE_CACHE);
     expect((await app.request(audience + "/assets/accounts.0123456789ab.html")).status).toBe(404);
   });

@@ -7,7 +7,7 @@ import { webBuildOptions } from "../scripts/rest/build-web.mjs";
 // Gzip bytes each served page may load. Raise a budget only for code the page itself needs.
 const budgets: Record<string, number> = {
   "wallet-recovery": 20_000, "wallet-device": 11_000, "wallet-signup": 16_500, "wallet-payment": 26_000,
-  wallet: 12_500, accounts: 73_000, docs: 1_000, "wallet-recovery-kit": 43_500,
+  wallet: 12_500, accounts: 19_500, docs: 1_000, "wallet-recovery-kit": 43_500, "accounts-signed-in": 66_000,
 };
 
 it("keeps every browser bundle within its budget and the SDK on the server", async () => {
