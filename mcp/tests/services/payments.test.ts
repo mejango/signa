@@ -201,7 +201,12 @@ function fixture(
 }
 
 function payHookMetadata(
-  overrides: { beneficiaryCount?: bigint; skipSplits?: boolean; partialMint?: bigint; explicit?: boolean } = {},
+  overrides: {
+    beneficiaryCount?: bigint;
+    skipSplits?: boolean;
+    partialMint?: bigint;
+    explicit?: boolean;
+  } = {},
 ): Hex {
   return encodeAbiParameters(
     parseAbiParameters(
@@ -708,14 +713,19 @@ describe('payment quotes and approval plans', () => {
   });
 
   it('plans a skipSplits payment at the payer metadata minimum, or the beneficiary mint share without one', async () => {
-    const skipping = (explicit: boolean) =>
+    const skipping = (explicit: boolean, slippageBps = 100) =>
       fixture({
         dataHook: registry,
         beneficiaryCount: 0n,
         payHooks: [
-          { hook: buybackHook, noop: false, amount: 100n, metadata: payHookMetadata({ skipSplits: true, explicit }) },
+          {
+            hook: buybackHook,
+            noop: false,
+            amount: 100n,
+            metadata: payHookMetadata({ skipSplits: true, explicit }),
+          },
         ],
-      }).service.preparePay(payInput);
+      }).service.preparePay({ ...payInput, slippageBps });
     const explicit = await skipping(true);
     expect(explicit.summary).toMatchObject({
       beneficiaryTokenCount: '300',
@@ -728,8 +738,15 @@ describe('payment quotes and approval plans', () => {
     expect(explicit.warnings.join(' ')).toContain('skips the reserved split');
     const derived = await skipping(false);
     expect(derived.summary).toMatchObject({
-      beneficiaryTokenCount: '200',
+      beneficiaryTokenCount: '198',
+      minimumBeneficiaryTokenCount: '196',
+    });
+    // The swap and the leftover mint each round down once, so even zero slippage keeps two units.
+    expect((await skipping(false, 0)).summary).toMatchObject({
       minimumBeneficiaryTokenCount: '198',
+    });
+    expect((await skipping(true, 0)).summary).toMatchObject({
+      minimumBeneficiaryTokenCount: '300',
     });
   });
 

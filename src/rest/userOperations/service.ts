@@ -50,7 +50,8 @@ import {
   userOperationCommitment,
 } from "./codec.js";
 import { observeUserOperation } from "./execution.js";
-import { walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
+import { recognizeWalletV6UsdcPayment, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
+import { passkeyPayMinimumOf } from "./userPayMetadata.js";
 import { UserOperationProvider } from "./provider.js";
 import { createSessionGasEstimation } from "./estimation.js";
 import { passkeyDummySignature, passkeyEstimateProvider } from "./passkeyEstimation.js";
@@ -223,6 +224,20 @@ export class UserOperationService {
       ...(signal ? { signal } : {}),
     });
   }
+  /** A passkey pay of the reviewed token through the reviewed terminal carries only metadata a
+   * payment review admits, whichever path prepares or submits it. */
+  private passkeyPayMetadata(plan: StoredPlan, stepIndexes: readonly number[]): void {
+    const config = this.options.v6UsdcPayment;
+    if (!config || !walletV6UsdcPaymentDomain(plan, config)) return;
+    try {
+      const payment = recognizeWalletV6UsdcPayment(plan, stepIndexes, config);
+      if (!payment) throw new Error("unrecognized");
+      passkeyPayMinimumOf(payment.metadata);
+    } catch {
+      fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries only empty or pay-card buyback metadata.", 422);
+    }
+  }
+
   private policy(chainId: number) {
     return (
       this.options.policies.find((p) => p.chainId === chainId) ??
@@ -412,6 +427,7 @@ export class UserOperationService {
     const passkeyProfile = userOperationPasskeyProfile(binding, manifest);
     if (passkeyProfile && input.sessionId)
       fail("USER_OPERATION_PASSKEY_SESSION_UNAVAILABLE", "The passkey pilot requires fresh owner approval for every operation.", 422);
+    if (passkeyProfile) this.passkeyPayMetadata(plan, input.stepIndexes);
     const policy = this.policy(binding.wallet.chainId);
     if (input.sessionId && input.sponsorAuthorization !== undefined)
       fail('SPONSOR_OWNER_REQUIRED', 'Application sponsorship requires fresh owner approval.', 403);
@@ -825,6 +841,7 @@ export class UserOperationService {
     const passkeyProfile = userOperationPasskeyProfile(binding, manifest);
     if (passkeyProfile && record.session)
       fail("USER_OPERATION_PASSKEY_SESSION_UNAVAILABLE", "The passkey pilot requires fresh owner approval for every operation.", 422);
+    if (passkeyProfile) this.passkeyPayMetadata(plan, record.stepIndexes);
     let sessionObservationHash: Hex | undefined;
     let validAfter = Math.floor(record.createdAt / 1000),
       validUntil = Math.floor(record.expiresAt / 1000);

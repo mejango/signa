@@ -144,11 +144,13 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   const next = JSON.stringify(stable); if (immutable && immutable !== next) fail();
   immutable = next; return structuredClone(value);
 }
-/** The buyback instruction in the payment's metadata, in the payer's terms. */
+/** The buyback request in the payment's metadata, in the payer's terms. The hook version decides
+ * whether the skip applies; the terminal minimum above is the guarantee either way. */
 function buybackText(metadata: string): string {
   const minimum = passkeyPayMinimumOf(metadata);
   if (minimum === null) return 'None';
-  return minimum > 0n ? `Pool buys skip the reserved split. Pool minimum: ${minimum} project tokens (base units).` : 'Pool buys skip the reserved split.';
+  const skip = 'Asks the buyback hook to skip the reserved split on pool buys (hooks older than 1.4 ignore this).';
+  return minimum > 0n ? `${skip} The hook reverts unless you receive at least ${minimum} project tokens (base units).` : skip;
 }
 function accept(input: unknown) {
   review = checkReview(input);

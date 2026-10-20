@@ -809,16 +809,22 @@ export class PaymentService {
       // with this indicative executable quote basis; never add it a second time.
       if (skipSplits) {
         // 1.4 hands swapped tokens to the beneficiary with no reserved split and checks an
-        // explicit minimum against that receipt. Without one, it swaps only above the
-        // beneficiary's share of a mint (tokenCountWithoutHook) and mints the rest.
+        // explicit minimum against the swap plus the beneficiary share of any leftover mint.
+        // Without one, it swaps only above the beneficiary's share of a mint
+        // (tokenCountWithoutHook) and mints the rest; the swap and that mint each round down
+        // once, as the SDK's prepareUserPay allows for.
         const hasUserSpecifiedQuote = decoded[3];
-        beneficiaryTokenCount = hasUserSpecifiedQuote ? decoded[2] : decoded[5];
+        beneficiaryTokenCount = hasUserSpecifiedQuote
+          ? decoded[2]
+          : decoded[5] > 2n
+            ? decoded[5] - 2n
+            : 0n;
         reservedTokenCount = 0n;
         if (hasUserSpecifiedQuote) explicitMinimum = decoded[2];
         warnings.push(
           hasUserSpecifiedQuote
-            ? 'The payer skips the reserved split on pool buys. The hook reverts unless the beneficiary receives at least the metadata minimum, so that minimum is the payment minimum.'
-            : 'The payer skips the reserved split on pool buys. Without a metadata minimum the hook routes by its TWAP floor; this quote counts only the beneficiary share of a mint.',
+            ? 'The payer skips the reserved split on pool buys. The hook reverts unless the beneficiary receives at least the metadata minimum (swap plus any leftover mint), so that minimum is the payment minimum. A leftover mint still goes through the reserved split, so the reserved count shown is a lower bound.'
+            : 'The payer skips the reserved split on pool buys. Without a metadata minimum the hook routes by its TWAP floor; this quote counts only the beneficiary share of a mint, and a leftover mint still goes through the reserved split.',
         );
       } else {
         beneficiaryTokenCount = decoded[11];
