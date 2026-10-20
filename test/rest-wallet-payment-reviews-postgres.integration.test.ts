@@ -202,6 +202,8 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
     const claimed = await operations.claim({ actor: value.actor, id: value.record.id, key: `submit:${value.plan.id}`, operation,
       signedCommitment: userOperationCommitment(operation, value.record.entryPoint, 8453),
       authorization: { issuedAt: Number(value.view.draft.signing.validAfter), expiresAt: Number(value.view.draft.signing.validUntil) }, now: await nowMs() });
+    // A fresh payment is prepared later, so its signed window, and the passkey challenge, differ.
+    await new Promise(resolve => setTimeout(resolve, 1100));
     const fresh = await preparedOperation(value, 120_000, BigInt(value.record.operation.nonce));
     await expect(value.store.prepare(value.actor, { operationId: fresh.record.id, state: token() }, `review:${fresh.plan.id}`)).rejects.toMatchObject({ status: 409 });
     const bundle = keccak256(toHex("reverted-bundle"));
