@@ -2,7 +2,7 @@
   "name": "@me.jango/center-wallet",
   "version": "0.3.8",
   "description": "Connect a Juicebox Center account to your app and review passkey payments",
-  "repository": { "type": "git", "url": "https://github.com/mejango/jbcenter.git", "directory": "wallet-client" },
+  "repository": { "type": "git", "url": "https://github.com/mejango/signa.git", "directory": "wallet-client" },
   "type": "module",
   "sideEffects": false,
   "main": "./index.js",
