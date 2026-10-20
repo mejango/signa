@@ -8,7 +8,7 @@ export function walletPaymentSchemas(): Record<string, Schema> {
   const payment = object({ kind: { const: 'v6-usdc-pay', type: 'string' }, chainId: { const: 8453, type: 'integer' },
     account: ref('Address'), token: ref('Address'), terminal: ref('Address'), projectId: ref('Uint256'), amount: ref('PositiveUint256'),
     beneficiary: ref('Address'), minimumReturnedTokens: ref('Uint256'), memo: { type: 'string', maxLength: 32768 },
-    metadata: { ...ref('HexBytes'), description: 'Empty (0x), or exactly buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut }) from @bananapus/nana-sdk-core: the buyback registry quote (0, minimum, skipSplits = true) with no tiers, and minimumReturnedTokens at least that minimum. Any other metadata is refused.' },
+    metadata: { ...ref('HexBytes'), description: 'Empty (0x), or Juicebox hook metadata in the JBMetadataResolver format (for example prepareUserPay metadata with 721 tiers). The review page shows it through the SDK review decoder; entries it cannot name show as raw hook data under their id. minimumReturnedTokens must be at least every buyback minimum the decoder reads.' },
     stepIndexes: indexes, approvalStepIndexes: { ...indexes, minItems: 0, maxItems: 2 }, paymentStepIndex: { type: 'integer', minimum: 0, maximum: 31 }, resetAllowance: { type: 'boolean' } });
   const properties = { version: { type: 'string', const: 'center-wallet-payment-review-v1' }, id: ref('ResourceId'), state,
     issuer: { type: 'string', format: 'uri' }, accountId: ref('AccountId'),

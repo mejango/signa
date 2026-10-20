@@ -6,6 +6,7 @@ import { chromium, type Browser, type Page, type CDPSession } from 'playwright';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
 import { buildUserPayMetadata } from '@bananapus/nana-sdk-core/v6';
+import { passkeyPayMetadataSteps } from '../src/rest/userOperations/userPayMetadata.js';
 import type { Hex } from 'viem';
 import type { WalletPaymentCentralPublic } from '../src/rest/wallet/paymentPublic.js';
 import { parseWalletRegistration, type WalletRegistrationCandidate } from '../src/rest/wallet/registration.js';
@@ -86,7 +87,7 @@ describe('central payment review browser, virtual authenticator', () => {
       signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
       createdAtMs: f.prepared.createdAt, expiresAtMs: f.prepared.expiresAt, status: 'pending', approvedAtMs: null, cancelledAtMs: null,
       operationState: 'prepared', passkey: { rpId: 'localhost', credentialId: 'pending', challenge: encode(decode('AA')), userVerification: 'required' },
-      buybackMinimum: null };
+      metadataSteps: [] };
     // The HTTP fixture supplies trusted derived review fields; executable-byte checks live in domain tests.
     const context = await browser.newContext({ viewport: { width: 360, height: 780 } });
     page = await context.newPage(); page.setDefaultTimeout(5000);
@@ -145,27 +146,33 @@ describe('central payment review browser, virtual authenticator', () => {
     await page.locator('#payment-return').click(); await expect.poll(() => page.url()).toBe(callback()); expect(errors).toEqual([]);
   });
 
-  it('shows the server-decoded buyback minimum only when it is bound to the metadata and the terminal minimum', async () => {
-    const withMetadata = (metadata: Hex, buybackMinimum: string | null) => {
+  it('shows the server-described hook metadata as text and refuses steps that do not fit the metadata', async () => {
+    const withMetadata = (metadata: Hex, metadataSteps: unknown = passkeyPayMetadataSteps(metadata, 5n)) => {
       const f = createWalletPaymentClientFixture(Date.now(), metadata);
       if (!('signedData' in f.prepared.signing)) throw new Error('Fixture must use a passkey owner');
-      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment, buybackMinimum,
+      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment, metadataSteps,
         signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
-        passkey: { ...review.passkey, challenge: encode(Buffer.from(f.prepared.signing.digest.slice(2), 'hex')) } };
+        passkey: { ...review.passkey, challenge: encode(Buffer.from(f.prepared.signing.digest.slice(2), 'hex')) } } as typeof review;
     };
+    const lines = () => page.locator('#payment-hooks div').allTextContents();
     const refused = async () => {
       await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
       expect(await page.locator('#payment-approve').isVisible()).toBe(false);
     };
-    await load(); expect(await page.locator('#payment-buyback').textContent()).toBe('None');
-    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }), '5'); await load();
-    expect(await page.locator('#payment-buyback').textContent()).toBe('Requests pool buys without the reserved split (hooks older than 1.4 ignore this). Pool minimum: 5 project tokens (base units), covered by the minimum above.');
-    withMetadata(buildUserPayMetadata({ chainId: 8453 }), '0'); await load();
-    expect(await page.locator('#payment-buyback').textContent()).toBe('Requests pool buys without the reserved split (hooks older than 1.4 ignore this).');
-    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }), '4'); await refused();
-    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }), null); await refused();
-    withMetadata('0x', '0'); await refused();
-    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }), '6'); await refused();
+    await load(); expect(await lines()).toEqual(['None']);
+    const tiered = buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: review.payment.terminal, tierIdsToMint: [2n] } });
+    withMetadata(tiered); await load();
+    const shown = await lines();
+    expect(shown).toHaveLength(2);
+    expect(shown[0]).toMatch(/^Buyback hook swap instructions\. Hook lookup id: 0x[0-9a-f]{8}\. Amount to swap: 0\. Minimum swap output: 5 .*Skip splits on swapped tokens: yes$/);
+    expect(shown[1]).toMatch(/^721 shop mint instructions\. .*Tier IDs to mint: /);
+    withMetadata(tiered, [{ title: '<img src=x onerror=alert(1)>', rows: [['Label', '<b>value</b>']] }]); await load();
+    expect(await lines()).toEqual(['<img src=x onerror=alert(1)>. Label: <b>value</b>']);
+    expect(await page.locator('#payment-hooks img, #payment-hooks b').count()).toBe(0);
+    withMetadata(tiered, []); await refused();
+    withMetadata('0x', [{ title: 'Buyback', rows: [] }]); await refused();
+    withMetadata(tiered, [{ title: 'Buyback', rows: [['only label']] }]); await refused();
+    withMetadata(tiered, null); await refused();
   });
   it('cancels the native prompt without approving and permits another explicit click', async () => {
     await load(); await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: false });

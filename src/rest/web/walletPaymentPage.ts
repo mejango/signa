@@ -16,7 +16,7 @@ export function walletPaymentPage(base = '/wallet'): string {
 <dt>Beneficiary</dt><dd id="payment-beneficiary"></dd><dt>Minimum project tokens (base units)</dt><dd id="payment-minimum"></dd>
 <dt>Memo</dt><dd id="payment-memo" class="exact-text"></dd><dt>Execution fee ceiling</dt><dd id="payment-fee"></dd>
 <dt>USDC contract</dt><dd id="payment-token"></dd><dt>Juicebox terminal</dt><dd id="payment-terminal"></dd>
-<dt>Buyback</dt><dd id="payment-buyback"></dd><dt>Metadata</dt><dd id="payment-metadata"></dd><dt>Operation</dt><dd id="payment-operation"></dd>
+<dt>Hooks</dt><dd id="payment-hooks"></dd><dt>Metadata</dt><dd id="payment-metadata"></dd><dt>Operation</dt><dd id="payment-operation"></dd>
 <dt>Approval expires</dt><dd id="payment-expiry"></dd></dl></details></section>
 <div class="actions"><button id="payment-approve" type="button" hidden>Approve payment</button>
 <button id="payment-cancel" type="button" class="link" hidden>Decline</button>

@@ -51,7 +51,7 @@ import {
 } from "./codec.js";
 import { observeUserOperation } from "./execution.js";
 import { terminalAbi, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
-import { passkeyPayMinimumOf } from "./userPayMetadata.js";
+import { passkeyPayMetadataSteps } from "./userPayMetadata.js";
 import { UserOperationProvider } from "./provider.js";
 import { createSessionGasEstimation } from "./estimation.js";
 import { passkeyDummySignature, passkeyEstimateProvider } from "./passkeyEstimation.js";
@@ -225,7 +225,7 @@ export class UserOperationService {
     });
   }
   /** Every selected call that pays the reviewed token through the reviewed terminal carries only
-   * metadata a payment review admits, whatever the plan is labeled and whichever path prepares
+   * metadata a payment review can describe, whatever the plan is labeled and whichever path prepares
    * or submits it. */
   private passkeyPayMetadata(plan: StoredPlan, stepIndexes: readonly number[]): void {
     const config = this.options.v6UsdcPayment;
@@ -239,8 +239,8 @@ export class UserOperationService {
         if (decoded.functionName === "pay") args = decoded.args;
       } catch { continue; }
       if (!args || !same(args[1] as string, config.token)) continue;
-      try { passkeyPayMinimumOf(args[6] as string, args[4] as bigint); }
-      catch { fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries only empty or pay-card buyback metadata, under a terminal minimum at least its own.", 422); }
+      try { passkeyPayMetadataSteps(args[6] as string, args[4] as bigint); }
+      catch { fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries empty or Juicebox hook metadata, with any buyback minimum within the terminal minimum.", 422); }
     }
   }
 
