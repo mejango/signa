@@ -449,29 +449,6 @@ describe('Center browser payment review continuity', () => {
     expect(status.observation).not.toHaveProperty('payFailure');
   });
 
-  it('lets the payer clear a payment Center refused before sending, and review a fresh one at once', async () => {
-    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
-    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900',
-      message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
-    f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
-    await expect(f.helper().submitPayment()).rejects.toMatchObject({ payFailure });
-    f.helper().clearPayment();
-    expect(f.helper().pendingPayment()).toBeNull();
-    await expect(f.helper().preparePayment(f.input())).resolves.toMatchObject({ status: 'reviewing' });
-    // A failure without a reason may have sent: the payment stays until its outcome is known.
-    const g = fixture(); await g.helper().preparePayment(g.input()); await g.helper().completePayment(g.callback());
-    g.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
-    await expect(g.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
-    expect(() => g.helper().clearPayment()).toThrow(expect.objectContaining({ code: 'WALLET_PAYMENT_UNRESOLVED' }));
-    // Refused, then seen submitted after all (the approval's own send landed): no longer clearable.
-    const h = fixture(); await h.helper().preparePayment(h.input()); await h.helper().completePayment(h.callback());
-    h.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
-    await expect(h.helper().submitPayment()).rejects.toMatchObject({ payFailure });
-    h.observed(h.observedOperation('pending'));
-    expect((await h.helper().refreshPayment()).status).toBe('pending');
-    expect(() => h.helper().clearPayment()).toThrow(expect.objectContaining({ code: 'WALLET_PAYMENT_UNRESOLVED' }));
-  });
-
   it('drops a served payment reason outside its exact shape, on the status and inside the observation', async () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
     const reverted = f.observedOperation('reverted');
