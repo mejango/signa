@@ -63,6 +63,9 @@ interface Journal extends CenterWalletPaymentInput {
   reviewId?: string;
   submissionKey: string;
   submissionStarted: boolean;
+  /** Center refused this exact submission before sending it and said why (its RestClientError
+   * carried `payFailure`). Cleared once Center shows the operation submitted. */
+  refused?: boolean;
   status: CenterWalletPaymentState;
   review?: WalletPaymentReviewPublic;
   approval?: NonNullable<WalletPaymentAppPublic['approval']>;
@@ -202,12 +205,12 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
         value.issuer !== issuer || value.audience !== audience || value.callbackUri !== callbackUri ||
         !states.includes(value.status) || typeof value.submissionStarted !== 'boolean' ||
         !/^payment-review-[0-9a-f]{64}$/.test(value.reviewKey) || !/^payment-submit-[0-9a-f]{64}$/.test(value.submissionKey) ||
-        (value.reviewId !== undefined && !reviewIdPattern.test(value.reviewId))) throw new Error();
+        (value.reviewId !== undefined && !reviewIdPattern.test(value.reviewId)) || (value.refused !== undefined && value.refused !== true)) throw new Error();
       validateWalletHandoffToken(value.state);
       checkInput(value, value.grant, value.startedAtMs);
       if (value.review) checkView(value.review, value, false);
       if (value.approval) checkApproval(value.approval, value);
-      if (value.submissionStarted && !value.approval) throw new Error();
+      if (value.submissionStarted && !value.approval || value.refused && !value.submissionStarted) throw new Error();
       return { value, encoded };
     } catch { return fail('WALLET_PAYMENT_STORAGE_INVALID', 'The saved payment record is invalid. Preserve it for recovery.'); }
   }
@@ -308,7 +311,9 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
       if (operation.state === 'reverted' && observation?.state === 'reverted' && canonical &&
         (receipt?.status === 'reverted' || observation.semantic?.status === 'failed')) result = 'reverted';
       if (operation.state === 'expired' && observation?.state === 'expired' && observation.transactionHash === undefined && !receipt) result = 'expired';
-      return save({ ...saved.value, status: result, ...(observation ? { observation } : {}) }, saved.encoded);
+      // Submitted after all (by the approval's own send, say): no longer a refusal to clear.
+      const { refused: _refused, ...kept } = saved.value;
+      return save({ ...(operation.submission ? kept : saved.value), status: result, ...(observation ? { observation } : {}) }, saved.encoded);
     } catch (error) {
       if (error instanceof RestClientError && ['WALLET_PAYMENT_STORAGE_UNAVAILABLE', 'WALLET_PAYMENT_CHANGED'].includes(error.code)) throw error;
       return mismatch();
@@ -327,7 +332,9 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
       const result = await client.smartAccounts().submitUserOperation(saved.value.operation.id, saved.value.approval!.signature, saved.value.submissionKey);
       return status(receiveOperation(result, saved).value);
     } catch (error) {
-      save({ ...saved.value, status: 'unknown' }, saved.encoded);
+      // A reason means Center's simulation refused these calls before any send: the app can show it
+      // and let the payer clear this payment and review a fresh one at once.
+      save({ ...saved.value, status: 'unknown', ...(error instanceof RestClientError && error.payFailure ? { refused: true } : {}) }, saved.encoded);
       throw error;
     }
   }
@@ -385,13 +392,18 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
       BigInt(signing.validUntil) < 2n ** 48n && integer(archivedAtMs) && BigInt(Math.floor(archivedAtMs / 1000)) > BigInt(signing.validUntil);
     let grantGone = false;
     try { live(saved.value); } catch { grantGone = true; }
-    if (!settled && !unsignedWindowElapsed && !(grantGone && validityElapsed))
+    // Refused before any send, and not since seen submitted. Its approval can still be sent only by
+    // a deliberate resubmission, and a fresh payment takes the same account nonce, so at most one
+    // of the two can execute.
+    const refused = saved.value.refused === true && saved.value.status === 'unknown';
+    if (!settled && !unsignedWindowElapsed && !refused && !(grantGone && validityElapsed))
       fail('WALLET_PAYMENT_UNRESOLVED', 'Keep this payment until its outcome is verified or its original approval window has elapsed without a saved approval or local submission.');
     const existing = raw(historyKey);
     try {
       const history = existing === null ? [] : JSON.parse(existing);
       if (!Array.isArray(history)) throw new Error();
-      const receipt = { ...status(saved.value), ...(!settled ? { status: 'unknown', archiveReason: unsignedWindowElapsed ? 'no-local-submission-recorded' : 'grant-expired' } : {}),
+      const receipt = { ...status(saved.value), ...(!settled ? { status: 'unknown', archiveReason: refused ? 'refused-before-send'
+        : unsignedWindowElapsed ? 'no-local-submission-recorded' : 'grant-expired' } : {}),
         issuer, audience, callbackUri, archivedAtMs, grantId: saved.value.grant.id, grantIncarnation: saved.value.grant.incarnation,
         planId: saved.value.plan.id, planCommitment: saved.value.plan.commitment, operationCommitment: saved.value.operation.commitment,
         reviewState: saved.value.state, reviewKey: saved.value.reviewKey, submissionKey: saved.value.submissionKey,
