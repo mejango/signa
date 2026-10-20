@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import type { Address, Hex } from 'viem';
+import { toHex, type Address, type Hex } from 'viem';
 import type { RestActor } from '../core.js';
 import { assertRestActorActive } from '../auth/postgres.js';
 import { assertActor, assertText } from '../transactions/store.js';
@@ -29,6 +29,7 @@ import {
   assertRetiredChecked,
   owns,
   readCursor,
+  releasesNonce,
   retiring,
   same,
   settled,
@@ -262,10 +263,17 @@ export class PostgresUserOperationStore implements UserOperationStore {
   async observe(id: string, revision: number, observation: UserOperationObservation) {
     observation = clone(observation);
     return this.transaction(async (client) => {
-      const next = observed(await this.required(client, id), revision, observation);
-      // Proven never to execute: the nonce it held is free for a fresh operation. Its plan steps
-      // stay claimed; a redo is a new plan, and the step settles as failed on its own.
-      if (next.state === 'expired')
+      let next = observed(await this.required(client, id), revision, observation);
+      // Proven never to execute, or its whole bundle reverted: the nonce it held is free for a fresh
+      // operation. Its plan steps stay claimed; a redo is a new plan, and the step settles as failed.
+      const release = releasesNonce(next);
+      if (release) {
+        // The claim's sender lock: a claim that checked the unsettled set commits before the release
+        // joins it, and one after it sees it.
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`user-operation-sender:${next.chainId}:${next.sender.toLowerCase()}`]);
+        next = { ...next, nonceReleasedAt: await databaseNow(client) };
+      }
+      if (release || next.state === 'expired')
         await client.query('DELETE FROM rest_user_operation_nonces WHERE user_operation_id=$1', [next.id]);
       return this.save(client, next);
     });
@@ -285,7 +293,7 @@ export class PostgresUserOperationStore implements UserOperationStore {
   private async retiredIn(client: Pick<PoolClient, 'query'>, chainId: number, sender: Address) {
     // Across every API account: one Safe can be bound under several, and its nonce is the chain's.
     const result = await client.query<{ document: UserOperationRecord }>(
-      `SELECT document FROM rest_user_operations WHERE document->>'state'='retired' AND NOT document ? 'retiredSettledAt'
+      `SELECT document FROM rest_user_operations WHERE (document->>'state'='retired' OR document ? 'nonceReleasedAt') AND NOT document ? 'retiredSettledAt'
        AND (document->>'chainId')::bigint=$1 AND lower(document->>'sender')=$2`,
       [chainId, sender.toLowerCase()],
     );
@@ -297,9 +305,18 @@ export class PostgresUserOperationStore implements UserOperationStore {
   async settleRetired(id: string) {
     await this.transaction(async (client) => {
       const record = await this.required(client, id);
-      if (record.state !== 'retired' || record.retiredSettledAt !== undefined) return;
+      if ((record.state !== 'retired' && record.nonceReleasedAt === undefined) || record.retiredSettledAt !== undefined) return;
       await this.save(client, { ...record, retiredSettledAt: await databaseNow(client), revision: record.revision + 1 });
     });
+  }
+  async sentAt(chainId: number, sender: Address, nonce: bigint) {
+    // ponytail: no index; only a wallet held by an operation whose nonce moved reaches this.
+    const result = await this.pool.query<{ document: UserOperationRecord }>(
+      `SELECT document FROM rest_user_operations WHERE document ? 'submission' AND (document->>'chainId')::bigint=$1
+       AND lower(document->>'sender')=$2 AND document->'operation'->>'nonce'=$3`,
+      [chainId, sender.toLowerCase(), toHex(nonce)],
+    );
+    return result.rows.map((row) => clone(row.document)).filter((record) => BigInt(record.operation.nonce) === nonce);
   }
   async nonceHolder(chainId: number, sender: Address, nonce: bigint) {
     const result = await this.pool.query<{ document: UserOperationRecord }>(

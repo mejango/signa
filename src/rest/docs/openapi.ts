@@ -433,7 +433,7 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin,
   });
   add("/user-operations/{id}", "GET", "getUserOperation", "Reconcile a stored UserOperation using canonical execution evidence", "UserOperations", "read", {
     parameters: [pathParameter("id", ref("ResourceId"))], result: ref("UserOperation"),
-    description: "Refreshes submitted operations. A provider receipt is a location hint; confirmed requires the exact EntryPoint operation and its scoped account-call evidence. Submitted signature bytes remain omitted. Reconcile the source plan for dependency status and distinguish bridge settlement from execution.",
+    description: "Refreshes submitted operations. A provider receipt is a location hint; confirmed requires the exact EntryPoint operation and its scoped account-call evidence. Submitted signature bytes remain omitted. Reconcile the source plan for dependency status and distinguish bridge settlement from execution. A whole-bundle revert frees its nonce for a fresh operation at once.",
   });
 
   if (wallet) {

@@ -667,13 +667,14 @@ export class UserOperationService {
     return view;
   }
 
-  /** A retired approval's signed bytes are still out there (its app holds them). Until the chain
-   * settles it, Signa prepares or admits another operation from the same sender only at its very
-   * nonce, so the EntryPoint runs at most one of the two. It settles when its nonce is unchanged on a
-   * canonical head two minutes of blocks past its validity (it never ran and never can), or when
-   * Signa's own operation holding that nonce executed in a successful outer transaction. A nonce
-   * that moved any other way may have been the retired approval itself: nothing is prepared over it.
-   * Returns the retired operations checked, which the claim requires to be all there are. */
+  /** A retired approval's signed bytes are still out there (its app holds them), and so are those of
+   * an operation whose whole bundle reverted, which rolled its nonce back. Until the chain settles
+   * one, Signa prepares or admits another operation from the same sender only at its very nonce, so
+   * the EntryPoint runs at most one of the two. It settles when its nonce is unchanged on a canonical
+   * head two minutes of blocks past its enforceable deadline (it never ran and never can), or when
+   * Signa's own operation at that nonce, the reverted one included, executed in a successful outer
+   * transaction. A nonce that moved any other way may have been the operation itself: nothing is
+   * prepared over it. Returns the operations checked, which the claim requires to be all there are. */
   private async retiredClear(chainId: number, sender: Address, entryPoint: Address, nonce: bigint, head: RestBlockEvidence, signal?: AbortSignal) {
     const checked: string[] = [];
     for (const old of await this.options.store.retired(chainId, sender)) {
@@ -683,22 +684,40 @@ export class UserOperationService {
       const current = await this.chain(signal).readNonce(chainId, sender, used >> 64n, entryPoint, head);
       let settled = false;
       if (current === used) {
-        settled = BigInt(head.timestamp) > BigInt(Math.floor(old.expiresAt / 1000)) + 120n;
+        const deadline = this.executionDeadline(old);
+        settled = deadline !== undefined && BigInt(head.timestamp) > BigInt(deadline) + 120n;
         if (!settled) fail("USER_OPERATION_RETIRED_OPEN",
-          "An earlier approval from this wallet can still execute. Pay again from the same review flow, or wait until it ends.", 409);
+          "An earlier payment from this wallet can still execute. Pay again from the same review flow, or wait until it ends.", 409);
       } else {
-        // The holder's execution is rechecked against the chain here: a reorged block is no evidence.
-        const held = await this.options.store.nonceHolder(chainId, sender, used);
-        const holder = held && held.id !== old.id ? await this.refresh(held, signal) : undefined;
-        settled = (holder?.state === "confirmed" || holder?.state === "reverted") && holder.observation?.receipt?.status === "success";
-        if (!settled && holder && isRecoverable(holder)) fail("USER_OPERATION_RETIRED_CONFIRMING",
-          "The payment that replaced an earlier approval is still confirming. Try again in a few seconds.", 409);
+        // Each execution is rechecked against the chain here: a reorged block is no evidence.
+        // Every operation Signa sent at that nonce, settled ones and the old one itself included: one
+        // canonical execution settles it, whatever another candidate's refresh does.
+        const candidates = await this.options.store.sentAt(chainId, sender, used);
+        const results = await Promise.allSettled(candidates.map((candidate) => this.refresh(candidate, signal)));
+        const seen = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+        settled = seen.some((record) => (record.state === "confirmed" || record.state === "reverted") && record.observation?.receipt?.status === "success");
+        const failed = results.find((result) => result.status === "rejected");
+        if (!settled && failed) throw failed.reason;
+        if (!settled && seen.some(isRecoverable)) fail("USER_OPERATION_RETIRED_CONFIRMING",
+          "The payment that replaced an earlier one is still confirming. Try again in a few seconds.", 409);
         if (!settled) fail("USER_OPERATION_RETIRED_NONCE_USED",
-          "An earlier approval's nonce was used outside Signa. Check that payment before paying again.", 409);
+          "An earlier payment's nonce was used outside Signa. Check that payment before paying again.", 409);
       }
       await this.options.store.settleRetired(old.id);
     }
     return checked;
+  }
+
+  /** When the EntryPoint stops accepting this operation, in seconds. An owner signature binds the
+   * preparation's validity. A session signature binds none, so only its sponsor's signed window ends
+   * it (a session operation is always sponsored); without a readable one, nothing ends it. */
+  private executionDeadline(record: UserOperationRecord): number | undefined {
+    if (!record.session) return Math.floor(record.expiresAt / 1000);
+    try {
+      return this.providerForRecord(record).configuration(record.chainId).paymasterPolicy?.inspect(record.operation, "final").validUntil;
+    } catch {
+      return undefined;
+    }
   }
 
   private session(
@@ -1202,6 +1221,7 @@ export class UserOperationService {
       try { transactionHash = (await provider.status(record.chainId, record.operationHash, undefined))?.transactionHash; }
       catch { /* A bundler without the method, or one that is down, is what the receipt path was already. */ }
     }
+    const deadline = this.executionDeadline(record);
     const observation = await observeUserOperation({
       chain: this.chain(),
       binding: this.execution(
@@ -1212,8 +1232,8 @@ export class UserOperationService {
       ),
       signedCommitment: record.submission.commitment,
       ...(transactionHash ? { transactionHash } : {}),
-      // The signed validity ends with the preparation; past it the operation can only be redone.
-      validUntil: Math.floor(record.expiresAt / 1000),
+      // Past its enforceable deadline the operation can only be redone; a session's is its sponsor's.
+      ...(deadline !== undefined ? { validUntil: deadline } : {}),
       confirmations: this.policy(record.chainId).confirmations,
       now: this.now(),
       // The account is verified once per execution block, behind the answer: the observation that
