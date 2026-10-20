@@ -36,13 +36,22 @@ document.addEventListener("toggle", async event => {
 }, true);
 
 const filter = document.querySelector<HTMLInputElement>("#endpoint-filter");
-filter?.addEventListener("input", () => {
+// Field names come from a separate index, fetched the first time the filter is used; a failed fetch retries on the next use.
+let terms: Record<string, string> = {};
+let termsLoading: Promise<void> | undefined;
+const loadTerms = () => termsLoading ??= fetch(filter!.dataset.terms!)
+  .then(response => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))
+  .then(loaded => { terms = loaded; applyFilter(); }, () => { termsLoading = undefined; });
+filter?.addEventListener("focus", () => void loadTerms());
+filter?.addEventListener("input", () => { applyFilter(); void loadTerms(); });
+function applyFilter() {
+  if (!filter) return;
   const term = filter.value.trim().toLowerCase();
   let count = 0;
   for (const endpoint of document.querySelectorAll<HTMLDetailsElement>(".endpoint")) {
     // Match the endpoint's own text and field names, not whichever details tables happen to be loaded.
     const text = Array.from(endpoint.children, child => child.matches(".endpoint-fields") ? "" : child.textContent).join(" ");
-    endpoint.hidden = !`${text} ${endpoint.dataset.terms ?? ""}`.toLowerCase().includes(term);
+    endpoint.hidden = !`${text} ${terms[endpoint.dataset.operation ?? ""] ?? ""}`.toLowerCase().includes(term);
     if (!endpoint.hidden) count++;
   }
   for (const group of document.querySelectorAll<HTMLDetailsElement>(".reference > details")) {
@@ -51,4 +60,4 @@ filter?.addEventListener("input", () => {
   }
   const result = document.getElementById("endpoint-count");
   if (result) result.textContent = `${count} endpoints`;
-});
+}

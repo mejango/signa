@@ -190,7 +190,7 @@ describe("static REST documentation", () => {
     expect(html).toContain('href="/assets/api.css"');
     // Field tables load per endpoint; the page keeps only their names, for the filter.
     expect(html).not.toContain("schema-fields");
-    expect(html).toMatch(/data-terms="[^"]*\bplanId\b/);
+    expect(html).toContain('data-terms="/api/terms.json"');
     const reference = apiReferencePages(unsafe);
     const pages = [...reference.values()].join("");
     expect(pages).toContain("Request body");

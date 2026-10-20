@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { gzipSync } from "node:zlib";
 import { createProtocolOperations, createServices, loadConfig } from "@juicebox/mcp/host";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Hono } from "hono";
@@ -6,7 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { JbcenterEnv } from "../src/types.js";
 import { operationDescriptors } from "../src/rest/app.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { apiDocsCss, apiDocsPage, apiReferencePages, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
 import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { mountRestSite, type RestSite } from "../src/rest/site.js";
 
@@ -106,16 +107,30 @@ describe("Signa wallet API documentation", () => {
     expect(apiDocsPage(full)).toContain("Choose a data source");
   });
 
+  it("keeps field names out of the wallet /api page and in its on-demand term index", () => {
+    const html = apiDocsPage(wallet, "wallet");
+    expect(html).toContain('data-terms="/api/terms.json"');
+    const terms = apiSearchTerms(wallet);
+    expect(Object.keys(terms).sort()).toEqual(Object.values(wallet.paths).flatMap(methods => Object.values(methods).map(operation => operation.operationId)).sort());
+    // Ceilings sit at the measured gzip size rounded up to the next 0.5 KiB.
+    expect(gzipSync(html).length).toBeLessThanOrEqual(10_752);
+    expect(gzipSync(JSON.stringify(terms)).length).toBeLessThanOrEqual(6_144);
+  });
+
   it("serves the wallet reference locally and redirects inherited guides to Center", async () => {
     const mount = (surface?: "wallet") => {
       const app = new Hono<JbcenterEnv>();
       mountRestSite(app, { app: new Hono() as unknown as RestSite["app"], ...(surface ? { surface } : {}), audience: origin,
         accountsScript: "", docsHtml: apiDocsPage(surface ? wallet : full, surface), docsCss: apiDocsCss,
+        apiTerms: JSON.stringify(apiSearchTerms(surface ? wallet : full)),
         documents: new Map([["quickstart", "# Center quickstart"], ["client", "# Client workflows"], ["contracts", "# Contracts"]]) });
       return app;
     };
     const app = mount("wallet");
     expect(await (await app.request("/api")).text()).toContain("Wallet API | Signa");
+    const terms = await app.request("/api/terms.json");
+    expect(terms.headers.get("content-type")).toContain("application/json");
+    expect((await terms.json() as Record<string, string>).getUserOperation).toMatch(/\bpaymasterAndData\b/);
     const icon = await app.request("/assets/accounts-icon.svg");
     expect(icon.status).toBe(200); expect(icon.headers.get("content-type")).toContain("image/svg+xml");
     for (const name of ["quickstart", "client", "contracts", "CLIENT.md"]) {

@@ -46,6 +46,8 @@ export interface RestSite {
   docsHtml: string;
   /** Each endpoint's parameter and schema tables, by operationId; /api loads one when it is opened. */
   apiReference?: ReadonlyMap<string, string>;
+  /** JSON of each endpoint's field names, by operationId, for the /api filter. */
+  apiTerms?: string;
   docsCss: string;
   documents: ReadonlyMap<string, string>;
 }
@@ -97,6 +99,9 @@ export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
     const page = site.apiReference?.get(context.req.param("operationId"));
     return page ? context.html(page, 200, REST_PAGE_HEADERS) : context.notFound();
   });
+  app.get("/api/terms.json", (context) =>
+    context.body(site.apiTerms ?? "{}", 200, { ...REST_PAGE_HEADERS, "Content-Type": "application/json; charset=utf-8" }),
+  );
   app.get("/api/docs/:name", (context) => {
     const name = context.req.param("name").replace(/\.md$/i, "").toLowerCase();
     const document = site.documents.get(name);

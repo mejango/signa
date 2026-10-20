@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { apiDocsCss, apiDocsPage, apiReferencePages, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
 import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { mountRestSite, type RestSite } from "../src/rest/site.js";
 import type { JbcenterEnv } from "../src/types.js";
@@ -12,7 +12,7 @@ import type { JbcenterEnv } from "../src/types.js";
 const origin = "https://juicebox.center";
 let spec: OpenApiDocument, app: Hono<JbcenterEnv>, browser: Browser, page: Page;
 const fetched: string[] = [], errors: string[] = [];
-let failReference = false;
+let failReference = false, failTerms = false;
 
 beforeAll(async () => {
   const operations = createProtocolOperations(createServices(loadConfig({ NODE_ENV: "test", PUBLIC_ORIGIN: origin,
@@ -22,13 +22,13 @@ beforeAll(async () => {
     bundle: true, format: "esm", write: false, platform: "browser" });
   app = new Hono<JbcenterEnv>();
   mountRestSite(app, { app: new Hono() as unknown as RestSite["app"], audience: origin, accountsScript: "",
-    docsHtml: apiDocsPage(spec), apiReference: apiReferencePages(spec), docsCss: apiDocsCss,
+    docsHtml: apiDocsPage(spec), apiReference: apiReferencePages(spec), apiTerms: JSON.stringify(apiSearchTerms(spec)), docsCss: apiDocsCss,
     docsScript: bundle.outputFiles[0]!.text, documents: new Map() });
   browser = await chromium.launch({ headless: true });
 }, 60_000);
 afterAll(async () => { await browser?.close(); });
 beforeEach(async () => {
-  fetched.length = 0; errors.length = 0; failReference = false;
+  fetched.length = 0; errors.length = 0; failReference = false; failTerms = false;
   page = await browser.newPage();
   page.on("pageerror", error => errors.push(error.message));
   await page.route(origin + "/**", async route => {
@@ -36,6 +36,10 @@ beforeEach(async () => {
     if (url.pathname.startsWith("/api/reference/")) {
       fetched.push(url.pathname);
       if (failReference) return route.fulfill({ status: 503, body: "unavailable" });
+    }
+    if (url.pathname === "/api/terms.json") {
+      fetched.push(url.pathname);
+      if (failTerms) return route.fulfill({ status: 503, body: "unavailable" });
     }
     const response = await app.request(url.href);
     await route.fulfill({ status: response.status, headers: Object.fromEntries(response.headers), body: await response.text() });
@@ -84,25 +88,35 @@ describe("/api endpoint reference", () => {
     await expect.poll(() => endpoint.locator(".schema-fields").count()).toBeGreaterThan(0);
   });
 
-  it("filters on field names that only the search terms carry", async () => {
+  it("filters on field names from the term index, fetched once when the filter is first used", async () => {
     await page.goto(origin + "/api");
-    // A field name that appears in no endpoint's visible text, so only data-terms can match it.
-    const term = await page.evaluate(() => {
-      const visible = Array.from(document.querySelectorAll<HTMLElement>(".endpoint"), node => node.textContent!.toLowerCase()).join(" ");
-      for (const node of document.querySelectorAll<HTMLElement>(".endpoint[data-terms]"))
-        for (const name of node.dataset.terms!.split(" ")) if (name.length > 6 && !visible.includes(name.toLowerCase())) return name;
-    });
+    expect(fetched).toEqual([]);
+    const index = apiSearchTerms(spec);
+    // A field name that appears in no endpoint's visible text, so only the index can match it.
+    const visible = (await page.locator(".endpoint").allTextContents()).join(" ").toLowerCase();
+    const term = Object.values(index).flatMap(terms => terms.split(" ")).find(name => name.length > 6 && !visible.includes(name.toLowerCase()));
     expect(term).toBeTruthy();
+    failTerms = true;
     await page.fill("#endpoint-filter", term!);
     const shown = page.locator(".endpoint:not([hidden])");
+    await expect.poll(() => fetched.length).toBe(1);
+    expect(await shown.count()).toBe(0);
+    // A failed fetch retries on the next use, then the open query matches.
+    failTerms = false;
+    await page.locator("#endpoint-filter").blur();
+    await page.locator("#endpoint-filter").focus();
     await expect.poll(() => shown.count()).toBeGreaterThan(0);
-    for (const terms of await shown.evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.terms ?? "")))
-      expect(terms.toLowerCase()).toContain(term!.toLowerCase());
+    for (const operationId of await shown.evaluateAll(nodes => nodes.map(node => (node as HTMLElement).dataset.operation!)))
+      expect(index[operationId]!.toLowerCase()).toContain(term!.toLowerCase());
     expect(await page.locator("#endpoint-count").textContent()).toBe(`${await shown.count()} endpoints`);
+    // Names nested deeper than the tables render match too (a user operation's paymasterAndData).
+    await page.fill("#endpoint-filter", "paymasterAndData");
+    await expect.poll(() => locate("getUserOperation").isHidden()).toBe(false);
     // Loaded tables do not widen the match: descriptions inside them stay out of the filter.
     await page.fill("#endpoint-filter", "no endpoint has this text");
     await expect.poll(() => shown.count()).toBe(0);
     await page.fill("#endpoint-filter", "");
     expect(await shown.count()).toBe(await page.locator(".endpoint").count());
+    expect(fetched).toEqual(["/api/terms.json", "/api/terms.json"]);
   });
 });
