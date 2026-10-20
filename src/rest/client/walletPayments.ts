@@ -1,6 +1,7 @@
 import { sha256, stringToHex, type Hex } from 'viem';
 import { RestClientError, newRequestNonce } from './index.js';
 import { payFailureOf, type PayFailure } from './payFailure.js';
+import { isSettledPayment } from './paymentStates.js';
 import type { CenterClient } from './center.js';
 import { assertReviewedOperation, type PreparedUserOperation, type SmartWalletPlan } from './smartAccounts.js';
 import type { CenterWalletStorage } from './wallet.js';
@@ -77,7 +78,7 @@ const reviewPath = '/api/v1/wallet/payment-reviews';
 const reviewIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const paymentFields = ['kind', 'chainId', 'account', 'token', 'terminal', 'projectId', 'amount', 'beneficiary', 'minimumReturnedTokens', 'memo', 'metadata'] as const;
 const states = ['reviewing', 'approved', 'submitting', 'pending', 'confirming', 'paid', 'reverted', 'cancelled', 'unknown', 'expired', 'refused'];
-const terminal = (status: string) => ['paid', 'reverted', 'cancelled', 'expired', 'refused'].includes(status);
+const terminal = isSettledPayment;
 const hex32 = (value: unknown): value is Hex => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value);
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
