@@ -7,7 +7,6 @@ import {
   getContractAddress,
   isAddress,
   keccak256,
-  parseAbi,
   sliceHex,
   toHex,
   zeroAddress,
@@ -23,18 +22,11 @@ export { validatePasskeyCreationManifest } from "./passkeyCreation.js";
  * Keeping the creation bytes here makes address prediction browser-safe and independent of RPC. */
 export const SAFE_141_PROXY_CREATION_CODE =
   "0x608060405234801561001057600080fd5b506040516101e63803806101e68339818101604052602081101561003357600080fd5b8101908080519060200190929190505050600073ffffffffffffffffffffffffffffffffffffffff168173ffffffffffffffffffffffffffffffffffffffff1614156100ca576040517f08c379a00000000000000000000000000000000000000000000000000000000081526004018080602001828103825260228152602001806101c46022913960400191505060405180910390fd5b806000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff1602179055505060ab806101196000396000f3fe608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033496e76616c69642073696e676c65746f6e20616464726573732070726f7669646564" as Hex;
-export const SAFE_CREATION_ABI = parseAbi([
-  "function createProxyWithNonce(address singleton,bytes initializer,uint256 saltNonce) returns(address proxy)",
-  "event ProxyCreation(address indexed proxy,address singleton)",
-]);
-export const SAFE_SETUP_ABI = parseAbi([
-  "function setup(address[] owners,uint256 threshold,address to,bytes data,address fallbackHandler,address paymentToken,uint256 payment,address paymentReceiver)",
-]);
-export const SAFE7579_LAUNCH_SETUP_ABI = parseAbi([
-  "function addSafe7579(address safe7579,(address module,bytes initData,uint256 moduleType)[] modules,address[] attesters,uint8 threshold)",
-]);
-const MULTI_SEND_ABI = parseAbi(["function multiSend(bytes transactions)"]);
-const SIGNER_FACTORY_ABI = parseAbi(["function createSigner(uint256 x,uint256 y,uint176 verifiers) returns(address)"]);
+export const SAFE_CREATION_ABI = [{"name":"createProxyWithNonce","type":"function","stateMutability":"nonpayable","inputs":[{"type":"address","name":"singleton"},{"type":"bytes","name":"initializer"},{"type":"uint256","name":"saltNonce"}],"outputs":[{"type":"address","name":"proxy"}]},{"name":"ProxyCreation","type":"event","inputs":[{"type":"address","name":"proxy","indexed":true},{"type":"address","name":"singleton"}]}] as const;
+export const SAFE_SETUP_ABI = [{"name":"setup","type":"function","stateMutability":"nonpayable","inputs":[{"type":"address[]","name":"owners"},{"type":"uint256","name":"threshold"},{"type":"address","name":"to"},{"type":"bytes","name":"data"},{"type":"address","name":"fallbackHandler"},{"type":"address","name":"paymentToken"},{"type":"uint256","name":"payment"},{"type":"address","name":"paymentReceiver"}],"outputs":[]}] as const;
+export const SAFE7579_LAUNCH_SETUP_ABI = [{"name":"addSafe7579","type":"function","stateMutability":"nonpayable","inputs":[{"type":"address","name":"safe7579"},{"type":"tuple[]","name":"modules","components":[{"type":"address","name":"module"},{"type":"bytes","name":"initData"},{"type":"uint256","name":"moduleType"}]},{"type":"address[]","name":"attesters"},{"type":"uint8","name":"threshold"}],"outputs":[]}] as const;
+const MULTI_SEND_ABI = [{"name":"multiSend","type":"function","stateMutability":"nonpayable","inputs":[{"type":"bytes","name":"transactions"}],"outputs":[]}] as const;
+const SIGNER_FACTORY_ABI = [{"name":"createSigner","type":"function","stateMutability":"nonpayable","inputs":[{"type":"uint256","name":"x"},{"type":"uint256","name":"y"},{"type":"uint176","name":"verifiers"}],"outputs":[{"type":"address"}]}] as const;
 export interface PasskeyCreationBootstrap {
   version: "center-passkey-bootstrap-v1";
   signerAddress: Address;
