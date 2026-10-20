@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, copyFile, readFile, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -16,8 +17,8 @@ import { baseFastLzLength, calculateBaseSignedFees, type BaseFeeParameters } fro
 import { enrollmentBackupAccount, enrollmentManifest } from "./fixtures/wallet-enrollment-crypto.js";
 
 const referenceRoot = new URL("../src/rest/wallet/stack/baseFees/", import.meta.url);
-const anvil = process.env.ANVIL_BINARY ?? "anvil", forge = process.env.FORGE_BINARY ?? "forge";
-const available = spawnSync(anvil, ["--version"]).status === 0 && spawnSync(forge, ["--version"]).status === 0;
+const forge = process.env.FORGE_BINARY ?? "forge";
+const available = anvilAvailable() && spawnSync(forge, ["--version"]).status === 0;
 const referenceAddress = "0x000000000000000000000000000000000000bEEF" as Address;
 const relay = privateKeyToAccount(`0x${"22".repeat(32)}`); // Public fixture authority only.
 type SolidityQuote = {
@@ -116,8 +117,8 @@ describe.skipIf(!available)("full signed Base fee differential against pinned So
     const port = (server.address() as { port: number }).port;
     await new Promise<void>(resolve => server.close(() => resolve()));
     endpoint = `http://127.0.0.1:${port}`;
-    child = spawn(anvil, ["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun",
-      "--gas-limit", "300000000", "--silent"], { stdio: "ignore" });
+    child = spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun",
+      "--gas-limit", "300000000", "--silent"]);
     const startupDeadline = Date.now() + 5_000;
     for (;;) {
       lifetime.signal.throwIfAborted();

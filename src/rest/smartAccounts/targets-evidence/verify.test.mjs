@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { before, after, test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { keccak256 } from 'viem';
 import { verifyRuntime } from '../../protocol/code.ts';
 import { findCachedSolc } from '../stack/passkey/solc-cache.mjs';
+import { spawnAnvil } from '../../../../test/support/anvil.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bytes = file => readFileSync(resolve(here, file));
@@ -58,7 +59,7 @@ before(async () => {
   const port = server.address().port;
   await new Promise(done => server.close(done));
   evmUrl = `http://127.0.0.1:${port}`;
-  anvil = spawn(process.env.ANVIL_BINARY ?? resolve(homedir(), '.foundry/bin/anvil'), ['--port', String(port), '--host', '127.0.0.1', '--silent'], { stdio: 'ignore' });
+  anvil = spawnAnvil(['--port', String(port), '--host', '127.0.0.1', '--silent'], { fallback: resolve(homedir(), '.foundry/bin/anvil') });
   let failure;
   anvil.once('error', error => { failure = error; });
   for (let attempt = 0; attempt < 100; attempt++) {

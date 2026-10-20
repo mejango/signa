@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { createHash, createPrivateKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -38,8 +39,7 @@ const safe = artifact("SafeL2"), factory = artifact("SafeProxyFactory"),
   passkeyFactory = artifact("SafeWebAuthnSignerFactory", true);
 const erc1271Abi = parseAbi(["function isValidSignature(bytes32 digest,bytes signature) view returns(bytes4)"]);
 const eventAbi = parseAbi(["event UserOperationEvent(bytes32 indexed userOpHash,address indexed sender,address indexed paymaster,uint256 nonce,bool success,uint256 actualGasCost,uint256 actualGasUsed)"]);
-const anvil = process.env.ANVIL_BINARY ?? "anvil";
-const available = spawnSync(anvil, ["--version"]).status === 0;
+const available = anvilAvailable();
 const chainId = 8453;
 const rpId = "wallet.juicebox.center", origin = `https://${rpId}`;
 const credentialId = Buffer.from("synthetic-p256-credential").toString("base64url");
@@ -168,7 +168,7 @@ describe.skipIf(!available)("TypeScript passkey producer through the pinned loca
     const port = (server.address() as { port: number }).port;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     endpoint = `http://127.0.0.1:${port}`;
-    child = spawn(anvil, ["--host", "127.0.0.1", "--port", String(port), "--chain-id", String(chainId), "--hardfork", "cancun", "--timestamp", "1800000000", "--silent"], {
+    child = spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", String(chainId), "--hardfork", "cancun", "--timestamp", "1800000000", "--silent"], {
       stdio: ["ignore", "ignore", "pipe"],
     });
     for (let i = 0; i < 100; i++) {

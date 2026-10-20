@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import {
@@ -108,8 +109,7 @@ const manifest: SmartAccountManifest = {
   policies: [],
   moduleInspectorId: SAFE7579_INSPECTOR_ID,
 };
-const anvil = process.env.ANVIL_BINARY ?? "anvil";
-const available = spawnSync(anvil, ["--version"]).status === 0;
+const available = anvilAvailable();
 const attack = JSON.parse(
   readFileSync(
     new URL(
@@ -408,8 +408,7 @@ describe.skipIf(!available)(
       const port = (server.address() as { port: number }).port;
       await new Promise<void>((resolve) => server.close(() => resolve()));
       endpoint = `http://127.0.0.1:${port}`;
-      child = spawn(
-        anvil,
+      child = spawnAnvil(
         [
           "--host",
           "127.0.0.1",
@@ -420,12 +419,10 @@ describe.skipIf(!available)(
           // Match the pinned stack's execution target; Anvil's moving latest default changes mining work.
           "--hardfork",
           "cancun",
-          // Retain enough archive state for the fixtures without writing every dormant block to disk.
-          "--prune-history",
-          "512",
           "--silent",
         ],
-        { stdio: ["ignore", "ignore", "pipe"] },
+        // Retain enough archive state for the fixtures.
+        { stdio: ["ignore", "ignore", "pipe"], history: 512 },
       );
       for (let i = 0; i < 100; i++) {
         try {
