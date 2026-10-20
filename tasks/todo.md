@@ -19,10 +19,14 @@ jango, 2026-10-20: "go ahead and do the queued real fix". Follows PR #18 (4162e5
 - [x] Route `POST /user-operations/{id}/retirement` + OpenAPI + TRANSACTIONS.md
 - [x] Client: `refused` state, retire after a server-answered (>= 400) submit refusal, `retirePayment()`, approved branch maps retired, README recovery
 - [x] Tests; typecheck, build, vitest, PG suites on local PG 14
-- [ ] Codex SHIP, CI green, merge
+- [x] Codex SHIP (pass 5)
+- [ ] CI green, merge
 
 ## Review
 
 - Before: a refused approval stayed `prepared`; the client journal sat at `unknown` and `clearPayment()` refused until the grant ended and the signed window (about 5 minutes) passed, so the payer waited or was stuck in that tab.
 - After: refusal answer plus one retirement round trip (under a second in tests), the journal reads `refused`, `clearPayment()` and a fresh review work at once, and the fresh payment reuses the same nonce.
 - Codex pass 1 FIX (6 findings) addressed in 3ffeffa: proof-only settlement, outer receipt success, claim-time recheck under a sender lock, alias-wide lookup, exact full nonce across keys, README recovery.
+- Codex pass 2 FIX: session retirement refused (no signed deadline). Outer-revert reservation is main's behavior; an observer change for it caused regressions in pass 3 and was reverted, left as a follow-up.
+- Codex pass 4 FIX: retirement requires an approved payment review and live relay authority in the transaction. Pass 5 SHIP.
+- Follow-up: an outer-reverted bundle keeps its nonce reservation forever (main behavior); fix needs plan-step and session-aware expiry together.
