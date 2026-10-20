@@ -734,4 +734,77 @@ suite('PostgreSQL UserOperation persistence', () => {
     const reclaimed = await store.claim(claim(again.record, Date.now()));
     expect(reclaimed.dispatch).toBe(true);
   });
+  it('releases the nonce of an operation whose whole bundle reverted, and keeps its wallet on that nonce until it settles', async () => {
+    const reverted = (id: `0x${string}`, status: 'reverted' | 'success') => ({
+      state: 'reverted' as const, operationHash: id, transactionHash: h(`bundle:${id}`),
+      receipt: { transactionHash: h(`bundle:${id}`), blockHash: h('block'), blockNumber: '100', status, canonical: true,
+        confirmations: 2, observedAt: Date.now(), logs: [] },
+      semantic: { status: 'failed' as const, details: 'The entire EntryPoint bundle reverted.' },
+    });
+    const nonceRows = async (id: string) => (await pool.query('SELECT 1 FROM rest_user_operation_nonces WHERE user_operation_id=$1', [id])).rowCount;
+    const first = await prepare('bundle-reverted', 500n);
+    const admitted = await store.claim(claim(first.record, Date.now()));
+    const released = await store.observe(first.record.id, admitted.record.revision, reverted(first.record.operationHash, 'reverted'));
+    expect(released.state).toBe('reverted'); expect(released.nonceReleasedAt).toBeGreaterThan(0);
+    expect(await nonceRows(first.record.id)).toBe(0);
+    const unsettled = await store.retired(first.record.chainId, first.record.sender);
+    expect(unsettled.map((record) => record.id)).toEqual([first.record.id]);
+    // Another nonce is refused at the claim while it is unsettled; its very nonce is free for a fresh payment.
+    const other = await prepare('bundle-other-nonce', 501n);
+    await expect(store.claim(claim(other.record, Date.now()))).rejects.toMatchObject({ code: 'USER_OPERATION_RETIRED_CHANGED' });
+    const fresh = await prepare('bundle-fresh', 500n);
+    expect((await store.claim({ ...claim(fresh.record, Date.now()), retiredChecked: [first.record.id] })).dispatch).toBe(true);
+    expect((await store.nonceHolder(fresh.record.chainId, fresh.record.sender, 500n))!.id).toBe(fresh.record.id);
+    // Settlement looks at every operation sent at the nonce, under any account, settled or not.
+    expect((await store.sentAt(fresh.record.chainId, fresh.record.sender, 500n)).map((record) => record.id).sort())
+      .toEqual([first.record.id, fresh.record.id].sort());
+    // A reorg of the revert keeps it unsettled, and its later expiry never drops the fresh payment's reservation.
+    const reorged = await store.observe(first.record.id, released.revision, { state: 'pending', operationHash: first.record.operationHash });
+    expect((await store.retired(first.record.chainId, first.record.sender)).map((record) => record.id)).toEqual([first.record.id]);
+    await store.observe(first.record.id, reorged.revision, { state: 'expired', operationHash: first.record.operationHash, reason: 'past validity' });
+    expect((await store.nonceHolder(fresh.record.chainId, fresh.record.sender, 500n))!.id).toBe(fresh.record.id);
+    // A failed account execution inside a successful bundle consumed its nonce: nothing is released.
+    const inner = await prepare('bundle-inner', 502n), innerClaim = await store.claim({ ...claim(inner.record, Date.now()), retiredChecked: [first.record.id] });
+    const innerFailed = await store.observe(inner.record.id, innerClaim.record.revision, reverted(inner.record.operationHash, 'success'));
+    expect(innerFailed.nonceReleasedAt).toBeUndefined(); expect(await nonceRows(inner.record.id)).toBe(1);
+    await store.settleRetired(first.record.id);
+    expect(await store.retired(first.record.chainId, first.record.sender)).toEqual([]);
+    // A release waits on the sender lock a claim holds from its check of the unsettled set to its commit.
+    const raced = await prepare('bundle-raced', 503n), racedClaim = await store.claim({ ...claim(raced.record, Date.now()), retiredChecked: [first.record.id] });
+    const holder = await pool.connect();
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`user-operation-sender:${raced.record.chainId}:${raced.record.sender.toLowerCase()}`]);
+      const pid = (await holder.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]!.pid;
+      const releasing = store.observe(raced.record.id, racedClaim.record.revision, reverted(raced.record.operationHash, 'reverted'));
+      await waitUntilBlocked(holder, pid, /pg_advisory_xact_lock/);
+      expect(await nonceRows(raced.record.id)).toBe(1);
+      await holder.query('COMMIT');
+      expect((await releasing).nonceReleasedAt).toBeGreaterThan(0);
+    } finally { holder.release(); }
+    expect(await nonceRows(raced.record.id)).toBe(0);
+    await store.settleRetired(raced.record.id);
+    // The migration releases rows reverted this way before the fix, each held unsettled until the chain settles it.
+    const migration = (await import('node:fs/promises')).readFile(new URL('../src/db/migrations/062_user_operation_reverted_bundle_release.sql', import.meta.url), 'utf8');
+    const backfill = (await migration).split(';').map((statement) => statement.trim()).filter((statement) => /^(?:--[^\n]*\n\s*)*(SELECT|UPDATE|DELETE)/.test(statement));
+    expect(backfill).toHaveLength(3);
+    const stuck = async (id: string, nonce: bigint, expiresAt?: number) => {
+      const value = await prepare(id, nonce), claimed = await store.claim(claim(value.record, Date.now()));
+      await store.observe(value.record.id, claimed.record.revision, reverted(value.record.operationHash, 'reverted'));
+      await pool.query(`UPDATE rest_user_operations SET document=document - 'nonceReleasedAt' || jsonb_build_object('expiresAt', $2::bigint) WHERE id=$1`,
+        [value.record.id, expiresAt ?? value.record.expiresAt]);
+      await pool.query('INSERT INTO rest_user_operation_nonces(chain_id,sender,nonce,entry_point,operation_hash,signed_commitment,user_operation_id) VALUES($1,$2,$3,$4,$5,$6,$7)',
+        [value.record.chainId, value.record.sender.toLowerCase(), nonce.toString(), value.record.entryPoint.toLowerCase(),
+          value.record.operationHash.toLowerCase(), claimed.record.submission!.commitment.toLowerCase(), value.record.id]);
+      return value.record.id;
+    };
+    const old = await stuck('bundle-stuck-old', 511n, Date.now() - 7_200_000);
+    for (const statement of backfill) await pool.query(statement);
+    expect(await nonceRows(old)).toBe(0);
+    const oldRow = (await pool.query('SELECT document, revision FROM rest_user_operations WHERE id=$1', [old])).rows[0];
+    expect(oldRow.document.nonceReleasedAt).toBeGreaterThan(0); expect(oldRow.document.retiredSettledAt).toBeUndefined();
+    expect(Number(oldRow.document.revision)).toBe(Number(oldRow.revision));
+    expect((await store.retired(first.record.chainId, first.record.sender)).map((record) => record.id)).toEqual([old]);
+    await store.settleRetired(old);
+  });
 });

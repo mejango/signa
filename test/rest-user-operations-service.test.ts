@@ -264,7 +264,16 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
     finalGasGrowth: false,
     providerStatus: undefined as Hex | undefined,
     statusReads: 0,
+    // The mined bundle's outer receipt reverted (status 0, no logs); its block left the chain.
+    outerReverted: false,
+    orphaned: false,
+    // The operation the mined bundle carries, when not the last one sent.
+    bundled: undefined as UserOperationV07 | undefined,
+    // The sponsor's signed window read back from the paymaster data, and the canonical head's time.
+    sponsorValidUntil: undefined as number | undefined,
+    headTimestamp: undefined as number | undefined,
   };
+  const bundleBlock = () => (state.orphaned ? h("orphaned-block") : blockHash);
   const log = (
     index: number,
     address: Address,
@@ -275,7 +284,7 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
     topics,
     data,
     transactionHash: txHash,
-    blockHash,
+    blockHash: bundleBlock(),
     blockNumber: "0x64",
     transactionIndex: "0x0",
     logIndex: toHex(index),
@@ -289,11 +298,11 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
     input: encodeFunctionData({
       abi: ENTRY_POINT_V07_ABI,
       functionName: "handleOps",
-      args: [[packUserOperation(state.signed!)], target],
+      args: [[packUserOperation((state.bundled ?? state.signed!))], target],
     }),
     value: "0x0",
     chainId: "0x1",
-    blockHash,
+    blockHash: bundleBlock(),
     blockNumber: "0x64",
     transactionIndex: "0x0",
   });
@@ -301,11 +310,11 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
     transactionHash: txHash,
     from: target,
     to: entryPoint,
-    blockHash,
+    blockHash: bundleBlock(),
     blockNumber: "0x64",
     transactionIndex: "0x0",
-    status: "0x1",
-    logs: [
+    status: state.outerReverted ? "0x0" : "0x1",
+    logs: state.outerReverted ? [] : [
       log(
         0,
         entryPoint,
@@ -323,9 +332,9 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
           abi: ENTRY_POINT_V07_ABI,
           eventName: "UserOperationEvent",
           args: {
-            userOpHash: getUserOperationHash(state.signed!, entryPoint, 1),
+            userOpHash: getUserOperationHash((state.bundled ?? state.signed!), entryPoint, 1),
             sender: safe,
-            paymaster: state.signed!.paymaster ?? zeroAddress,
+            paymaster: (state.bundled ?? state.signed!).paymaster ?? zeroAddress,
           },
         }) as Hex[],
         encodeAbiParameters(
@@ -335,7 +344,7 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
             { type: "uint256" },
             { type: "uint256" },
           ],
-          [BigInt(state.signed!.nonce), true, 100n, 100n],
+          [BigInt((state.bundled ?? state.signed!).nonce), true, 100n, 100n],
         ),
       ),
     ],
@@ -347,7 +356,7 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
       return {
         number: "0x64",
         hash: blockHash,
-        timestamp: toHex(blockTimestamp),
+        timestamp: toHex(state.headTimestamp ?? blockTimestamp),
         baseFeePerGas: "0x0",
       };
     if (method === "eth_maxPriorityFeePerGas") return "0x1";
@@ -483,7 +492,7 @@ async function fixture(useSession = false, currentProfile = false, useSponsorRou
                   policyId: "fixture-policy",
                   gasOnly: true as const,
                   validAfter: 0,
-                  validUntil: now / 1000 + 1000,
+                  validUntil: state.sponsorValidUntil ?? now / 1000 + 1000,
                   commitment: h("fixture-sponsor"),
                 }),
               },
@@ -1335,5 +1344,127 @@ describe("UserOperationService integration", () => {
     );
     expect(methods).not.toContain("pm_getPaymasterData");
     expect(methods).not.toContain("eth_sendUserOperation");
+  });
+});
+
+describe("a payment whose whole bundle reverted", () => {
+  // The bundle carrying the first payment is mined and its outer receipt reverted: status 0, no logs.
+  async function reverted(useSession = false) {
+    const f = await fixture(useSession), first = await f.prepare("reverted-plan"), signature = await f.sign(first);
+    expect((await f.service.submit(f.principal, first.id, signature, "reverted-submit")).state).toBe("pending");
+    f.state.bundled = f.state.signed; f.state.mined = true; f.state.outerReverted = true;
+    return { f, first, signature };
+  }
+  // A read observes the operation again once the last observation is a second old.
+  const settle = async (f: Awaited<ReturnType<typeof fixture>>, id: string) => {
+    f.tick(2_000);
+    await f.service.get(f.principal, id);
+    return (await f.store.get(f.activeActor, id))!;
+  };
+
+  it("settles it failed with the reason, and a fresh payment takes its nonce at once; its bytes are never sent again", async () => {
+    const { f, first, signature } = await reverted();
+    const failed = await settle(f, first.id);
+    expect(failed).toMatchObject({ state: "reverted", observation: { receipt: { status: "reverted", canonical: true },
+      semantic: { status: "failed", details: "The entire EntryPoint bundle reverted." } } });
+    // The plan step settles failed with it; the payer reviews a fresh payment on a new plan.
+    const plan = await f.transactions.getPlan(f.activeActor, "reverted-plan");
+    expect(plan.steps[0]).toMatchObject({ state: "reverted", semantic: { status: "failed" } }); expect(plan.status).toBe("blocked");
+    // The revert rolled the nonce back, so the fresh payment is prepared at the same nonce and sent.
+    const fresh = await f.prepare("fresh-plan");
+    expect(BigInt(fresh.operation.nonce)).toBe(BigInt(first.operation.nonce));
+    expect((await f.service.submit(f.principal, fresh.id, await f.sign(fresh), "fresh-submit")).state).toBe("pending");
+    expect(f.state.sends).toBe(2);
+    // The reverted bytes again, under either key: observed, never sent.
+    expect((await f.service.submit(f.principal, first.id, signature, "reverted-submit")).state).toBe("reverted");
+    expect((await f.service.submit(f.principal, first.id, signature, "reverted-again")).state).toBe("reverted");
+    expect(f.state.sends).toBe(2);
+  });
+
+  it("releases nothing on revert evidence whose block is not canonical", async () => {
+    const { f, first } = await reverted();
+    f.state.orphaned = true;
+    expect((await settle(f, first.id)).state).toBe("unknown");
+    const fresh = await f.prepare("fresh-plan");
+    await expect(f.service.submit(f.principal, fresh.id, await f.sign(fresh), "fresh-submit")).rejects.toMatchObject({ code: "USER_OPERATION_NONCE_CONFLICT" });
+    expect(f.state.sends).toBe(1);
+  });
+
+  it("holds the wallet to that nonce until the chain settles it, through a reorg of the revert and a late inclusion", async () => {
+    const { f, first } = await reverted();
+    expect((await settle(f, first.id)).nonceReleasedAt).toBeDefined();
+    // The revert's block left the chain: the bytes can still run, so the nonce stays free only for an operation at it.
+    f.state.orphaned = true;
+    expect((await settle(f, first.id)).state).toBe("unknown");
+    expect(BigInt((await f.prepare("same-nonce")).operation.nonce)).toBe(BigInt(first.operation.nonce));
+    // Its nonce moved: until an execution shows what took it, nothing is prepared at the next one.
+    f.state.nonceSequence = 1n;
+    await expect(f.prepare("next-nonce")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CONFIRMING" });
+    f.state.orphaned = false; f.tick(2_000);
+    await expect(f.prepare("next-nonce-2")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_NONCE_USED" });
+    // The bytes were included again and ran: the payment reads paid, and the wallet moves on.
+    f.state.outerReverted = false;
+    await vi.waitFor(async () => expect((await settle(f, first.id)).state).toBe("confirmed"));
+    expect((await f.transactions.getPlan(f.activeActor, "reverted-plan")).steps[0]).toMatchObject({ state: "confirmed" });
+    const next = await f.prepare("next-nonce-3");
+    expect(BigInt(next.operation.nonce) & ((1n << 64n) - 1n)).toBe(1n);
+    expect((await f.store.get(f.activeActor, first.id))!.retiredSettledAt).toBeDefined();
+  });
+
+  it("settles on the fresh payment's execution at that nonce, though the reverted one can no longer be observed", async () => {
+    const { f, first } = await reverted();
+    await settle(f, first.id);
+    const fresh = await f.prepare("fresh-plan");
+    await f.service.submit(f.principal, fresh.id, await f.sign(fresh), "fresh-submit");
+    // The fresh payment ran at the nonce; the reverted one's route is gone, so observing it fails.
+    f.state.bundled = undefined; f.state.outerReverted = false; f.state.nonceSequence = 1n;
+    await vi.waitFor(async () => expect((await settle(f, fresh.id)).state).toBe("confirmed"));
+    const records = (f.store as unknown as { records: Map<string, { providerId: string }> }).records;
+    records.get(first.id)!.providerId = "removed-route";
+    const next = await f.prepare("next-plan");
+    expect(BigInt(next.operation.nonce) & ((1n << 64n) - 1n)).toBe(1n);
+    expect((await f.store.get(f.activeActor, first.id))!.retiredSettledAt).toBeDefined();
+  });
+
+  it("stays settled by the reverted payment's late execution after the fresh one at its nonce reverts too", async () => {
+    const { f, first } = await reverted();
+    await settle(f, first.id);
+    const fresh = await f.prepare("fresh-plan"), freshSignature = await f.sign(fresh);
+    await f.service.submit(f.principal, fresh.id, freshSignature, "fresh-submit");
+    // The reverted bytes were included again and ran; the wallet moves on.
+    f.state.outerReverted = false; f.state.nonceSequence = 1n;
+    await vi.waitFor(async () => expect((await settle(f, first.id)).state).toBe("confirmed"));
+    expect(BigInt((await f.prepare("next-plan")).operation.nonce) & ((1n << 64n) - 1n)).toBe(1n);
+    // The fresh payment's bundle then reverts as a whole: it is released and held unsettled, and the
+    // execution that took the nonce still settles it.
+    f.state.bundled = f.state.signed; f.state.outerReverted = true;
+    expect((await settle(f, fresh.id)).nonceReleasedAt).toBeDefined();
+    expect(BigInt((await f.prepare("after-plan")).operation.nonce) & ((1n << 64n) - 1n)).toBe(1n);
+  });
+
+  it("ends a session operation by its sponsor's signed window, not by its preparation's expiry", async () => {
+    const f = await fixture(true), first = await f.prepare("session-plan");
+    expect((await f.service.submit(f.principal, first.id, await f.sign(first), "session-submit")).state).toBe("pending");
+    const sponsorEnds = first.expiresAt / 1000 + 600;
+    f.state.sponsorValidUntil = sponsorEnds;
+    // Two minutes of canonical blocks past the preparation's expiry: the session signature binds no
+    // deadline and the sponsor's window is open, so it can still run.
+    f.tick(first.expiresAt + 121_000 - f.now()); f.state.headTimestamp = f.now() / 1000;
+    expect((await settle(f, first.id)).state).toBe("pending");
+    const open = await f.transactions.getPlan(f.activeActor, "session-plan");
+    expect(open.steps[0]!.state).not.toBe("reverted");
+    f.tick(sponsorEnds * 1000 + 121_000 - f.now()); f.state.headTimestamp = f.now() / 1000;
+    expect((await settle(f, first.id)).state).toBe("expired");
+    const ended = await f.transactions.getPlan(f.activeActor, "session-plan");
+    expect(ended.steps[0]).toMatchObject({ state: "reverted", semantic: { status: "failed" } });
+  });
+
+  it("releases a session operation's nonce on a whole-bundle revert, for a fresh session payment at that nonce", async () => {
+    const { f, first } = await reverted(true);
+    expect((await settle(f, first.id))).toMatchObject({ state: "reverted" });
+    const fresh = await f.prepare("fresh-plan");
+    expect(BigInt(fresh.operation.nonce)).toBe(BigInt(first.operation.nonce));
+    expect((await f.service.submit(f.principal, fresh.id, await f.sign(fresh), "fresh-submit")).state).toBe("pending");
+    expect(f.state.sends).toBe(2);
   });
 });

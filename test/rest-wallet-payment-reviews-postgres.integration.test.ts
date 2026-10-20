@@ -194,6 +194,23 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
     const store = new PostgresWalletPaymentReviewStore(pool, options());
     await expect(store.prepare(context.actor, { operationId: fresh.record.id, state: token() }, `review:${fresh.plan.id}`)).rejects.toMatchObject({ status: 409 });
   });
+  it("reviews a fresh payment at once at the nonce a whole-bundle revert released", async () => {
+    const value = await pendingReview(), operations = new PostgresUserOperationStore(pool);
+    await value.store.approve(value.view.draft.id, value.assertion);
+    const approval = (await value.store.getForApp(value.actor, value.view.draft.id)).approval!;
+    const operation = { ...value.record.operation, signature: approval.signature };
+    const claimed = await operations.claim({ actor: value.actor, id: value.record.id, key: `submit:${value.plan.id}`, operation,
+      signedCommitment: userOperationCommitment(operation, value.record.entryPoint, 8453),
+      authorization: { issuedAt: Number(value.view.draft.signing.validAfter), expiresAt: Number(value.view.draft.signing.validUntil) }, now: await nowMs() });
+    const fresh = await preparedOperation(value, 120_000, BigInt(value.record.operation.nonce));
+    await expect(value.store.prepare(value.actor, { operationId: fresh.record.id, state: token() }, `review:${fresh.plan.id}`)).rejects.toMatchObject({ status: 409 });
+    const bundle = keccak256(toHex("reverted-bundle"));
+    const reverted = await operations.observe(value.record.id, claimed.record.revision, { state: "reverted", operationHash: value.record.operationHash,
+      transactionHash: bundle, receipt: { transactionHash: bundle, blockHash: keccak256(toHex("reverted-block")), blockNumber: "100", status: "reverted",
+        canonical: true, confirmations: 2, observedAt: await nowMs(), logs: [] }, semantic: { status: "failed", details: "The entire EntryPoint bundle reverted." } });
+    expect(reverted.nonceReleasedAt).toBeGreaterThan(0);
+    expect((await value.store.prepare(value.actor, { operationId: fresh.record.id, state: token() }, `review:${fresh.plan.id}:again`)).status).toBe("pending");
+  });
   it("creates a review under the id the app chose, once, and replays it whatever id a retry names", async () => {
     const value = await pendingReview();
     const second = await preparedOperation(value, 120_000, 2n), chosen = "7d2c1f5e-3b7a-4c9e-8f21-0a6d5e4c3b2a";

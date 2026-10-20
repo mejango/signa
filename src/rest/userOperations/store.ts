@@ -42,7 +42,11 @@ export interface UserOperationRecord {
     sessionObservationHash?: Hex;
   };
   observation?: UserOperationObservation;
-  /** When the chain settled a retired operation: it never ran and never can, or Signa's own operation took its nonce. */
+  /** When a canonical whole-bundle revert released this operation's nonce reservation. The revert
+   * rolled the nonce back and the signed bytes can still run, so until it settles it holds the wallet
+   * to its exact nonce, as a retired operation does. */
+  nonceReleasedAt?: number;
+  /** When the chain settled a retired or released operation: it never ran and never can, or Signa's own operation took its nonce. */
   retiredSettledAt?: number;
 }
 export interface UserOperationClaim {
@@ -75,9 +79,11 @@ export interface UserOperationStore {
   recoverable(limit: number, cursor?: string): Promise<UserOperationRecord[]>;
   /** Retires an unsent operation under the claim's lock; one something already claimed comes back as it is. */
   retire(actor: RestActor, id: string): Promise<UserOperationRecord>;
-  /** Every unsettled retired operation from `sender` on `chainId`, under any account. */
+  /** Every unsettled retired or released operation from `sender` on `chainId`, under any account. */
   retired(chainId: number, sender: Address): Promise<UserOperationRecord[]>;
   settleRetired(id: string): Promise<void>;
+  /** Every operation Signa sent from `sender` at this full nonce, under any account, settled or not. */
+  sentAt(chainId: number, sender: Address, nonce: bigint): Promise<UserOperationRecord[]>;
   /** The operation holding the full sender nonce, once one claimed it. */
   nonceHolder(chainId: number, sender: Address, nonce: bigint): Promise<UserOperationRecord | undefined>;
 }
@@ -384,6 +390,11 @@ export function observed(
     fail('INVALID_USER_OPERATION', 'Reverted execution requires canonical failure evidence.', 400);
   return clone({ ...record, state: observation.state, revision: record.revision + 1, observation });
 }
+/** A whole-bundle revert on a canonical block at depth: the EntryPoint rolled the nonce back, so the
+ * reservation is released for a fresh operation at that very nonce. */
+export const releasesNonce = (record: UserOperationRecord) =>
+  record.nonceReleasedAt === undefined && record.state === 'reverted' &&
+  record.observation?.receipt?.canonical === true && record.observation.receipt.status === 'reverted';
 export function nonceKey(record: Pick<UserOperationRecord, 'chainId' | 'sender'> & { operation: { nonce: Hex } }): string {
   return canonical([
     record.chainId,

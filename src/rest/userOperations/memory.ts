@@ -23,6 +23,7 @@ import {
   owns,
   preparationKey,
   readCursor,
+  releasesNonce,
   assertRetiredChecked,
   retiring,
   same,
@@ -161,8 +162,11 @@ export class MemoryUserOperationStore implements UserOperationStore {
   }
   async observe(id: string, revision: number, observation: UserOperationObservation) {
     assertText(id);
-    const next = observed(this.records.get(id) ?? missing(), revision, clone(observation));
-    if (next.state === 'expired') this.nonces.delete(nonceKey(next));
+    let next = observed(this.records.get(id) ?? missing(), revision, clone(observation));
+    const release = releasesNonce(next);
+    if (release) next = { ...next, nonceReleasedAt: this.clock() };
+    // Only its own reservation: a released nonce may already be held by a fresh operation.
+    if ((release || next.state === 'expired') && this.nonces.get(nonceKey(next))?.id === next.id) this.nonces.delete(nonceKey(next));
     this.records.set(id, next);
     return clone(next);
   }
@@ -174,7 +178,7 @@ export class MemoryUserOperationStore implements UserOperationStore {
     });
   }
   private unsettled(chainId: number, sender: Address) {
-    return [...this.records.values()].filter((record) => record.state === 'retired' && record.retiredSettledAt === undefined &&
+    return [...this.records.values()].filter((record) => (record.state === 'retired' || record.nonceReleasedAt !== undefined) && record.retiredSettledAt === undefined &&
       record.chainId === chainId && same(record.sender, sender));
   }
   async retired(chainId: number, sender: Address) {
@@ -182,8 +186,12 @@ export class MemoryUserOperationStore implements UserOperationStore {
   }
   async settleRetired(id: string) {
     const record = this.records.get(id);
-    if (record?.state === 'retired' && record.retiredSettledAt === undefined)
+    if (record && (record.state === 'retired' || record.nonceReleasedAt !== undefined) && record.retiredSettledAt === undefined)
       this.records.set(id, { ...record, retiredSettledAt: this.clock(), revision: record.revision + 1 });
+  }
+  async sentAt(chainId: number, sender: Address, nonce: bigint) {
+    return clone([...this.records.values()].filter((record) => record.submission && record.chainId === chainId &&
+      same(record.sender, sender) && BigInt(record.operation.nonce) === nonce));
   }
   async nonceHolder(chainId: number, sender: Address, nonce: bigint) {
     const held = this.nonces.get(nonceKey({ chainId, sender, operation: { nonce: toHex(nonce) } }));
