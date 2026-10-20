@@ -151,7 +151,9 @@ describe("payment failure reasons", () => {
       { ...served, message: "Reverted 0x6b2bb382" }, { ...served, message: "" },
       { ...served, reason: "INVENTED_REASON" }, { ...served, message: "Execution reverted. Visit evil.com." },
       { ...served, received: "901" }, { ...served, received: "900" }, { reason: "PAYMENTS_PAUSED", message: served.message, received: "1", minimum: "2" },
-      { reason: served.reason, message: served.message, received: "812" }, { ...served, message: "Lower it by 100 tokens." }])
+      { reason: served.reason, message: served.message, received: "812" }, { ...served, message: "Lower it by 100 tokens." },
+      { ...served, message: "This payment has settled successfully." }, { ...served, message: `${served.message} Lower your minimum.` },
+      { ...served, received: "0" }, { reason: served.reason, message: served.message }])
       expect(clientPayFailureOf(bad)).toBeUndefined();
   });
 });

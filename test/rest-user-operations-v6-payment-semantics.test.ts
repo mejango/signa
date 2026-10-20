@@ -275,11 +275,17 @@ describe("UserOperationService reverted payment reasons", () => {
     const first = await reverted();
     expect(first.observation?.payFailure).toEqual({ reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: expect.any(String) });
     expect(first.request).toHaveBeenCalledTimes(1);
-    const again = await reverted({ ...first.observation!, state: "confirming" });
+    // (Its stored reason differs, so the unchanged trace result is written again and read here.)
+    const again = await reverted({ ...first.observation!, reason: "Seen before." });
     expect(again.observation?.payFailure).toEqual(first.observation?.payFailure);
     expect(again.request).not.toHaveBeenCalled();
+    // A revert first seen confirming, with nothing traced yet, is traced once it settles.
+    const { payFailure: _found, ...untraced } = first.observation!;
+    const settled = await reverted({ ...untraced, state: "confirming" });
+    expect(settled.request).toHaveBeenCalledTimes(1);
+    expect(settled.observation?.payFailure).toEqual(first.observation?.payFailure);
     // Re-included in another block after a reorg, it is traced again.
-    const reorged = await reverted({ ...first.observation!, state: "confirming" }, `0x${"12".repeat(32)}`);
+    const reorged = await reverted({ ...first.observation!, reason: "Seen before." }, `0x${"12".repeat(32)}`);
     expect(reorged.request).toHaveBeenCalledTimes(1);
   });
 });

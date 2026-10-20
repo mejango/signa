@@ -668,7 +668,7 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
     const f = fixture();
     f.state.mined = true;
     f.state.eventSuccess = false;
-    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "Lower your minimum." };
+    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "This payment would get fewer tokens than your minimum, so lower your minimum or try again." };
     const reason = vi.fn(async () => payFailure);
     const result = await observeUserOperation({ chain: f.chain(), binding: f.binding,
       signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,

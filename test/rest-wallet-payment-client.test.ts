@@ -419,7 +419,7 @@ describe('Center browser payment review continuity', () => {
 
   it('keeps canonical inner failure distinct from a successful outer transaction', async () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
-    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'Lower your minimum.' };
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
     const reverted = f.observedOperation('reverted');
     f.observed({ ...reverted, observation: { ...reverted.observation, payFailure } });
     const status = await f.helper().refreshPayment();
@@ -429,7 +429,7 @@ describe('Center browser payment review continuity', () => {
 
   it('hands the app a refused submission\'s payment reason, in its exact shape only', async () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
-    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'Lower your minimum.' };
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
     f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', detail: 'Refused.', payFailure });
     await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
     f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, message: 'https://node.example/key' } });
@@ -440,7 +440,7 @@ describe('Center browser payment review continuity', () => {
 
   it('shows a payment reason only while the payment stands reverted', async () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
-    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'Lower your minimum.' };
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
     const confirming = f.observedOperation('confirming');
     f.observed({ ...confirming, observation: { ...confirming.observation, payFailure } });
     const status = await f.helper().refreshPayment();

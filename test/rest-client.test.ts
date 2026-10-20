@@ -163,7 +163,7 @@ describe("signed REST client request binding", () => {
   });
 
   it("keeps a served payment failure reason in its exact shape, and nothing else", async () => {
-    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "Lower your minimum." };
+    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "This payment would get fewer tokens than your minimum, so lower your minimum or try again." };
     const served = (body: unknown) => new SignedRestClient({ ...config, fetch: async () => Response.json(body, { status: 502 }) })
       .request({ requestTarget: "/api/v1/accounts/me" }).then(() => undefined, (error: { payFailure?: unknown }) => error);
     const refused = await served({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure });
