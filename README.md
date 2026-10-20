@@ -39,6 +39,12 @@ assets. The retained `mcp` package supplies protocol libraries; Signa does not m
 an MCP listener. Client packages and API documentation remain available through
 the API host. Inherited Center source has not all been pruned.
 
+Apps sign in and review payments through the npm package
+[`@me.jango/signa`](wallet-client/README.md), built by `npm run build:client`. Its
+`/core`, `/wagmi` and `/react` sign-in subpaths live in `wallet-client/src/`;
+`npm run test:connect` runs their tests with the coverage bar, and `npm run check`
+includes it.
+
 The Signa API exposes account and bot management, smart wallets, delegated sessions,
 wallet payment reviews, transaction plans, sponsorship and UserOperations. Its
 `/api` page and OpenAPI document list those routes. Protocol catalogs, project and

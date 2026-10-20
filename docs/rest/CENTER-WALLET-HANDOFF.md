@@ -407,7 +407,9 @@ Routes: `GET /networks`, `GET /networks/status`, `POST /networks/quote`, `POST /
   It carries only the connection and payment-review surface; bots and the CLI keep using the full
   client archive at `/api/client/`. `.github/workflows/publish.yml` publishes a new version after CI passes on
   `main` when `wallet-client/package.json` names one that npm does not have yet (`NPM_TOKEN`, scope
-  `@me.jango`; it was `@me.jango/center-wallet` through 0.3.7). The Juicebox SDK wraps this package; Homerun and Beep should depend on the SDK.
+  `@me.jango`; it was `@me.jango/center-wallet` through 0.3.7). Since 0.4.0 it also carries the connect
+  step as `/core`, `/wagmi` and `/react` (source and tests in `wallet-client/src/`, React and wagmi as
+  optional peers), which moved here from `@bananapus/nana-sdk-connect`. Apps depend on this package directly.
 - The app allowlist is database state and starts inactive. Activate or replace it from inside the
   production container, which holds `DATABASE_URL`:
   `railway ssh --service juice-central -- node dist/src/rest/wallet/policyCli.js --expected <revision> https://homerun.money /center/callback https://beep.biz /center/callback`

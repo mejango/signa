@@ -425,6 +425,7 @@ async function main() {
       observation.suites.push(...summarizeVitest(JSON.parse(await readFile(mcpReport, "utf8")), root, []));
       if (mcpError) throw mcpError;
       await runStep("typecheck", npm, ["run", "typecheck"], options);
+      await runStep("connect", npm, ["run", "test:connect"], options);
       const report = resolve(temporary, "service.json");
       let testError;
       try { await runStep("service", npm, ["test", "--", "--reporter=default", "--reporter=json", `--outputFile.json=${report}`], options); }
