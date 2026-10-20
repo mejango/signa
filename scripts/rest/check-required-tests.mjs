@@ -86,6 +86,7 @@ export const requiredVitestSuites = [
   "test/rest-wallet-deployment-observation-evm.test.ts",
   "test/rest-wallet-deployment-fees.test.ts",
   "test/rest-wallet-deployment-fees-anvil.test.ts",
+  "test/anvil-support.test.ts",
   "test/rest-wallet-base-receipt-fees.test.ts",
   "test/rest-wallet-base-fee-observation.test.ts",
   "test/rest-wallet-policy.test.ts",

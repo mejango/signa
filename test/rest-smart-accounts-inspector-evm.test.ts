@@ -419,12 +419,10 @@ describe.skipIf(!available)(
           // Match the pinned stack's execution target; Anvil's moving latest default changes mining work.
           "--hardfork",
           "cancun",
-          // Retain enough archive state for the fixtures without writing every dormant block to disk.
-          "--prune-history",
-          "512",
           "--silent",
         ],
-        { stdio: ["ignore", "ignore", "pipe"] },
+        // Retain enough archive state for the fixtures.
+        { stdio: ["ignore", "ignore", "pipe"], history: 512 },
       );
       for (let i = 0; i < 100; i++) {
         try {
