@@ -75,12 +75,18 @@ export async function tracedPayFailure(chain: UserOperationChain, chainId: numbe
   return undefined;
 }
 
+/** How long a refusal or revert waits for its reason before answering without one. */
+export const PAY_FAILURE_BUDGET_MS = 2_500;
+// ponytail: a timed-out diagnostic is abandoned, not cancelled; its one bounded RPC finishes on its own.
+export const withinPayFailureBudget = <T>(work: Promise<T | undefined>): Promise<T | undefined> =>
+  Promise.race([work, new Promise<undefined>(resolve => setTimeout(resolve, PAY_FAILURE_BUDGET_MS, undefined))]);
+
 const simulationRefusals = new Set(["USER_OPERATION_PROVIDER_REJECTED", "USER_OPERATION_RPC_UNAVAILABLE"]);
 /** A bundler's or the chain's refusal of an operation, carrying why its payment reverts (for the
  * problem body) when the calls say. Any other error comes back as it is. */
 export async function explainedRefusal(error: unknown, chain: UserOperationChain, chainId: number, sender: Address,
   callData: Hex): Promise<unknown> {
   if (!(error instanceof RestError) || !simulationRefusals.has(error.code)) return error;
-  const payFailure = await simulatedPayFailure(chain, chainId, sender, callData);
+  const payFailure = await withinPayFailureBudget(simulatedPayFailure(chain, chainId, sender, callData));
   return payFailure ? new RestError(error.status, error.code, error.message, { payFailure }) : error;
 }

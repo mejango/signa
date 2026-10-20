@@ -7,7 +7,7 @@ import { RestClientError } from "../src/rest/client/index.js";
 import { payFailureOf as clientPayFailureOf } from "../src/rest/client/payFailure.js";
 import { encodeSafe7579Execution } from "../src/rest/smartAccounts/accountExecution.js";
 import { UserOperationChain } from "../src/rest/userOperations/chain.js";
-import { explainedRefusal, payFailureOf, simulatedPayFailure, tracedPayFailure } from "../src/rest/userOperations/payFailure.js";
+import { explainedRefusal, PAY_FAILURE_BUDGET_MS, payFailureOf, simulatedPayFailure, tracedPayFailure } from "../src/rest/userOperations/payFailure.js";
 
 const sender = "0x1111111111111111111111111111111111111111" as Address;
 const terminal = "0x2222222222222222222222222222222222222222" as Address;
@@ -72,6 +72,14 @@ describe("payment failure reasons", () => {
     expect(await explainedRefusal(other, chain, 8453, sender, payment)).toBe(other);
     const unexplained = chainWith(async () => [{ calls: [{ status: "0x1" }, { status: "0x1" }] }]);
     expect(await explainedRefusal(refused, unexplained, 8453, sender, payment)).toBe(refused);
+  });
+
+  it("answers a refusal without its reason once the reason takes too long", async () => {
+    const refusal = new RestError(502, "USER_OPERATION_PROVIDER_REJECTED", "Refused.");
+    const started = Date.now();
+    const hung = chainWith(() => new Promise(() => undefined));
+    expect(await explainedRefusal(refusal, hung, 8453, sender, payment)).toBe(refusal);
+    expect(Date.now() - started).toBeLessThan(PAY_FAILURE_BUDGET_MS + 1_000);
   });
 
   it("reads a reverted payment from its own operation's failed call in the transaction trace", async () => {
