@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { keccak256 } from 'viem';
 import { verifyRuntime } from '../../protocol/code.ts';
@@ -58,7 +59,7 @@ before(async () => {
   const port = server.address().port;
   await new Promise(done => server.close(done));
   evmUrl = `http://127.0.0.1:${port}`;
-  anvil = spawnAnvil(['--port', String(port), '--host', '127.0.0.1', '--silent']);
+  anvil = spawnAnvil(['--port', String(port), '--host', '127.0.0.1', '--silent'], { fallback: resolve(homedir(), '.foundry/bin/anvil') });
   let failure;
   anvil.once('error', error => { failure = error; });
   for (let attempt = 0; attempt < 100; attempt++) {
