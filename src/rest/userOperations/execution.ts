@@ -8,6 +8,7 @@ import {
   toHex,
   type Hex,
 } from "viem";
+import { withinPayFailureBudget } from "./payFailure.js";
 import type { RestBlockEvidence } from "../core.js";
 import { assertSafe7579Execution } from "../smartAccounts/accountExecution.js";
 import type { SemanticResult, StoredReceipt } from "../transactions/types.js";
@@ -389,9 +390,14 @@ export async function observeUserOperation(
     );
   if (!event.success) {
     const reverted = confirmations >= options.confirmations;
-    // Only a settled revert is explained, and only if its block is still canonical after the trace.
-    const payFailure = reverted ? await options.payFailure?.(transactionHash, blockHash) : undefined;
-    if (payFailure) await chain.canonical(evidence);
+    // Only a settled revert is explained, and only if its block is still canonical after the trace;
+    // the whole explanation is optional and bounded, so a slow or failed one never holds the outcome.
+    const explain = options.payFailure;
+    const payFailure = reverted && explain ? await withinPayFailureBudget((async () => {
+      const found = await explain(transactionHash, blockHash);
+      if (!found) return undefined;
+      try { await chain.canonical(evidence); return found; } catch { return undefined; }
+    })().catch(() => undefined)) : undefined;
     return {
       ...base,
       transactionHash,

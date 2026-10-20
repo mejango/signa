@@ -436,6 +436,8 @@ describe('Center browser payment review continuity', () => {
     const error = await f.helper().submitPayment().catch((failure: unknown) => failure);
     expect(error).toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
     expect((error as { payFailure?: unknown }).payFailure).toBeUndefined();
+    // A reason never retires the approval: the payment stays held until Center shows its outcome.
+    expect(() => f.helper().clearPayment()).toThrow(expect.objectContaining({ code: 'WALLET_PAYMENT_UNRESOLVED' }));
   });
 
   it('shows a payment reason only while the payment stands reverted', async () => {

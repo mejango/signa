@@ -52,7 +52,7 @@ import {
 import { observeUserOperation } from "./execution.js";
 import { terminalAbi, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
 import { passkeyPayMetadataSteps } from "./userPayMetadata.js";
-import { explainedRefusal, tracedPayFailure, withinPayFailureBudget } from "./payFailure.js";
+import { explainedRefusal, tracedPayFailure } from "./payFailure.js";
 import { UserOperationProvider } from "./provider.js";
 import { createSessionGasEstimation } from "./estimation.js";
 import { passkeyDummySignature, passkeyEstimateProvider } from "./passkeyEstimation.js";
@@ -1193,7 +1193,7 @@ export class UserOperationService {
         previous?.state === "reverted" && previous.semantic?.status === "failed" && previous.transactionHash && same(previous.transactionHash, hash)
           && previous.receipt && same(previous.receipt.blockHash, blockHash)
           ? previous.payFailure
-          : withinPayFailureBudget(tracedPayFailure(this.chain(), record.chainId, hash, record.sender, record.submission.operation.callData)),
+          : tracedPayFailure(this.chain(), record.chainId, hash, record.sender, record.submission.operation.callData),
       verifySemantics: async (receipt: StoredReceipt) => {
         if (previous?.semantic && previous.receipt && same(previous.receipt.blockHash, receipt.blockHash)
           && same(previous.receipt.transactionHash, receipt.transactionHash)) return previous.semantic;

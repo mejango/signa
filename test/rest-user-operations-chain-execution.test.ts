@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PAY_FAILURE_BUDGET_MS } from "../src/rest/userOperations/payFailure.js";
 import { readFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
 import {
@@ -690,11 +691,22 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
     expect(confirming).toMatchObject({ state: "confirming" });
     expect(confirming).not.toHaveProperty("payFailure");
     expect(reason).not.toHaveBeenCalled();
-    // A reorg while the trace runs never pairs its reason with the old receipt.
-    reason.mockImplementationOnce(async () => { f.state.reorged = true; return payFailure; });
-    await expect(observeUserOperation({ chain: f.chain(), binding: f.binding,
+    const observe = () => observeUserOperation({ chain: f.chain(), binding: f.binding,
       signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
-      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason })).rejects.toThrow();
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    // A reorg while the trace runs never pairs its reason with the old receipt; the outcome still comes back.
+    reason.mockImplementationOnce(async () => { f.state.reorged = true; return payFailure; });
+    const reorged = await observe();
+    expect(reorged).toMatchObject({ state: "reverted" });
+    expect(reorged).not.toHaveProperty("payFailure");
+    f.state.reorged = false;
+    // A trace that never answers holds the outcome for the reason budget at most.
+    reason.mockImplementationOnce(() => new Promise(() => undefined));
+    const started = Date.now();
+    const slow = await observe();
+    expect(slow).toMatchObject({ state: "reverted" });
+    expect(slow).not.toHaveProperty("payFailure");
+    expect(Date.now() - started).toBeLessThan(PAY_FAILURE_BUDGET_MS + 1_000);
   });
   it("preserves an independently proven outer revert", async () => {
     const f = fixture();
