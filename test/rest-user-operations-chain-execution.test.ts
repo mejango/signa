@@ -98,6 +98,7 @@ function fixture() {
     innerFailure: false,
     validationFailure: false,
     reorged: false,
+    stallBlocks: false,
     mined: false,
     transactionPending: false,
     receiptStatus: "0x1",
@@ -196,6 +197,7 @@ function fixture() {
   });
   const rpc = vi.fn<RestRpc["request"]>(async (_chain, method, params) => {
     if (method === "eth_chainId") return "0x1";
+    if (method === "eth_getBlockByNumber" && state.stallBlocks) return new Promise(() => undefined);
     if (method === "eth_getBlockByNumber")
       return {
         number: "0x64",
@@ -708,6 +710,14 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
     expect(slow).toMatchObject({ state: "reverted" });
     expect(slow).not.toHaveProperty("payFailure");
     expect(Date.now() - started).toBeLessThan(PAY_FAILURE_BUDGET_MS + 1_000);
+    // A fast trace whose block recheck stalls is held to the same budget.
+    reason.mockImplementationOnce(async () => { f.state.stallBlocks = true; return payFailure; });
+    const recheckStarted = Date.now();
+    const stalled = await observe();
+    expect(stalled).toMatchObject({ state: "reverted" });
+    expect(stalled).not.toHaveProperty("payFailure");
+    expect(Date.now() - recheckStarted).toBeLessThan(PAY_FAILURE_BUDGET_MS + 1_000);
+    f.state.stallBlocks = false;
   });
   it("preserves an independently proven outer revert", async () => {
     const f = fixture();
