@@ -682,6 +682,19 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
       signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
       verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
     expect(reason).not.toHaveBeenCalled();
+    // A failed execution still confirming is not explained yet.
+    f.state.eventSuccess = false;
+    const confirming = await observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1024, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    expect(confirming).toMatchObject({ state: "confirming" });
+    expect(confirming).not.toHaveProperty("payFailure");
+    expect(reason).not.toHaveBeenCalled();
+    // A reorg while the trace runs never pairs its reason with the old receipt.
+    reason.mockImplementationOnce(async () => { f.state.reorged = true; return payFailure; });
+    await expect(observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason })).rejects.toThrow();
   });
   it("preserves an independently proven outer revert", async () => {
     const f = fixture();

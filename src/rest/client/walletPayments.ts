@@ -216,8 +216,10 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
     return value;
   }
   function status(value: Journal): CenterWalletPaymentStatus {
-    // A served reason reaches the app only in its exact shape, on the status and inside the observation.
-    const payFailure = payFailureOf(value.observation?.payFailure);
+    // A served reason reaches the app only in its exact shape, and only while this payment stands
+    // reverted: an unknown or changed outcome drops it, on the status and inside the observation.
+    const payFailure = value.status === 'reverted' && value.observation?.state === 'reverted'
+      ? payFailureOf(value.observation.payFailure) : undefined;
     const { payFailure: _served, ...observed } = value.observation ?? {};
     const observation = value.observation && { ...observed, ...(payFailure ? { payFailure } : {}) } as UserOperationObservation;
     return snapshot({ status: value.status, accountId: value.grant.accountId, chainId: 8453, operationId: value.operation.id,

@@ -1,3 +1,4 @@
+import type { PayFailureReason } from "@bananapus/nana-sdk-core/v6";
 import { getAddress, isAddress, keccak256, type Address, type Hex } from "viem";
 import {
   buildBotProofTypedData, buildRequestTypedData, newRequestNonce, parseAccountId,
@@ -61,13 +62,26 @@ export class RestClientError extends Error {
 }
 const amount = (value: unknown) => value === undefined
   || (typeof value === "string" && /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) < 2n ** 256n);
-/** A served payment failure reason, kept only in its exact shape: an SDK reason, its plain sentence
- * (letters and punctuation only, so no URL, hex or node text can pass) and integer amounts. */
+/** Every reason the SDK's decoder gives; true when its failure carries the shortfall's amounts. A new
+ * SDK reason fails the type check here until it is listed. */
+const payFailureReasons = {
+  TERMINAL_UNDER_MIN: true, BUYBACK_SLIPPAGE_EXCEEDED: true, BUYBACK_DERIVED_FLOOR_NOT_MET: true, ROUTER_SLIPPAGE_EXCEEDED: true,
+  BUYBACK_SWAP_AMOUNT_TOO_HIGH: false, ROUTER_NO_ROUTE: false, TOKEN_NOT_ACCEPTED: false, PAYMENTS_PAUSED: false, NO_RULESET: false,
+  ALLOWANCE_TOO_LOW: false, ALLOWANCE_EXPIRED: false, BALANCE_TOO_LOW: false, UNEXPECTED_ETH: false, NFT_SOLD_OUT: false,
+  NFT_UNAVAILABLE: false, NFT_PRICE_ABOVE_PAYMENT: false, NFT_OVERSPENDING: false,
+} as const satisfies Record<PayFailureReason, boolean>;
+/** A served payment failure reason, kept only in its exact shape: a known SDK reason; one plain
+ * sentence (no URL, domain, hex or number can pass); and, only for a shortfall, both amounts as
+ * uint256 integers with the settled one below the minimum. */
 export function payFailureOf(value: unknown): PayFailure | undefined {
   if (!value || typeof value !== "object") return undefined;
   const { reason, received, minimum, message, ...rest } = value as Record<string, unknown>;
-  if (Object.keys(rest).length || typeof reason !== "string" || !/^[A-Z][A-Z_]{0,63}$/.test(reason) || typeof message !== "string"
-    || !/^[A-Za-z][A-Za-z ,.'’]{0,299}$/.test(message) || !amount(received) || !amount(minimum)) return undefined;
+  if (Object.keys(rest).length || typeof reason !== "string" || !Object.hasOwn(payFailureReasons, reason)
+    || typeof message !== "string" || !/^[A-Z][A-Za-z0-9 ,.'\u2019]{0,199}\.$/.test(message) || /\.\S|\d\d|0x/i.test(message)
+    || !amount(received) || !amount(minimum)) return undefined;
+  if ((received === undefined) !== (minimum === undefined)) return undefined;
+  if (received !== undefined && (!payFailureReasons[reason as PayFailureReason]
+    || BigInt(received as string) >= BigInt(minimum as string))) return undefined;
   return { reason, message, ...(received === undefined ? {} : { received: received as string }),
     ...(minimum === undefined ? {} : { minimum: minimum as string }) };
 }

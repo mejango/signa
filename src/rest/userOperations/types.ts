@@ -113,9 +113,10 @@ export interface UserOperationExecutionBinding {
   operationHash: Hex;
   calls: readonly RestCall[];
 }
-/** Why a payment reverted, as the SDK's `decodePayFailure` reads it, with amounts as decimal
- * strings. `received` and `minimum` are set when it fell short of a minimum, so the payer can lower
- * it and retry. The message is the SDK's fixed sentence, never node text. */
+/** Why one payment attempt reverted, as the SDK's `decodePayFailure` reads it from revert data, with
+ * amounts as decimal strings in the failing check's units. Advisory and specific to that attempt:
+ * `received` and `minimum` are set only for a shortfall, and any changed minimum needs a fresh
+ * preparation, simulation and owner review. The message is the SDK's fixed sentence, never node text. */
 export interface PayFailure {
   reason: string;
   received?: string;

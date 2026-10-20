@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { encodeAbiParameters, encodeFunctionData, erc20Abi, parseAbi, type Address, type Hex } from "viem";
+import { encodeAbiParameters, encodeFunctionData, erc20Abi, keccak256, parseAbi, toFunctionSelector, type Address, type Hex } from "viem";
 import { RestError, type RestRpc } from "../src/rest/core.js";
 import { problem } from "../src/rest/http.js";
 import { payFailureOf as clientPayFailureOf, RestClientError } from "../src/rest/client/index.js";
@@ -107,6 +107,39 @@ describe("payment failure reasons", () => {
     expect(raw).not.toContain(underMin.slice(2));
   });
 
+  it("keeps every SDK reason and sentence on the client, amounts included", () => {
+    const shortfalls = ["JBMultiTerminal_UnderMin", "JBBuybackHook_SpecifiedSlippageExceeded", "JBBuybackHook_DerivedFloorNotMet",
+      "JBRouterTerminal_SlippageExceeded"].map(name => `${name}(uint256,uint256)`);
+    const others = ["JBBuybackHook_InsufficientPayAmount(uint256,uint256)", "JBRouterTerminal_NoRouteFound(uint256,address)",
+      "JBRouterTerminal_NoPoolFound(address,address)", "JBMultiTerminal_TokenNotAccepted(address)", "JBTerminalStore_RulesetPaymentPaused(uint256,uint256)",
+      "JBTerminalStore_RulesetNotFound(uint256)", "JBMultiTerminal_PermitAllowanceNotEnough(uint256,uint256)",
+      "JBRouterTerminalGateway_PermitAllowanceNotEnough(uint256,uint256)", "ERC20InsufficientAllowance(address,uint256,uint256)",
+      "InsufficientAllowance(uint256)", "AllowanceExpired(uint256)", "ERC20InsufficientBalance(address,uint256,uint256)",
+      "JBMultiTerminal_NoMsgValueAllowed(uint256)", "JBRouterTerminal_NoMsgValueAllowed(uint256)",
+      "JB721TiersHookStore_InsufficientSupplyRemaining(uint256)", "JB721TiersHookStore_TierRemoved(uint256)",
+      "JB721TiersHookStore_UnrecognizedTier(uint256)", "JB721TiersHookStore_PriceExceedsAmount(uint256,uint256)", "JB721TiersHook_Overspending(uint256)"];
+    const revert = (signature: string, args: readonly unknown[]) => {
+      const types = signature.slice(signature.indexOf("(") + 1, -1).split(",").map(type => ({ type }));
+      return `${toFunctionSelector(signature)}${encodeAbiParameters(types, args).slice(2)}` as Hex;
+    };
+    const sample = (signature: string) => signature.slice(signature.indexOf("(") + 1, -1).split(",")
+      .map(type => type === "address" ? sender : 1n);
+    const reverts = [
+      ...shortfalls.flatMap(signature => [revert(signature, [812n, 900n]), revert(signature, [0n, 900n]),
+        // The router gateway keeps only the selector's hash: the reason without amounts.
+        `0xa4ceb15e${keccak256(toFunctionSelector(signature)).slice(2)}` as Hex]),
+      ...others.map(signature => revert(signature, sample(signature))),
+    ];
+    const reasons = new Set<string>();
+    for (const data of reverts) {
+      const served = payFailureOf(data);
+      expect(served, data).toBeTruthy();
+      reasons.add(served!.reason);
+      expect(clientPayFailureOf(served), `${served!.reason} ${served!.message}`).toEqual(served);
+    }
+    expect(reasons.size).toBe(17);
+  });
+
   it("keeps a served reason on the client only in its exact shape", () => {
     const served = payFailureOf(underMin)!;
     expect(clientPayFailureOf(served)).toEqual(served);
@@ -115,7 +148,10 @@ describe("payment failure reasons", () => {
     for (const bad of [null, "TERMINAL_UNDER_MIN", { ...served, url: "https://node.example" }, { ...served, received: "8.5" },
       { ...served, minimum: 900 }, { ...served, reason: "not a reason" }, { reason: served.reason },
       { ...served, minimum: (2n ** 256n).toString() }, { ...served, message: "See https://node.example/key" },
-      { ...served, message: "Reverted 0x6b2bb382" }, { ...served, message: "" }])
+      { ...served, message: "Reverted 0x6b2bb382" }, { ...served, message: "" },
+      { ...served, reason: "INVENTED_REASON" }, { ...served, message: "Execution reverted. Visit evil.com." },
+      { ...served, received: "901" }, { ...served, received: "900" }, { reason: "PAYMENTS_PAUSED", message: served.message, received: "1", minimum: "2" },
+      { reason: served.reason, message: served.message, received: "812" }, { ...served, message: "Lower it by 100 tokens." }])
       expect(clientPayFailureOf(bad)).toBeUndefined();
   });
 });

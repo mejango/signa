@@ -438,6 +438,17 @@ describe('Center browser payment review continuity', () => {
     expect((error as { payFailure?: unknown }).payFailure).toBeUndefined();
   });
 
+  it('shows a payment reason only while the payment stands reverted', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'Lower your minimum.' };
+    const confirming = f.observedOperation('confirming');
+    f.observed({ ...confirming, observation: { ...confirming.observation, payFailure } });
+    const status = await f.helper().refreshPayment();
+    expect(status.status).toBe('confirming');
+    expect(status).not.toHaveProperty('payFailure');
+    expect(status.observation).not.toHaveProperty('payFailure');
+  });
+
   it('drops a served payment reason outside its exact shape, on the status and inside the observation', async () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
     const reverted = f.observedOperation('reverted');

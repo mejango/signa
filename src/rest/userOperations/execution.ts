@@ -388,12 +388,15 @@ export async function observeUserOperation(
       "The reported operation gas charge exceeds its maximum prefund.",
     );
   if (!event.success) {
-    const payFailure = await options.payFailure?.(transactionHash, blockHash);
+    const reverted = confirmations >= options.confirmations;
+    // Only a settled revert is explained, and only if its block is still canonical after the trace.
+    const payFailure = reverted ? await options.payFailure?.(transactionHash, blockHash) : undefined;
+    if (payFailure) await chain.canonical(evidence);
     return {
       ...base,
       transactionHash,
       receipt,
-      state: confirmations >= options.confirmations ? "reverted" : "confirming",
+      state: reverted ? "reverted" : "confirming",
       semantic: {
         status: "failed",
         details:
