@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
-import { concat, encodeFunctionData, erc20Abi, hashTypedData, parseAbi, type Address, type Hex } from "viem";
+import { concat, encodeAbiParameters, encodeFunctionData, erc20Abi, hashTypedData, parseAbi, type Address, type Hex } from "viem";
 import { createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft, assertWalletPaymentReviewContext,
   verifyWalletPaymentReviewProof, type WalletPaymentReviewContext } from "../src/rest/wallet/paymentReviews.js";
 import { createWalletAuthorityContextFixture } from "./fixtures/wallet-authority-context.js";
@@ -17,7 +17,7 @@ import { getUserOperationHash, userOperationCommitment } from "../src/rest/userO
 import { createWalletRecoveryIntent, createWalletRecoveryMapping, prepareWalletRecoveryCandidate,
   verifyWalletRecoveryProof, walletRecoveryDocument } from '../src/rest/wallet/recovery.js';
 import { passkeyOnboardingDocument } from '../src/rest/smartAccounts/passkeyOnboarding.js';
-import { getJBContractAddress } from "@bananapus/nana-sdk-core";
+import { createHookMetadata, getJBContractAddress } from "@bananapus/nana-sdk-core";
 import { buildBuybackPayMetadata, buildUserPayMetadata } from "@bananapus/nana-sdk-core/v6";
 
 const now = 1_800_000_120_000, issuer = "https://wallet.juicebox.center", rpId = "wallet.juicebox.center";
@@ -233,7 +233,7 @@ describe("owner-approved modeled payment review", () => {
       recommit(c); expect(() => assertWalletPaymentReviewContext(draft, c)).toThrow();
     }
   });
-  it("admits empty metadata or exactly a pay card's buyback skipSplits metadata, nothing else", () => {
+  it("admits any Juicebox hook metadata whose buyback minimums the terminal minimum covers", () => {
     const withMetadata = (metadata: Hex) => {
       const c = context(), summary = c.plan.draft.summary as { metadata: Hex };
       c.plan.draft.calls[1]!.data = encodeFunctionData({ abi: payAbi, functionName: "pay",
@@ -242,19 +242,24 @@ describe("owner-approved modeled payment review", () => {
       c.operation.operation.callData = encodeSafe7579Execution(c.plan.draft.calls.map(call => ({ target: call.to, callData: call.data, value: call.value })));
       recommit(c); return c;
     };
-    for (const minimum of [0n, 5n]) {
-      const c = withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: minimum }));
-      const draft = createWalletPaymentReviewDraft(c, options());
+    const registry = getJBContractAddress("JBBuybackHookRegistry", 6, 8453), userPay = buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n });
+    for (const metadata of [
+      buildUserPayMetadata({ chainId: 8453 }), userPay,
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: terminal, tierIdsToMint: [1n, 1n] } }),
+      buildBuybackPayMetadata({ hook: registry, amountToSwapWith: 0n, minimumSwapAmountOut: 5n }),
+      buildBuybackPayMetadata({ hook: registry, amountToSwapWith: 1n, minimumSwapAmountOut: 5n, skipSplits: true }),
+      buildBuybackPayMetadata({ hook: terminal, amountToSwapWith: 0n, minimumSwapAmountOut: 5n, skipSplits: true }),
+      createHookMetadata(["0xdeadbeef"], [`0x${"ab".repeat(40)}`]),
+    ] as Hex[]) {
+      const draft = createWalletPaymentReviewDraft(withMetadata(metadata), options());
       expect(validateWalletPaymentReviewDraft(draft)).toEqual(draft);
     }
-    const userPay = buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n });
     for (const metadata of [
-      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: terminal, tierIdsToMint: [1n] } }),
-      buildBuybackPayMetadata({ hook: getJBContractAddress("JBBuybackHookRegistry", 6, 8453), amountToSwapWith: 0n, minimumSwapAmountOut: 5n }),
-      buildBuybackPayMetadata({ hook: getJBContractAddress("JBBuybackHookRegistry", 6, 8453), amountToSwapWith: 1n, minimumSwapAmountOut: 5n, skipSplits: true }),
-      buildBuybackPayMetadata({ hook: terminal, amountToSwapWith: 0n, minimumSwapAmountOut: 5n, skipSplits: true }),
-      // A metadata minimum above the terminal minimum (5) would make the terminal minimum no guarantee.
+      // A buyback minimum above the terminal minimum (5) would make the terminal minimum no guarantee.
       buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }),
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n, tiers: { metadataIdTarget: terminal, tierIdsToMint: [1n] } }),
+      // Reads both as a 721 mint and as a buyback with minimum 64: an ambiguous reading's minimum counts too.
+      createHookMetadata(["0xdeadbeef"], [encodeAbiParameters([{ type: "bool" }, { type: "uint16[]" }], [true, []])]),
       concat([userPay, "0x00"]), userPay.slice(0, -2) as Hex, "0x1234" as Hex,
     ]) expect(() => createWalletPaymentReviewDraft(withMetadata(metadata), options())).toThrow();
   });

@@ -277,8 +277,9 @@ describe("app UserOperation owner boundary", () => {
     expect(f.state.sends).toBe(1);
   });
 
-  it("prepares a passkey pay only with empty or pay-card buyback metadata", async () => {
-    for (const metadata of ["0x", buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n })] as Hex[])
+  it("prepares a passkey pay with any Juicebox hook metadata whose buyback minimums the terminal minimum covers", async () => {
+    for (const metadata of ["0x", buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }),
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: usdc, tierIdsToMint: [3n] } })] as Hex[])
       expect((await (await fixture({ paymentMetadata: metadata })).prepare()).state).toBe("prepared");
     for (const options of [{ paymentMetadata: "0x1234" as Hex }, { paymentMetadata: "0x1234" as Hex, paymentLabel: "contract_calls" },
       { paymentMetadata: buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }) }])

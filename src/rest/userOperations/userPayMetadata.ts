@@ -1,21 +1,23 @@
-import { buildUserPayMetadata } from "@bananapus/nana-sdk-core/v6";
+import { describeJBHookMetadata } from "@bananapus/nana-sdk-core/review/decode";
 
-// The shape is the SDK's: these two encodings differ only in the minimum's word.
-const zero = buildUserPayMetadata({ chainId: 8453 }).toLowerCase();
-const full = buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 2n ** 256n - 1n }).toLowerCase();
-const start = [...zero].findIndex((char, index) => char !== full[index]);
+export type PayMetadataStep = { title: string; rows: [string, string][] };
 
-/** A passkey payment may carry empty metadata or exactly a pay card's `buildUserPayMetadata` on Base:
- * the buyback registry's `(0, minimum, skipSplits = true)` with no tiers, paid with a terminal
- * minimum at least that minimum (as `prepareUserPay` sets it), so the terminal minimum is the
- * payer's guarantee whatever the hook does. Returns the metadata minimum, `null` for empty
- * metadata, and throws for anything else. */
-export function passkeyPayMinimumOf(metadata: string, minReturnedTokens: bigint): bigint | null {
-  const value = metadata.toLowerCase();
-  if (value === "0x") return null;
-  if (value.length === zero.length) {
-    const minimum = BigInt(`0x${value.slice(start, start + 64)}`);
-    if (value === buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: minimum }).toLowerCase() && minReturnedTokens >= minimum) return minimum;
+/** A passkey payment may carry any JBMetadataResolver pay metadata. Pay metadata reaches only the
+ * hooks the project configured, so the job here is a faithful description: the SDK's shared review
+ * decoder (the one the web clients show), with entries it can't name kept as raw hook data under
+ * their id. Every buyback minimum it reads must sit within the terminal `minReturnedTokens`, so the
+ * terminal minimum stays the payer's guarantee whatever the hook does. Returns no steps for empty
+ * metadata and throws for anything that isn't the resolver format. */
+export function passkeyPayMetadataSteps(metadata: string, minReturnedTokens: bigint): PayMetadataStep[] {
+  if (metadata.toLowerCase() === "0x") return [];
+  const steps = describeJBHookMetadata("pay", metadata);
+  if (!steps) throw new Error("A passkey payment carries empty or Juicebox hook metadata.");
+  for (const { rows } of steps) for (const [label, value] of rows) {
+    // Single readings label the minimum; ambiguous ones list it inside each reading.
+    const minimums = label === "Minimum swap output" ? [value] : [...value.matchAll(/minimum swap output: (\d+)/g)].map(match => match[1]!);
+    for (const minimum of minimums)
+      if (BigInt(/^\d+/.exec(minimum)?.[0] ?? "x") > minReturnedTokens)
+        throw new Error("A buyback minimum in the metadata exceeds the terminal minimum.");
   }
-  throw new Error("A passkey payment carries only empty or pay-card buyback metadata, under a terminal minimum at least its own.");
+  return steps.map(({ title, rows }) => ({ title, rows: rows.map(([label, value]) => [label, value] as [string, string]) }));
 }

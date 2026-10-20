@@ -115,13 +115,15 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   address(payment.token); address(payment.terminal); address(payment.beneficiary);
   decimal(payment.amount); decimal(payment.projectId); decimal(payment.minimumReturnedTokens); text(payment.memo, 32768, true);
   if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(text(payment.metadata, 65538))) fail();
-  // The server enforces the exact metadata shape and decodes its minimum (the SDK stays off this page).
-  // Here the minimum must be empty exactly for empty metadata, appear in the metadata as a word,
-  // and stay within the calldata's terminal minimum, the payer's guarantee.
-  const buyback = value.buybackMinimum;
-  if (buyback === null ? payment.metadata !== '0x' : payment.metadata === '0x' ||
-    BigInt(decimal(buyback)) > BigInt(String(payment.minimumReturnedTokens)) ||
-    !String(payment.metadata).toLowerCase().includes(BigInt(buyback).toString(16).padStart(64, '0'))) fail();
+  // The server describes the metadata with the SDK's review decoder (the SDK stays off this page);
+  // the page shows those steps as text next to the raw bytes.
+  const steps = value.metadataSteps;
+  if (!Array.isArray(steps) || steps.length > 256 || (steps.length === 0) !== (payment.metadata === '0x')) fail();
+  for (const step of steps) {
+    const { title, rows } = record(step); text(title, 256);
+    if (!Array.isArray(rows) || rows.length > 64) fail();
+    for (const row of rows as unknown[]) { if (!Array.isArray(row) || row.length !== 2) fail(); const [label, value] = row as unknown[]; text(label, 256); text(value, 65538, true); }
+  }
   const operation = normalizeUserOperation(value.operation);
   if (operation.sender.toLowerCase() !== String(payment.account).toLowerCase() || operation.signature !== '0x' ||
     getUserOperationHash(operation, value.entryPoint, 8453) !== value.operationHash) fail();
@@ -149,12 +151,17 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   const next = JSON.stringify(stable); if (immutable && immutable !== next) fail();
   immutable = next; return structuredClone(value);
 }
-/** The buyback request in the payment's metadata, in the payer's terms. The hook version decides
- * how it applies; the terminal minimum, never below the request's, is the guarantee. */
-function buybackText(minimum: bigint | null): string {
-  if (minimum === null) return 'None';
-  const skip = 'Requests pool buys without the reserved split (hooks older than 1.4 ignore this).';
-  return minimum > 0n ? `${skip} Pool minimum: ${minimum} project tokens (base units), covered by the minimum above.` : skip;
+/** One line per hook entry: its title, then its labeled values. These are requests the metadata
+ * carries; only the terminal minimum is enforced whatever the project's hooks do. */
+function showSteps(steps: WalletPaymentCentralPublic['metadataSteps']) {
+  const target = element('payment-hooks');
+  const lines = steps.length ? [{ title: 'Hooks may ignore these or act differently by version; the minimum above is enforced', rows: [] }, ...steps]
+    : [{ title: 'None supplied', rows: [] }];
+  target.replaceChildren(...lines.map(step => {
+    const line = document.createElement('div');
+    line.textContent = [step.title, ...step.rows.map(([label, value]) => `${label}: ${value}`)].join('. ');
+    return line;
+  }));
 }
 function accept(input: unknown) {
   review = checkReview(input);
@@ -162,8 +169,9 @@ function accept(input: unknown) {
   for (const [name, value] of Object.entries({ amount: `${formatUnits(BigInt(payment.amount), 6)} USDC`, project: payment.projectId,
     app: review.app.origin, account: payment.account, beneficiary: payment.beneficiary, minimum: payment.minimumReturnedTokens,
     memo: payment.memo || 'No memo', fee: `${formatUnits(userOperationMaximumCost(review.operation), 18)} ETH`, token: payment.token,
-    terminal: payment.terminal, metadata: payment.metadata, buyback: buybackText(review.buybackMinimum === null ? null : BigInt(review.buybackMinimum)), operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
+    terminal: payment.terminal, metadata: payment.metadata, operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
     element(`payment-${name}`).textContent = value;
+  showSteps(review.metadataSteps);
   returnToApp.href = callback(review);
   if (review.status === 'approved') { pending = null; uncertain = false; setStatus('approved', 'Approved. Check the result in the app.'); }
   else if (review.status === 'cancelled') { pending = null; uncertain = false; setStatus('cancelled', 'Payment declined. No new approval was issued.'); }

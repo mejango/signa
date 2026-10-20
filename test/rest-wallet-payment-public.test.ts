@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { publicWalletPaymentReview, publicWalletPaymentAppReview, publicWalletPaymentCentralReview } from '../src/rest/wallet/paymentPublic.js';
 import { buildUserPayMetadata } from '@bananapus/nana-sdk-core/v6';
+import { describeJBHookMetadata } from '@bananapus/nana-sdk-core/review/decode';
+import type { Hex } from 'viem';
 import { paymentProjectionFixture as fixture } from './fixtures/wallet-payment-projection.js';
 
 describe('wallet payment HTTP projection',()=>{
@@ -23,11 +25,13 @@ describe('wallet payment HTTP projection',()=>{
       challenge:Buffer.from('ab'.repeat(32),'hex').toString('base64url'),userVerification:'required'});
     expect(JSON.stringify(result)).not.toContain('private-');expect(result).not.toHaveProperty('authority');
   });
-  it('decodes the pay-card buyback minimum for the central page only',()=>{
-    const source=fixture();expect(publicWalletPaymentCentralReview(source).buybackMinimum).toBeNull();
-    expect(publicWalletPaymentAppReview(source)).not.toHaveProperty('buybackMinimum');
-    (source.draft.payment as any).metadata=buildUserPayMetadata({chainId:8453,minimumSwapAmountOut:5n});
-    expect(publicWalletPaymentCentralReview(source).buybackMinimum).toBe('5');
+  it('describes the metadata with the SDK review decoder for the central page only',()=>{
+    const source=fixture();expect(publicWalletPaymentCentralReview(source).metadataSteps).toEqual([]);
+    expect(publicWalletPaymentAppReview(source)).not.toHaveProperty('metadataSteps');
+    const metadata=buildUserPayMetadata({chainId:8453,minimumSwapAmountOut:5n,tiers:{metadataIdTarget:'0x'+'11'.repeat(20) as Hex,tierIdsToMint:[2n]}});
+    (source.draft.payment as any).metadata=metadata;
+    expect(publicWalletPaymentCentralReview(source).metadataSteps).toEqual(describeJBHookMetadata('pay',metadata));
+    expect(publicWalletPaymentCentralReview(source).metadataSteps.map(step=>step.title)).toEqual(['Buyback hook swap instructions','721 shop mint instructions']);
     (source.draft.payment as any).metadata='0x1234';expect(()=>publicWalletPaymentCentralReview(source)).toThrow();
   });
   it('does not expose mutable internal draft objects through the projection',()=>{
