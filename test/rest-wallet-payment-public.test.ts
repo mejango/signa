@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { publicWalletPaymentReview, publicWalletPaymentAppReview, publicWalletPaymentCentralReview } from '../src/rest/wallet/paymentPublic.js';
+import { buildUserPayMetadata } from '@bananapus/nana-sdk-core/v6';
 import { paymentProjectionFixture as fixture } from './fixtures/wallet-payment-projection.js';
 
 describe('wallet payment HTTP projection',()=>{
@@ -21,6 +22,13 @@ describe('wallet payment HTTP projection',()=>{
     expect(result.passkey).toEqual({rpId:'wallet.example.test',credentialId:'selected-credential',
       challenge:Buffer.from('ab'.repeat(32),'hex').toString('base64url'),userVerification:'required'});
     expect(JSON.stringify(result)).not.toContain('private-');expect(result).not.toHaveProperty('authority');
+  });
+  it('decodes the pay-card buyback minimum for the central page only',()=>{
+    const source=fixture();expect(publicWalletPaymentCentralReview(source).buybackMinimum).toBeNull();
+    expect(publicWalletPaymentAppReview(source)).not.toHaveProperty('buybackMinimum');
+    (source.draft.payment as any).metadata=buildUserPayMetadata({chainId:8453,minimumSwapAmountOut:5n});
+    expect(publicWalletPaymentCentralReview(source).buybackMinimum).toBe('5');
+    (source.draft.payment as any).metadata='0x1234';expect(()=>publicWalletPaymentCentralReview(source)).toThrow();
   });
   it('does not expose mutable internal draft objects through the projection',()=>{
     const source=fixture(), result=publicWalletPaymentAppReview(source) as any;
