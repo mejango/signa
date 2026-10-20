@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { gzipSync } from "node:zlib";
 import { createProtocolOperations, createServices, loadConfig } from "@juicebox/mcp/host";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Hono } from "hono";
@@ -6,7 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { JbcenterEnv } from "../src/types.js";
 import { operationDescriptors } from "../src/rest/app.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { apiDocsCss, apiDocsPage, apiReferencePages, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, apiTermsPath, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
 import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { mountRestSite, type RestSite } from "../src/rest/site.js";
 
@@ -106,16 +107,49 @@ describe("Signa wallet API documentation", () => {
     expect(apiDocsPage(full)).toContain("Choose a data source");
   });
 
+  it("keeps field names out of the wallet /api page and in its on-demand term index", () => {
+    const html = apiDocsPage(wallet, "wallet");
+    expect(html).toMatch(/data-terms="\/api\/terms\.[0-9a-f]{12}\.json"/);
+    expect(html).toContain(`data-terms="${apiTermsPath(wallet)}"`);
+    // A deploy that changes any field name changes the URL, so a cached index from the last deploy is never reused.
+    const changed = structuredClone(wallet);
+    const response = changed.paths["/api/v1"]!.get!.responses["200"] as { content: { "application/json": { schema: { properties: Record<string, unknown> } } } };
+    response.content["application/json"].schema.properties.addedField = { type: "string" };
+    expect(apiTermsPath(changed)).not.toBe(apiTermsPath(wallet));
+    expect(apiDocsPage(changed, "wallet")).toContain(`data-terms="${apiTermsPath(changed)}"`);
+    const terms = apiSearchTerms(wallet);
+    expect(Object.keys(terms).sort()).toEqual(Object.values(wallet.paths).flatMap(methods => Object.values(methods).map(operation => operation.operationId)).sort());
+    // Ceilings sit at the measured gzip size rounded up to the next 0.5 KiB.
+    expect(gzipSync(html).length).toBeLessThanOrEqual(10_752);
+    expect(gzipSync(JSON.stringify(terms)).length).toBeLessThanOrEqual(6_144);
+  });
+
   it("serves the wallet reference locally and redirects inherited guides to Center", async () => {
     const mount = (surface?: "wallet") => {
       const app = new Hono<JbcenterEnv>();
       mountRestSite(app, { app: new Hono() as unknown as RestSite["app"], ...(surface ? { surface } : {}), audience: origin,
         accountsScript: "", docsHtml: apiDocsPage(surface ? wallet : full, surface), docsCss: apiDocsCss,
+        apiReference: apiReferencePages(surface ? wallet : full, surface), apiTerms: JSON.stringify(apiSearchTerms(surface ? wallet : full)),
         documents: new Map([["quickstart", "# Center quickstart"], ["client", "# Client workflows"], ["contracts", "# Contracts"]]) });
       return app;
     };
     const app = mount("wallet");
     expect(await (await app.request("/api")).text()).toContain("Wallet API | Signa");
+    // The page's hashed name, another deploy's hash and the plain name all get the current index.
+    const current = JSON.stringify(apiSearchTerms(wallet));
+    for (const path of [apiTermsPath(wallet), "/api/terms.0123456789ab.json", "/api/terms.json"]) {
+      const terms = await app.request(path);
+      expect(terms.headers.get("content-type"), path).toContain("application/json");
+      expect(await terms.text(), path).toBe(current);
+    }
+    expect((JSON.parse(current) as Record<string, string>).getUserOperation).toMatch(/\bpaymasterAndData\b/);
+    for (const path of ["/api/terms.0123.json", "/api/terms.json.bak", "/api/termsxjson"]) expect((await app.request(path)).status, path).toBe(404);
+    // Documentation changes only on deploy, so /api, its tables, its term index and the guides are cached briefly, as on Center.
+    const docs = [await app.request("/api"), await app.request(apiTermsPath(wallet)), await app.request("/api/reference/getUserOperation")];
+    for (const response of docs) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("public, max-age=300");
+    }
     const icon = await app.request("/assets/accounts-icon.svg");
     expect(icon.status).toBe(200); expect(icon.headers.get("content-type")).toContain("image/svg+xml");
     for (const name of ["quickstart", "client", "contracts", "CLIENT.md"]) {
@@ -128,5 +162,11 @@ describe("Signa wallet API documentation", () => {
     const center = mount();
     expect(await (await center.request("/api/docs/client")).text()).toContain("<article>");
     expect(await (await center.request("/api/docs/client.md")).text()).toBe("# Client workflows");
+    // One guide URL serves HTML or Markdown by Accept, so a cache must key on it.
+    for (const [path, accept] of [["/api/docs/client", "text/html"], ["/api/docs/client", "text/markdown"], ["/api/docs/client.md", "*/*"]]) {
+      const response = await center.request(path!, { headers: { Accept: accept! } });
+      expect(response.headers.get("cache-control"), `${path} ${accept}`).toBe("public, max-age=300");
+      expect(response.headers.get("vary"), `${path} ${accept}`).toBe("Accept");
+    }
   });
 });

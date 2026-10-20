@@ -59,21 +59,44 @@ function schemaFields(value: unknown, spec: OpenApiDocument, depth = 0): string 
   });
   return rows.length ? `<table class="schema-fields"><thead><tr><th>Field</th><th>Type</th><th>Details</th></tr></thead><tbody>${rows.join("")}</tbody></table>` : `<p><code>${escape(schema.type ?? "See schema")}</code>${schema.description ? `: ${renderProse(schema.description)}` : ""}</p>`;
 }
-function endpointFields(operation: OpenApiOperation, spec: OpenApiDocument): string {
+function operationSchemas(operation: OpenApiOperation, spec: OpenApiDocument) {
   const parameters = Array.isArray(operation.parameters) ? operation.parameters.map(value => resolveDoc(value, spec)) : [];
+  const request = docObject(docObject(resolveDoc(operation.requestBody, spec).content)["application/json"]).schema;
+  const success = Object.entries(operation.responses).find(([status]) => /^2\d\d$/.test(status));
+  const response = success ? resolveDoc(success[1], spec) : undefined;
+  const result = docObject(docObject(response?.content)["application/json"]).schema;
+  return { parameters, request, status: success?.[0], result };
+}
+// Every property name reachable from a schema, through references, arrays and variants, however deep the tables render.
+function propertyNames(value: unknown, spec: OpenApiDocument, names: Set<string>, seen = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) { for (const item of value) propertyNames(item, spec, names, seen); return names; }
+  const node = docObject(value);
+  if (typeof node.$ref === "string" && !seen.has(node.$ref)) { seen.add(node.$ref); propertyNames(resolveDoc({ $ref: node.$ref }, spec), spec, names, seen); }
+  for (const name of Object.keys(docObject(node.properties))) names.add(name);
+  for (const child of Object.values(node)) if (child && typeof child === "object") propertyNames(child, spec, names, seen);
+  return names;
+}
+/** Each endpoint's parameter and field names, which the /api filter fetches the first time it is used. */
+export function apiSearchTerms(spec: OpenApiDocument): Record<string, string> {
+  return Object.fromEntries(operationRows(spec).map(({ operation }) => {
+    const { parameters, request, result } = operationSchemas(operation, spec);
+    const names = new Set(parameters.map(parameter => String(parameter.name)));
+    return [operation.operationId, [...propertyNames([parameters, request, result], spec, names)].join(" ")];
+  }));
+}
+function endpointFields(operation: OpenApiOperation, spec: OpenApiDocument): string {
+  const { parameters, request, status, result } = operationSchemas(operation, spec);
   const params = parameters.length ? `<h4>Parameters</h4><table class="schema-fields"><thead><tr><th>Name</th><th>Location</th><th>Details</th></tr></thead><tbody>${parameters.map(parameter => {
     const schema = resolveDoc(parameter.schema ?? docObject(docObject(parameter.content)["application/json"]).schema, spec);
     return `<tr><th scope="row"><code>${escape(parameter.name)}</code></th><td>${escape(parameter.in)}${parameter.required ? " / required" : " / optional"}</td><td>${renderProse(parameter.description ?? schema.description ?? schema.type ?? "JSON")}${schema.enum ? `<p><code>${escape(JSON.stringify(schema.enum))}</code></p>` : ""}</td></tr>`;
   }).join("")}</tbody></table>` : "";
-  const request = docObject(docObject(docObject(operation.requestBody).content)["application/json"]).schema;
-  const success = Object.entries(operation.responses).find(([status]) => /^2\d\d$/.test(status));
-  const response = success ? resolveDoc(success[1], spec) : undefined;
-  const result = docObject(docObject(response?.content)["application/json"]).schema;
   const showSchema = (title: string, value: unknown) => value ? `<h4>${title}</h4>${schemaFields(value, spec)}<details><summary>JSON schema</summary><pre tabindex="0"><code>${escape(JSON.stringify(resolveDoc(value, spec), null, 2))}</code></pre></details>` : "";
-  return params + showSchema("Request body", request) + showSchema(`Response ${escape(success?.[0] ?? "")}`, result);
+  return params + showSchema("Request body", request) + showSchema(`Response ${escape(status ?? "")}`, result);
 }
 
 const operationRows = (spec: OpenApiDocument) => Object.entries(spec.paths).flatMap(([path, methods]) => Object.entries(methods).map(([method, operation]) => ({ path, method: method.toUpperCase(), operation })));
+/** The URL of the filter's term index; site.ts serves the current index under any terms.<hash>.json name. */
+export const apiTermsPath = (spec: OpenApiDocument) => `/api/${hashedAssetName("terms.json", JSON.stringify(apiSearchTerms(spec)))}`;
 export const apiReferencePath = (operationId: string) => `/api/reference/${encodeURIComponent(operationId)}`;
 
 /** Each endpoint's parameter and schema tables, as small pages /api loads when an endpoint is opened. */
@@ -92,13 +115,13 @@ export function apiReferencePages(spec: OpenApiDocument, surface?: "wallet", ass
 /** Server-rendered documentation with optional search and copy controls. Descriptions are escaped and never executed. */
 export function apiDocsPage(spec: OpenApiDocument, surface?: "wallet", assets?: AssetNames): string {
   const rows = operationRows(spec);
+  // Named by content, like the assets, so a page never filters with an index cached from another deploy.
+  const terms = escape(apiTermsPath(spec));
   const groups = spec.tags.map((tag) => {
     const entries = rows.filter((row) => row.operation.tags.includes(tag.name));
     return `<details class="group" id="${escape(tag.name.toLowerCase())}"><summary>${escape(tag.name)} <span class="muted">(${entries.length})</span></summary><p class="muted">${renderProse(tag.description)}</p>${entries.map(({ path, method, operation }) => {
       const fields = endpointFields(operation, spec);
-      // Field names stay searchable; the tables themselves load when the endpoint is opened.
-      const terms = [...new Set(Array.from(fields.matchAll(/<th scope="row"><code>([^<]*)<\/code>/g), match => match[1]))].join(" ");
-      return `<details class="endpoint"${terms ? ` data-terms="${terms}"` : ""}><summary><span class="verb">${escape(method)}</span><span class="route">${escape(path)}</span> <span class="auth">${escape(authLabel(operation))}</span></summary><p>${renderProse(operation.summary)}</p>${operation.description ? `<p class="muted">${renderProse(operation.description)}</p>` : ""}${fields ? `<div class="endpoint-fields"><p><a href="${escape(apiReferencePath(operation.operationId))}">Parameters and schemas</a></p></div>` : ""}<p><code>operationId: ${escape(operation.operationId)}</code></p></details>`;
+      return `<details class="endpoint" data-operation="${escape(operation.operationId)}"><summary><span class="verb">${escape(method)}</span><span class="route">${escape(path)}</span> <span class="auth">${escape(authLabel(operation))}</span></summary><p>${renderProse(operation.summary)}</p>${operation.description ? `<p class="muted">${renderProse(operation.description)}</p>` : ""}${fields ? `<div class="endpoint-fields"><p><a href="${escape(apiReferencePath(operation.operationId))}">Parameters and schemas</a></p></div>` : ""}<p><code>operationId: ${escape(operation.operationId)}</code></p></details>`;
     }).join("")}</details>`;
   }).join("");
   if (surface === "wallet") {
@@ -110,7 +133,7 @@ export function apiDocsPage(spec: OpenApiDocument, surface?: "wallet", assets?: 
 chmod 600 juicebox-connection.json
 npx center account --connection juicebox-connection.json</code></pre></div><p>The connection file selects Signa's audience, <code>${origin}</code>. Keep its private key secret. The shared SDK and signature format retain their existing protocol names.</p><p>For contract catalogs, indexed history and project reads, use the <a href="https://juicebox.center/api">Juicebox Center protocol reference</a>. Center accounts and API connections are separate.</p></section>
 <section id="write"><h2>Prepare → review → approve → check</h2><ol><li>Prepare a wallet plan from exact contract calls or a named transaction operation below.</li><li>Review its chain, recipient, value, calldata, fees, expiry and commitment. Simulate ready steps.</li><li>Approve with the wallet owner, or use an explicitly activated delegated session within its limits. Request authentication and spending approval remain separate.</li><li>Follow the existing plan, transaction hash or UserOperation to its canonical result. An uncertain response does not authorize replacement instructions.</li></ol><p><a href="https://juicebox.center/api/docs/smart-accounts">Shared wallet guide</a> / <a href="https://juicebox.center/api/docs/sessions">Delegated session guide</a>. Use this page and Signa's capabilities for the routes and features available here.</p></section>
-<section id="reference"><h2>Endpoint reference</h2><p class="muted">Expand a group, then an endpoint. The local OpenAPI document contains exact parameters and schemas for Signa's account and wallet API.</p><label for="endpoint-filter">Find an endpoint</label><input id="endpoint-filter" type="search" placeholder="Search paths, operations, or permissions"><p id="endpoint-count" role="status" aria-live="polite"></p><div class="reference">${groups}</div></section>
+<section id="reference"><h2>Endpoint reference</h2><p class="muted">Expand a group, then an endpoint. The local OpenAPI document contains exact parameters and schemas for Signa's account and wallet API.</p><label for="endpoint-filter">Find an endpoint</label><input id="endpoint-filter" type="search" placeholder="Search paths, operations, fields, or permissions" data-terms="${terms}"><p id="endpoint-count" role="status" aria-live="polite"></p><div class="reference">${groups}</div></section>
 <section id="errors"><h2>Errors and retries</h2><p>Errors use <code>application/problem+json</code>. Preserve <code>requestId</code>, check <code>code</code> and <code>retryable</code>, and honor <code>Retry-After</code>. For an authorized retry, keep the exact request bytes and idempotency key; use a fresh request nonce and signature. Reconcile an existing submission before attempting another.</p></section>
 <section id="glossary"><h2>Wallet terms</h2><dl><dt id="glossary-grant">API grant</dt><dd>Time-limited API access for a bot. It does not grant wallet spending authority.</dd><dt id="glossary-session">Delegated session</dt><dd>Owner-approved authority to repeat specified actions within exact limits and expiry.</dd><dt id="glossary-paymaster">Gas / wei / paymaster</dt><dd>Gas measures transaction work. Wei is the smallest ETH unit. A paymaster sponsors supported network costs.</dd><dt id="glossary-receipt">Canonical receipt</dt><dd>Evidence that an exact transaction was included in the chain's accepted history. Its resulting state determines whether the intended action succeeded.</dd></dl></section>
 <footer><a href="/api/v1/openapi.json">Machine-readable wallet API</a> / <a href="https://juicebox.center/api">Juicebox Center protocol reference</a></footer></main><p id="copy-status" role="status" aria-live="polite" class="sr-only"></p></body></html>`;
@@ -126,7 +149,7 @@ npx center account --connection juicebox-connection.json</code></pre></div><p>Th
 <section id="write"><h2>Prepare → review → sign → check</h2><ol><li>Create a saved set of proposed transactions: a <a href="#glossary-plan">plan</a>. Use a named preparation or <code>contract_calls</code>. Sign the API request and include an <a href="#glossary-idempotency"><code>Idempotency-Key</code></a> so a retry can find the same result.</li><li>Review the exact chain, recipient, encoded instructions (<a href="#glossary-calldata">calldata</a>), native token amount, required earlier steps, block evidence, plan commitment and expiry. Test each ready step with a simulation.</li><li>Have the plan wallet sign the exact transaction. Submit those signed bytes with a fresh owner-signed API request, or a bot request carrying the owner’s exact approval.</li><li>Retrieve the plan with <code>refresh=true</code> to check what happened. Continue only when required earlier steps are confirmed. Check an uncertain submission by its existing transaction hash before retrying.</li></ol><p class="note">API access does not let a bot spend the owner's funds. Check capabilities for supported ways to send transactions and pay network costs. Steps on different chains can succeed or fail separately; confirmation on the sending chain does not prove funds arrived on the receiving chain.</p><p><a href="/api/docs/transactions">Plans, retries, confirmations and partial journeys</a> / <a href="/api/docs/sessions">Session lifecycle and quotas</a></p><p>A project can also be created without a transaction: publish a signed, frozen set of per-chain launch calls, then let Center's sponsor execute them on the supported rollups. See <a href="/api/docs/project-intents">project intents</a>.</p></section>
 <section id="prepaid"><h2>Prepay for transactions across chains</h2><p>Prepare calls on supported chains and pay their network costs together. Center returns the exact calls for your wallet to approve, submits them, and prepares one funding transaction from the verified quote. Review and sign the funding transaction, then follow progress through Center.</p><p>Check whether funding already arrived before paying again. Verify each call on its destination chain; a quote or provider status alone does not prove payment or success. See the <a href="/api/docs/api">full guide</a> and <a href="/api/docs/ai-guide">agent workflow</a>.</p></section>
 <section id="wallets"><h2>Use one wallet address across networks</h2><p>On <a href="/accounts">Accounts</a>, choose the networks for a separate transaction wallet. Review the shared setup and approve creation on each network. Then add prepared transactions to one review list and follow each network's result. Balances and permissions remain separate on each network. Your signed-in wallet pays the creation fees; supported later transactions can use sponsored network fees.</p><p>For unattended payments, approve a bot's allowed action, recipient, spending limits and expiry once on each network. After activation confirms, the bot can sign and send within those permissions without further owner prompts. Check <code>sessions.configuredChainIds</code> for networks where activation is available. Changes to the limits and transactions outside them need owner approval.</p><p><a href="/api/docs/smart-accounts">Wallet setup guide</a> / <a href="/api/docs/client#run-payments-without-another-owner-prompt">Run an unattended payment</a> / <a href="/api/v1/capabilities">Current capabilities</a></p></section>
-<section id="reference"><h2>Endpoint reference</h2><p class="muted">Expand a group, then an endpoint. The OpenAPI document contains exact parameters and schemas; the contract method catalog supplies ABI-specific argument and output schemas.</p><label for="endpoint-filter">Find an endpoint</label><input id="endpoint-filter" type="search" placeholder="Search paths, operations, or permissions"><p id="endpoint-count" role="status" aria-live="polite"></p><div class="reference">${groups}</div></section>
+<section id="reference"><h2>Endpoint reference</h2><p class="muted">Expand a group, then an endpoint. The OpenAPI document contains exact parameters and schemas; the contract method catalog supplies ABI-specific argument and output schemas.</p><label for="endpoint-filter">Find an endpoint</label><input id="endpoint-filter" type="search" placeholder="Search paths, operations, fields, or permissions" data-terms="${terms}"><p id="endpoint-count" role="status" aria-live="polite"></p><div class="reference">${groups}</div></section>
 <section id="errors"><h2>Errors and retries</h2><p>Errors use <code>application/problem+json</code> with <code>code</code>, <code>status</code>, <code>requestId</code> and <code>retryable</code>. Honor <code>Retry-After</code>. To retry the same request, keep its exact bytes and idempotency key. Use a new one-time request identifier (<a href="#glossary-nonce">nonce</a>) and API signature.</p><p>Retrying a plan step does not authorize changes to its instructions, network costs, or transaction nonce. Look up the stored transaction hash and check its state first.</p></section>
 <section id="glossary"><h2>Glossary</h2><p>Look up a term here, then return to the step you were following.</p><dl>
 <dt id="glossary-project">Project</dt><dd>A set of Juicebox rules, funds, and tokens. Identify it by both its chain ID and project ID.</dd>
