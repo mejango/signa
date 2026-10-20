@@ -484,6 +484,7 @@ export async function createRestRuntime(options: {
     ...(execution.sponsorRoutes ? {sponsorRoutes: execution.sponsorRoutes} : {}),
     policies: execution.policies,
     store: new PostgresUserOperationStore(options.pool),
+    ...(walletPayments ? { approvedReview: (operationId: string) => walletPayments.approved(operationId) } : {}),
     transactionStore,
     transactions,
     sessions,

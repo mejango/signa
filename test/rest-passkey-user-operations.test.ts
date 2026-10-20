@@ -110,7 +110,7 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
     estimateTimeout: false, signedEstimate: undefined as Partial<UserOperationGasEstimate> | undefined,
     bundlerFees: null as { maxFeePerGas: Hex; maxPriorityFeePerGas: Hex } | null, bundlerDown: false,
     estimated: [] as UserOperationV07[], sent: undefined as UserOperationV07 | undefined,
-    baseFee: "0x0" as Hex, finalGasBump: false, nonce: 0n, headLagSeconds: 0,
+    baseFee: "0x0" as Hex, finalGasBump: false, nonce: 0n, headLagSeconds: 0, approved: true,
   };
   const rpcDefault: RestRpc["request"] = async (_chain, method, params) => {
     if (method === "eth_chainId") return toHex(8453);
@@ -183,7 +183,7 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
   const transactions = new TransactionService({ store: transactionStore, rpc: { request: rpc }, now: () => now,
     externalObservers: [{ kind: "erc4337", observePlanStep: (plan, index, bindingId, request) => service.observePlanStep(plan, index, bindingId, request) }] });
   service = new UserOperationService({
-    rpc: { request: rpc }, provider, store, transactionStore, transactions,
+    rpc: { request: rpc }, provider, store, transactionStore, transactions, approvedReview: async () => state.approved,
     policies: [{ chainId: 8453, gas: { ...gas,
       ...(options.maximumPreVerificationGas !== undefined ? { maximumPreVerificationGas: options.maximumPreVerificationGas } : {}),
     }, confirmations: 1 }],
@@ -863,6 +863,13 @@ describe("retiring a refused approval", () => {
     const { f, old } = await executedReplacement("success");
     expect(BigInt((await prepareAs(f, "after")).operation.nonce)).toBe(1n);
     expect((await f.store.get(f.actor, old.id))!.retiredSettledAt).toBeDefined();
+  });
+
+  it("never retires an operation the owner did not approve, which would hold the wallet's nonce for nothing", async () => {
+    const f = await fixture(), old = await f.prepare();
+    f.state.approved = false;
+    await expect(f.service.retire(f.principal, old.id)).rejects.toMatchObject({ code: "USER_OPERATION_NOT_RETIRABLE" });
+    expect((await f.store.get(f.actor, old.id))!.state).toBe("prepared");
   });
 
   it("never retires a session operation, which no signed deadline would settle", async () => {

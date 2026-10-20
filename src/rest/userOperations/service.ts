@@ -121,6 +121,8 @@ export interface UserOperationServiceDependencies {
   ): Promise<void>;
   /** Called when the bundler refuses an admitted operation: the account's verified state is not trusted again until read in full. */
   forgetAccountState?(plan: StoredPlan): void;
+  /** Whether the owner approved this operation in a payment review: only such an approval is retired. */
+  approvedReview?(operationId: string): Promise<boolean>;
   verificationBudgetMs?: number;
   authorizeRequest(
     actor: RestActor,
@@ -767,6 +769,9 @@ export class UserOperationService {
       fail("USER_OPERATION_NOT_FOUND", "UserOperation preparation was not found.", 404);
     exactActor(actor, record);
     appOperation(principal, record.chainId, record.session !== undefined);
+    // An operation the owner never approved would hold the wallet's nonce for nothing.
+    if (!record.submission && !(await this.options.approvedReview?.(id)))
+      fail("USER_OPERATION_NOT_RETIRABLE", "Only an operation the owner approved can be retired.", 409);
     const current = await this.options.store.retire(actor, id);
     return this.view(current.submission ? await this.refresh(current, signal) : current);
   }

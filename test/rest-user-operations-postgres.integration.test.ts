@@ -450,6 +450,7 @@ suite('PostgreSQL UserOperation persistence', () => {
     await expect(store.claim(claim(value.record, Date.now()))).rejects.toMatchObject({
       status: 403,
     });
+    await expect(store.retire(bot, value.record.id)).rejects.toMatchObject({ status: 403 });
     expect(await store.get(actor, value.record.id)).toEqual(value.record);
     await expectUnclaimed(value);
   });

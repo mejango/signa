@@ -273,6 +273,7 @@ export class PostgresUserOperationStore implements UserOperationStore {
   async retire(actor: RestActor, id: string) {
     assertActor(actor);
     return this.transaction(async (client) => {
+      await assertRestActorActive(client, actor, ['relay'], Math.floor((await databaseNow(client)) / 1000));
       // The claim's own row lock: whichever of the two commits first, the other sees it.
       const record = await this.required(client, id);
       if (!owns(record, actor)) missing();

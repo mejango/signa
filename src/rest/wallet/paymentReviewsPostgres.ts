@@ -288,6 +288,10 @@ export class PostgresWalletPaymentReviewStore {
       await this.finish(client, captured, updated, operation); return view(updated, operation);
     });
   }
+  /** An approval is final: no review leaves the approved state. */
+  async approved(operationId: string): Promise<boolean> {
+    return (await this.pool.query("SELECT 1 FROM rest_wallet_payment_reviews WHERE operation_id=$1 AND status='approved' LIMIT 1", [uuid(operationId)])).rowCount! > 0;
+  }
   async cleanup(limit = 250): Promise<number> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) invalid();
     return this.transaction(async client => (await client.query(`WITH expired AS (SELECT id FROM rest_wallet_payment_reviews

@@ -259,7 +259,9 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
   it("never resends, approves or reviews again an operation retired after Signa refused its approval", async () => {
     const value = await pendingReview(), submissions: unknown[] = [], operations = new PostgresUserOperationStore(pool);
     value.store.attachSubmission(async input => { submissions.push(input); return {}; });
+    expect(await value.store.approved(value.record.id)).toBe(false);
     await value.store.approve(value.view.draft.id, value.assertion);
+    expect(await value.store.approved(value.record.id)).toBe(true);
     await vi.waitFor(() => expect(submissions).toHaveLength(1));
     expect((await operations.retire(value.actor, value.record.id)).state).toBe("retired");
     // The approval page reopened: the same proof again, and a read of the approved review. Neither sends.
