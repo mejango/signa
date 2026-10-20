@@ -104,9 +104,10 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
     store: new PostgresWalletNetworksStore(options.pool), provider: networksProvider, rpc: networksRpc,
     payer: { address: networksPayer.address, signTransaction: transaction => networksPayer.signTransaction(transaction) } });
   const bundle = async (entry: string) => (await build({ entryPoints: [entry], bundle: true, platform: 'browser', format: 'esm', write: false })).outputFiles[0]!.text;
-  const [browserScript, signupBrowserScript] = await Promise.all([bundle('src/rest/web/wallet.ts'), bundle('src/rest/web/walletSignup.ts')]);
+  // Signup and recovery load the recovery kit as its own module, served next to their pages.
+  const [browserScript, signupBrowserScript, recoveryKitScript] = await Promise.all([bundle('src/rest/web/wallet.ts'), bundle('src/rest/web/walletSignup.ts'), bundle('src/rest/web/walletRecoveryKit.ts')]);
   const recoveryBrowserScript = recovery ? await bundle('src/rest/web/walletRecoveryJourney.ts') : undefined;
-  app = createWalletSite({ origin, basePath: '', audience: 'https://juicebox.center', browserScript, signup, signupBrowserScript, login,
+  app = createWalletSite({ origin, basePath: '', audience: 'https://juicebox.center', browserScript, signup, signupBrowserScript, recoveryKitScript, login,
     ...(recovery ? { recovery, recoveryBrowserScript: recoveryBrowserScript! } : {}), networks,
     // No app handoff is involved in this signup/login observation.
     handoff: {} as never, policy: {} as never,
