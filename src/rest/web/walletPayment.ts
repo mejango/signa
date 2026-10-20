@@ -151,10 +151,13 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   const next = JSON.stringify(stable); if (immutable && immutable !== next) fail();
   immutable = next; return structuredClone(value);
 }
-/** One line per hook entry: its title, then its labeled values. */
+/** One line per hook entry: its title, then its labeled values. These are requests the metadata
+ * carries; only the terminal minimum is enforced whatever the project's hooks do. */
 function showSteps(steps: WalletPaymentCentralPublic['metadataSteps']) {
   const target = element('payment-hooks');
-  target.replaceChildren(...(steps.length ? steps : [{ title: 'None', rows: [] }]).map(step => {
+  const lines = steps.length ? [{ title: 'Hooks may ignore these or act differently by version; the minimum above is enforced', rows: [] }, ...steps]
+    : [{ title: 'None supplied', rows: [] }];
+  target.replaceChildren(...lines.map(step => {
     const line = document.createElement('div');
     line.textContent = [step.title, ...step.rows.map(([label, value]) => `${label}: ${value}`)].join('. ');
     return line;

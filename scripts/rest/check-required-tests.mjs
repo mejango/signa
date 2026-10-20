@@ -33,6 +33,7 @@ export const requiredVitestSuites = [
   "test/rest-wallet-production-stack.test.ts",
   "test/rest-wallet-dependency-bundle.test.ts",
   "test/rest-web-bundle-budget.test.ts",
+  "test/rest-user-pay-metadata.test.ts",
   "test/rest-wallet-dependency-funding.test.ts",
   "test/rest-relayr-payment-evm.test.ts",
   "test/rest-relayr-payment-source.test.ts",
