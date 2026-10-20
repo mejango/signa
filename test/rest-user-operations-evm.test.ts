@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -33,8 +34,7 @@ import { SESSION_GUARD_INIT_ABI } from "../src/rest/smartAccounts/compiler.js";
 import { encodeSafe7579Execution } from "../src/rest/smartAccounts/accountExecution.js";
 import { sessionFixture, sessionObservation } from "./fixtures/sessions.js";
 
-const binary = process.env.ANVIL_BINARY ?? "anvil";
-const available = spawnSync(binary, ["--version"]).status === 0;
+const available = anvilAvailable();
 const artifact = JSON.parse(
   readFileSync(
     new URL(
@@ -88,8 +88,7 @@ describe.skipIf(!available)(
         server.close((error) => (error ? reject(error) : resolve())),
       );
       endpoint = `http://127.0.0.1:${port}`;
-      child = spawn(
-        binary,
+      child = spawnAnvil(
         [
           "--host",
           "127.0.0.1",
@@ -99,7 +98,6 @@ describe.skipIf(!available)(
           "31337",
           "--silent",
         ],
-        { stdio: "ignore" },
       );
       for (let attempt = 0; ; attempt++) {
         try {

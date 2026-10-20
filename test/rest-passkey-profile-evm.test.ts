@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { createECDH, createHash, createPrivateKey, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -50,8 +51,7 @@ const publicKey = {
   y: "0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5" as Hex,
 };
 const configurationAbi = parseAbi(["function getConfiguration() view returns(uint256 x,uint256 y,uint176 verifiers)"]);
-const anvil = process.env.ANVIL_BINARY ?? "anvil";
-const available = spawnSync(anvil, ["--version"]).status === 0;
+const available = anvilAvailable();
 const browser = privateKeyToAccount(`0x${"43".repeat(32)}`);
 const rpId = "wallet.juicebox.center", origin = `https://${rpId}`;
 const sha256 = (data: string | Uint8Array) => createHash("sha256").update(data).digest();
@@ -160,7 +160,7 @@ describe.skipIf(!available)("canonical passkey owner profile in the pinned local
     const port = (server.address() as { port: number }).port;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     endpoint = `http://127.0.0.1:${port}`;
-    child = spawn(anvil, ["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun", "--silent"], { stdio: "ignore" });
+    child = spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun", "--silent"]);
     for (let attempt = 0; attempt < 100; attempt++) {
       try { await rpc("eth_chainId"); break; } catch { await new Promise((resolve) => setTimeout(resolve, 30)); }
     }

@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { createECDH, createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -30,7 +31,7 @@ const pin = (a: Artifact): ContractPin => ({ address: a.address, runtimeCodeHash
   source: { repository: a.source.repo!, commit: a.source.commit, artifactSha256: a.source.artifactSha256! } });
 const publicKey = { x: "0x6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296" as Hex,
   y: "0x4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5" as Hex };
-const anvil = process.env.ANVIL_BINARY ?? "anvil", available = spawnSync(anvil, ["--version"]).status === 0;
+const available = anvilAvailable();
 
 describe.skipIf(!available)("versioned atomic passkey creation and canonical history in the pinned EVM", () => {
   let child: ChildProcess | undefined, endpoint: string, baseline: Hex, manifest: SmartAccountManifest;
@@ -76,7 +77,7 @@ describe.skipIf(!available)("versioned atomic passkey creation and canonical his
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const port = (server.address() as { port: number }).port; await new Promise<void>((resolve) => server.close(() => resolve()));
     endpoint = `http://127.0.0.1:${port}`;
-    child = spawn(anvil, ["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun", "--silent"], { stdio: "ignore" });
+    child = spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun", "--silent"]);
     for (let i = 0; i < 100; i++) { try { await rpc("eth_chainId"); break; } catch { await new Promise((resolve) => setTimeout(resolve, 30)); } }
     [sender, backup] = await rpc<[Address, Address]>("eth_accounts"); backup = getAddress(backup);
     for (const a of [safe, factory, adapter, launchpad, utility, entry, senderCreator, sessions]) {

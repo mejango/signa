@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { type ChildProcess } from 'node:child_process';
+import { anvilAvailable, spawnAnvil } from './support/anvil.js';
 import { createServer } from 'node:net';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { encodeErrorResult, keccak256, toHex, type Hex } from 'viem';
@@ -7,8 +8,7 @@ import { RELAYR_PAYMENT_ADDRESS, RELAYR_PAYMENT_CODE_HASH, RELAYR_PAYMENT_SELECT
 import { RELAYR_PAYMENT_RUNTIME } from './fixtures/relayr-payment.js';
 import { RELAYR_PAYMENT_ABI, RELAYR_PAYMENT_RECIPIENT, verifyRelayrPaymentEvent } from '../src/rest/sponsorship/paymentContract.js';
 
-const binary = process.env.ANVIL_BINARY ?? 'anvil';
-const available = spawnSync(binary, ['--version']).status === 0;
+const available = anvilAvailable();
 const account = privateKeyToAccount(`0x${'11'.repeat(32)}`); // Public local-only fixture.
 const id = 'a0a555ff-4444-4111-aaaa-333333333333';
 describe.skipIf(!available)('actual pinned Relayr payment bytecode on unforked Anvil', () => {
@@ -40,7 +40,7 @@ describe.skipIf(!available)('actual pinned Relayr payment bytecode on unforked A
     const port = (server.address() as { port: number }).port;
     await new Promise<void>(resolve => server.close(() => resolve()));
     endpoint = `http://127.0.0.1:${port}`;
-    child = spawn(binary, ['--host', '127.0.0.1', '--port', String(port), '--chain-id', '1', '--hardfork', 'cancun', '--silent'], { stdio: 'ignore' });
+    child = spawnAnvil(['--host', '127.0.0.1', '--port', String(port), '--chain-id', '1', '--hardfork', 'cancun', '--silent']);
     const until = Date.now() + 5000;
     for (;;) {
       try { expect(await rpc('eth_chainId')).toBe('0x1'); break; }

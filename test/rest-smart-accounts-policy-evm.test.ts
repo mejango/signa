@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import {
@@ -43,8 +44,7 @@ import type { ContractPin } from "../src/rest/smartAccounts/types.js";
 // The account caller is impersonated at the validator boundary. Safe owner
 // activation, EntryPoint timestamp rejection, gas charging and target execution
 // are deliberately outside this suite's evidence.
-const anvil = process.env.ANVIL_BINARY ?? "anvil";
-const available = spawnSync(anvil, ["--version"]).status === 0;
+const available = anvilAvailable();
 type Artifact = {
   name: string;
   address: Address;
@@ -406,8 +406,7 @@ describe.runIf(available)(
         throw new Error("Missing local test port");
       await new Promise<void>((resolve) => server.close(() => resolve()));
       endpoint = `http://127.0.0.1:${address.port}`;
-      child = spawn(
-        anvil,
+      child = spawnAnvil(
         [
           "--host",
           "127.0.0.1",

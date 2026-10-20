@@ -1,4 +1,5 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -43,7 +44,7 @@ const safe = artifact("SafeL2"), factory = artifact("SafeProxyFactory"), proxy =
   multiSend = artifact("MultiSend", "passkey/bootstrap/");
 const pin = (a: Artifact): ContractPin => ({ address: a.address, runtimeCodeHash: a.runtimeCodeHash,
   source: { repository: a.source.repo!, commit: a.source.commit, artifactSha256: a.source.artifactSha256! } });
-const anvil = process.env.ANVIL_BINARY ?? "anvil", available = spawnSync(anvil, ["--version"]).status === 0;
+const available = anvilAvailable();
 const browser = privateKeyToAccount(`0x${"43".repeat(32)}`);
 
 describe.skipIf(!available)("canonical wallet authority from genuine enrollment and setup in the pinned Base EVM", () => {
@@ -142,7 +143,7 @@ describe.skipIf(!available)("canonical wallet authority from genuine enrollment 
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const port = (server.address() as { port: number }).port;
     await new Promise<void>(resolve => server.close(() => resolve())); endpoint = `http://127.0.0.1:${port}`;
-    child = spawn(anvil, ["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun", "--silent"], { stdio: "ignore" });
+    child = spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", "8453", "--hardfork", "cancun", "--silent"]);
     for (let i = 0; i < 100; i++) { try { await rpc("eth_chainId"); break; } catch { await new Promise(resolve => setTimeout(resolve, 30)); } }
     [sender] = await rpc<[Address]>("eth_accounts");
     for (const a of [safe, factory, adapter, launchpad, utility, entry, senderCreator, sessions, ownable]) {

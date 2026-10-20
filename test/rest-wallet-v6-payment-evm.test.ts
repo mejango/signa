@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess } from "node:child_process";
+import { spawnAnvil } from "./support/anvil.js";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -167,8 +168,8 @@ describe.skipIf(!v6Sources)("actual local V6 payment through passkey Safe and pi
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const port = (server.address() as { port: number }).port; await new Promise<void>(resolve => server.close(() => resolve()));
     endpoint = `http://127.0.0.1:${port}`;
-    child = spawn(process.env.ANVIL_BINARY ?? "anvil", ["--host", "127.0.0.1", "--port", String(port), "--chain-id", String(chainId),
-      "--hardfork", "cancun", "--timestamp", "1800000000", "--silent"], { stdio: "ignore" });
+    child = spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", String(chainId),
+      "--hardfork", "cancun", "--timestamp", "1800000000", "--silent"]);
     let ready = false;
     for (let i = 0; i < 100; i++) { try { if (await rpc("eth_chainId") === "0x2105") { ready = true; break; } } catch { /* bounded startup */ }
       await new Promise(resolve => setTimeout(resolve, 30)); }
