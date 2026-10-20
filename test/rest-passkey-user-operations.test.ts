@@ -37,7 +37,7 @@ const gas: UserOperationGasPolicy = {
 
 // Real service, storage, codecs and EOA signatures; RPC/provider I/O is synthetic here.
 // The separate pinned-Anvil suite establishes actual passkey/FCL execution compatibility.
-async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint; paymentMetadata?: Hex } = {}) {
+async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint; paymentMetadata?: Hex; paymentLabel?: string } = {}) {
   const apiAccount = account(now, 8453);
   if (!options.legacy) { apiAccount.id = `eip155:8453:${safe}`; apiAccount.ownerAddress = safe; }
   const actor = owner(apiAccount), wallet = binding(apiAccount, now);
@@ -89,7 +89,7 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
   if (options.paymentMetadata !== undefined) {
     // A full Base USDC pay through the reviewed terminal: exact approval, then pay.
     const project = { chainId: 8453, projectId: "7", version: 6 as const };
-    preparedPlan.draft = { operation: "pay", account: safe, project, evidence: [], warnings: [], calls: [
+    preparedPlan.draft = { operation: options.paymentLabel ?? "pay", account: safe, project, evidence: [], warnings: [], calls: [
       { chainId: 8453, to: usdc, value: "0", label: "Approve", dependsOn: [], decoded: {},
         data: encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [target, 1_000_000n] }) },
       { chainId: 8453, to: target, value: "0", label: "Pay", dependsOn: [0], decoded: {},
@@ -280,7 +280,9 @@ describe("app UserOperation owner boundary", () => {
   it("prepares a passkey pay only with empty or pay-card buyback metadata", async () => {
     for (const metadata of ["0x", buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n })] as Hex[])
       expect((await (await fixture({ paymentMetadata: metadata })).prepare()).state).toBe("prepared");
-    await expect((await fixture({ paymentMetadata: "0x1234" })).prepare()).rejects.toMatchObject({ code: "USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED" });
+    for (const options of [{ paymentMetadata: "0x1234" as Hex }, { paymentMetadata: "0x1234" as Hex, paymentLabel: "contract_calls" },
+      { paymentMetadata: buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }) }])
+      await expect((await fixture(options)).prepare()).rejects.toMatchObject({ code: "USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED" });
   });
 
   it("rejects a non-Base app plan before account/provider work", async () => {

@@ -253,6 +253,8 @@ describe("owner-approved modeled payment review", () => {
       buildBuybackPayMetadata({ hook: getJBContractAddress("JBBuybackHookRegistry", 6, 8453), amountToSwapWith: 0n, minimumSwapAmountOut: 5n }),
       buildBuybackPayMetadata({ hook: getJBContractAddress("JBBuybackHookRegistry", 6, 8453), amountToSwapWith: 1n, minimumSwapAmountOut: 5n, skipSplits: true }),
       buildBuybackPayMetadata({ hook: terminal, amountToSwapWith: 0n, minimumSwapAmountOut: 5n, skipSplits: true }),
+      // A metadata minimum above the terminal minimum (5) would make the terminal minimum no guarantee.
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }),
       concat([userPay, "0x00"]), userPay.slice(0, -2) as Hex, "0x1234" as Hex,
     ]) expect(() => createWalletPaymentReviewDraft(withMetadata(metadata), options())).toThrow();
   });

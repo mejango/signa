@@ -116,7 +116,7 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   address(payment.token); address(payment.terminal); address(payment.beneficiary);
   decimal(payment.amount); decimal(payment.projectId); decimal(payment.minimumReturnedTokens); text(payment.memo, 32768, true);
   if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(text(payment.metadata, 65538))) fail();
-  try { passkeyPayMinimumOf(String(payment.metadata)); } catch { fail(); }
+  try { passkeyPayMinimumOf(String(payment.metadata), BigInt(String(payment.minimumReturnedTokens))); } catch { fail(); }
   const operation = normalizeUserOperation(value.operation);
   if (operation.sender.toLowerCase() !== String(payment.account).toLowerCase() || operation.signature !== '0x' ||
     getUserOperationHash(operation, value.entryPoint, 8453) !== value.operationHash) fail();
@@ -145,12 +145,12 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   immutable = next; return structuredClone(value);
 }
 /** The buyback request in the payment's metadata, in the payer's terms. The hook version decides
- * whether the skip applies; the terminal minimum above is the guarantee either way. */
-function buybackText(metadata: string): string {
-  const minimum = passkeyPayMinimumOf(metadata);
+ * how it applies; the terminal minimum, never below the request's, is the guarantee. */
+function buybackText(metadata: string, minReturnedTokens: string): string {
+  const minimum = passkeyPayMinimumOf(metadata, BigInt(minReturnedTokens));
   if (minimum === null) return 'None';
-  const skip = 'Asks the buyback hook to skip the reserved split on pool buys (hooks older than 1.4 ignore this).';
-  return minimum > 0n ? `${skip} The hook reverts unless you receive at least ${minimum} project tokens (base units).` : skip;
+  const skip = 'Requests pool buys without the reserved split (hooks older than 1.4 ignore this).';
+  return minimum > 0n ? `${skip} Pool minimum: ${minimum} project tokens (base units), covered by the minimum above.` : skip;
 }
 function accept(input: unknown) {
   review = checkReview(input);
@@ -158,7 +158,7 @@ function accept(input: unknown) {
   for (const [name, value] of Object.entries({ amount: `${formatUnits(BigInt(payment.amount), 6)} USDC`, project: payment.projectId,
     app: review.app.origin, account: payment.account, beneficiary: payment.beneficiary, minimum: payment.minimumReturnedTokens,
     memo: payment.memo || 'No memo', fee: `${formatUnits(userOperationMaximumCost(review.operation), 18)} ETH`, token: payment.token,
-    terminal: payment.terminal, metadata: payment.metadata, buyback: buybackText(payment.metadata), operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
+    terminal: payment.terminal, metadata: payment.metadata, buyback: buybackText(payment.metadata, payment.minimumReturnedTokens), operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
     element(`payment-${name}`).textContent = value;
   returnToApp.href = callback(review);
   if (review.status === 'approved') { pending = null; uncertain = false; setStatus('approved', 'Approved. Check the result in the app.'); }

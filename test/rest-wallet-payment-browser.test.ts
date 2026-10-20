@@ -154,9 +154,9 @@ describe('central payment review browser, virtual authenticator', () => {
     };
     await load(); expect(await page.locator('#payment-buyback').textContent()).toBe('None');
     withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n })); await load();
-    expect(await page.locator('#payment-buyback').textContent()).toBe('Asks the buyback hook to skip the reserved split on pool buys (hooks older than 1.4 ignore this). The hook reverts unless you receive at least 5 project tokens (base units).');
+    expect(await page.locator('#payment-buyback').textContent()).toBe('Requests pool buys without the reserved split (hooks older than 1.4 ignore this). Pool minimum: 5 project tokens (base units), covered by the minimum above.');
     withMetadata(buildUserPayMetadata({ chainId: 8453 })); await load();
-    expect(await page.locator('#payment-buyback').textContent()).toBe('Asks the buyback hook to skip the reserved split on pool buys (hooks older than 1.4 ignore this).');
+    expect(await page.locator('#payment-buyback').textContent()).toBe('Requests pool buys without the reserved split (hooks older than 1.4 ignore this).');
     withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: review.payment.terminal, tierIdsToMint: [1n] } }));
     await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
     expect(await page.locator('#payment-approve').isVisible()).toBe(false);

@@ -1,6 +1,6 @@
 import type {UserOperationSponsorRoutes} from './sponsorRoutes.js';
 import { randomUUID } from "node:crypto";
-import { toHex, type Address, type Hex } from "viem";
+import { decodeFunctionData, toHex, type Address, type Hex } from "viem";
 import { detachedFromRequest } from "../context.js";
 import type { RestPrincipal } from "../auth/store.js";
 import {
@@ -50,7 +50,7 @@ import {
   userOperationCommitment,
 } from "./codec.js";
 import { observeUserOperation } from "./execution.js";
-import { recognizeWalletV6UsdcPayment, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
+import { terminalAbi, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
 import { passkeyPayMinimumOf } from "./userPayMetadata.js";
 import { UserOperationProvider } from "./provider.js";
 import { createSessionGasEstimation } from "./estimation.js";
@@ -224,17 +224,23 @@ export class UserOperationService {
       ...(signal ? { signal } : {}),
     });
   }
-  /** A passkey pay of the reviewed token through the reviewed terminal carries only metadata a
-   * payment review admits, whichever path prepares or submits it. */
+  /** Every selected call that pays the reviewed token through the reviewed terminal carries only
+   * metadata a payment review admits, whatever the plan is labeled and whichever path prepares
+   * or submits it. */
   private passkeyPayMetadata(plan: StoredPlan, stepIndexes: readonly number[]): void {
     const config = this.options.v6UsdcPayment;
-    if (!config || !walletV6UsdcPaymentDomain(plan, config)) return;
-    try {
-      const payment = recognizeWalletV6UsdcPayment(plan, stepIndexes, config);
-      if (!payment) throw new Error("unrecognized");
-      passkeyPayMinimumOf(payment.metadata);
-    } catch {
-      fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries only empty or pay-card buyback metadata.", 422);
+    if (!config) return;
+    for (const index of stepIndexes) {
+      const call = plan.draft.calls[index];
+      if (!call || call.chainId !== config.chainId || !same(call.to, config.directV6Terminal)) continue;
+      let args: readonly unknown[] | undefined;
+      try {
+        const decoded = decodeFunctionData({ abi: terminalAbi, data: call.data as Hex });
+        if (decoded.functionName === "pay") args = decoded.args;
+      } catch { continue; }
+      if (!args || !same(args[1] as string, config.token)) continue;
+      try { passkeyPayMinimumOf(args[6] as string, args[4] as bigint); }
+      catch { fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries only empty or pay-card buyback metadata, under a terminal minimum at least its own.", 422); }
     }
   }
 

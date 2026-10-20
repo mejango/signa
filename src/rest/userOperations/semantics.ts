@@ -29,7 +29,7 @@ export interface WalletV6UsdcPayment {
 
 // Exact JBMultiTerminal / IJBTerminal ABI at the catalog's nana-core-v6 source pin
 // feff600654aee6fb1747dded692f18068b2230a6. No router or arbitrary multicall ABI.
-const terminalAbi = parseAbi([
+export const terminalAbi = parseAbi([
   "function pay(uint256 projectId,address token,uint256 amount,address beneficiary,uint256 minReturnedTokens,string memo,bytes metadata) payable returns(uint256)",
   "event Pay(uint256 indexed rulesetId,uint256 indexed rulesetCycleNumber,uint256 indexed projectId,address payer,address beneficiary,uint256 amount,uint256 newlyIssuedTokenCount,string memo,bytes metadata,address caller)",
 ]);

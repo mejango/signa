@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NATIVE_TOKEN, jbMultiTerminalAbi } from '@bananapus/nana-sdk-core';
+import {
+  NATIVE_TOKEN,
+  createHookMetadata,
+  hookMetadataId,
+  jbMultiTerminalAbi,
+} from '@bananapus/nana-sdk-core';
 import {
   build721PayMetadata,
   buildBuybackCashOutMetadata,
@@ -713,20 +718,29 @@ describe('payment quotes and approval plans', () => {
   });
 
   it('plans a skipSplits payment at the payer metadata minimum, or the beneficiary mint share without one', async () => {
-    const skipping = (explicit: boolean, slippageBps = 100) =>
+    // The pay card's request (SDK buildUserPayMetadata): the registry's (0, minimum, skipSplits).
+    const request = (minimum: bigint) =>
+      createHookMetadata(
+        [hookMetadataId(registry, 'pay')],
+        [encodeAbiParameters(parseAbiParameters('uint256,uint256,bool'), [0n, minimum, true])],
+      ) as Hex;
+    const skipping = (explicit: boolean, slippageBps = 100, noop = false) =>
       fixture({
         dataHook: registry,
-        beneficiaryCount: 0n,
+        beneficiaryCount: noop ? 400n : 0n,
         payHooks: [
           {
             hook: buybackHook,
-            noop: false,
-            amount: 100n,
+            noop,
+            amount: noop ? 0n : 100n,
             metadata: payHookMetadata({ skipSplits: true, explicit }),
           },
         ],
-      }).service.preparePay({ ...payInput, slippageBps });
+      }).service.preparePay({ ...payInput, slippageBps, metadata: request(explicit ? 300n : 0n) });
     const explicit = await skipping(true);
+    expect(
+      decodeFunctionData({ abi: jbMultiTerminalAbi, data: explicit.calls[0]!.data }).args?.[6],
+    ).toBe(request(300n));
     expect(explicit.summary).toMatchObject({
       beneficiaryTokenCount: '300',
       reservedTokenCount: '0',
@@ -747,6 +761,11 @@ describe('payment quotes and approval plans', () => {
     });
     expect((await skipping(true, 0)).summary).toMatchObject({
       minimumBeneficiaryTokenCount: '300',
+    });
+    // A noop spec leaves the payment on the mint path: the terminal's own preview counts.
+    expect((await skipping(false, 100, true)).summary).toMatchObject({
+      beneficiaryTokenCount: '400',
+      minimumBeneficiaryTokenCount: '396',
     });
   });
 

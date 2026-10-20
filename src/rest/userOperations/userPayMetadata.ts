@@ -6,14 +6,16 @@ const full = buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 2n ** 2
 const start = [...zero].findIndex((char, index) => char !== full[index]);
 
 /** A passkey payment may carry empty metadata or exactly a pay card's `buildUserPayMetadata` on Base:
- * the buyback registry's `(0, minimum, skipSplits = true)` with no tiers. Returns that minimum,
- * `null` for empty metadata, and throws for anything else. */
-export function passkeyPayMinimumOf(metadata: string): bigint | null {
+ * the buyback registry's `(0, minimum, skipSplits = true)` with no tiers, paid with a terminal
+ * minimum at least that minimum (as `prepareUserPay` sets it), so the terminal minimum is the
+ * payer's guarantee whatever the hook does. Returns the metadata minimum, `null` for empty
+ * metadata, and throws for anything else. */
+export function passkeyPayMinimumOf(metadata: string, minReturnedTokens: bigint): bigint | null {
   const value = metadata.toLowerCase();
   if (value === "0x") return null;
   if (value.length === zero.length) {
     const minimum = BigInt(`0x${value.slice(start, start + 64)}`);
-    if (value === buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: minimum }).toLowerCase()) return minimum;
+    if (value === buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: minimum }).toLowerCase() && minReturnedTokens >= minimum) return minimum;
   }
-  throw new Error("A passkey payment carries only empty or pay-card buyback metadata.");
+  throw new Error("A passkey payment carries only empty or pay-card buyback metadata, under a terminal minimum at least its own.");
 }
