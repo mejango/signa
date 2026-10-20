@@ -10,6 +10,7 @@ import {
   buildPayTx,
   getCurrentRuleset,
   prepareHookAwareCashOut,
+  prepareUserPay,
   previewPay,
   resolvePaymentTerminal,
   slippageFloor,
@@ -54,6 +55,8 @@ export interface PayInput {
   beneficiary: Address;
   slippageBps?: number;
   metadata?: Hex;
+  /** Without metadata: whether swapped tokens skip the reserved split. Defaults to true. */
+  skipSplits?: boolean;
 }
 
 export interface CashOutInput {
@@ -701,16 +704,43 @@ export class PaymentService {
     const client = asAccount(snapshot.client, input.account, (request, result) => {
       if (request.functionName === 'previewPayFor' && Array.isArray(result)) fullPreview = result;
     });
-    const metadata = input.metadata ?? '0x';
+    if (input.metadata !== undefined && input.skipSplits !== undefined)
+      throw new DomainError(
+        'INVALID_SKIP_SPLITS',
+        'skipSplits applies only when no metadata is supplied.',
+      );
     const started = Date.now();
     let route = await this.payRoute(client, snapshot.evidence, input.project, input.token);
     const routed = Date.now();
+    // Without caller metadata the SDK sets the metadata and minimum that get the payer the most
+    // tokens; the terminal is previewed again with that metadata so its hook specs match it.
     const alongside = (terminal: Address) =>
       Promise.all([
-        this.previewFor(client, input, terminal, amount, metadata),
+        (input.metadata === undefined
+          ? prepareUserPay(client, {
+              chainId: input.project.chainId,
+              terminal,
+              projectId: BigInt(input.project.projectId),
+              token: input.token,
+              amount,
+              beneficiary: input.beneficiary,
+              slippageBps: slippage,
+              skipSplits: input.skipSplits ?? true,
+            })
+          : Promise.resolve(undefined)
+        ).then(async (prepared) => ({
+          prepared,
+          preview: await this.previewFor(
+            client,
+            input,
+            terminal,
+            amount,
+            prepared?.metadata ?? input.metadata ?? '0x',
+          ),
+        })),
         beside?.(client, terminal),
       ]);
-    let [preview, extra] = await alongside(route.terminal.address);
+    let [{ prepared, preview }, extra] = await alongside(route.terminal.address);
     // Where a quote's time goes, for the production log; the request line only has the total.
     console.info(
       JSON.stringify({
@@ -732,7 +762,7 @@ export class PaymentService {
       // The kept context is behind the chain (a new ruleset): read it again, once.
       this.recentProjects.delete(route.key);
       route = await this.payRoute(client, snapshot.evidence, input.project, input.token);
-      [preview, extra] = await alongside(route.terminal.address);
+      [{ prepared, preview }, extra] = await alongside(route.terminal.address);
     }
     const { context, terminal } = route;
     if (!fullPreview || !Array.isArray(fullPreview[3]))
@@ -837,7 +867,15 @@ export class PaymentService {
           : 'Buyback output is indicative. Buyback 1.4.0 pay quotes encode three words (amountToSwapWith, minimumSwapAmountOut, skipSplits); two-word quotes revert. A pool failure or swap below the TWAP floor falls back to issuance; the transaction reverts if the final beneficiary balance increase is below its reviewed minimum.',
       );
     }
-    const minimum = explicitMinimum ?? slippageFloor(beneficiaryTokenCount, slippage);
+    if (prepared) {
+      beneficiaryTokenCount = prepared.preview.beneficiaryTokenCount;
+      reservedTokenCount = prepared.preview.reservedTokenCount;
+    }
+    const metadata = prepared?.metadata ?? input.metadata ?? '0x';
+    const minimum =
+      prepared?.minReturnedTokens ??
+      explicitMinimum ??
+      slippageFloor(beneficiaryTokenCount, slippage);
     if (beneficiaryTokenCount === 0n)
       warnings.push(
         'The verified preview returns zero fungible project tokens for the beneficiary. The payment has a zero minimum and may still transfer funds.',

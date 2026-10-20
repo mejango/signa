@@ -94,6 +94,12 @@ const payShape = {
   beneficiary: addressSchema,
   slippageBps: slippageSchema,
   metadata: hexSchema.optional(),
+  skipSplits: z
+    .boolean()
+    .describe(
+      'Without metadata: whether tokens bought from the buyback pool skip the reserved split. Defaults to true. Omit when supplying metadata.',
+    )
+    .optional(),
 };
 const cashOutShape = {
   project: projectSchema,

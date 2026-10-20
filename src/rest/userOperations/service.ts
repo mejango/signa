@@ -52,6 +52,7 @@ import {
 import { observeUserOperation } from "./execution.js";
 import { terminalAbi, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
 import { passkeyPayMetadataSteps } from "./userPayMetadata.js";
+import { explainedRefusal, tracedPayFailure } from "./payFailure.js";
 import { UserOperationProvider } from "./provider.js";
 import { createSessionGasEstimation } from "./estimation.js";
 import { passkeyDummySignature, passkeyEstimateProvider } from "./passkeyEstimation.js";
@@ -239,8 +240,8 @@ export class UserOperationService {
         if (decoded.functionName === "pay") args = decoded.args;
       } catch { continue; }
       if (!args || !same(args[1] as string, config.token)) continue;
-      try { passkeyPayMetadataSteps(args[6] as string, args[4] as bigint); }
-      catch { fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries empty or Juicebox hook metadata, with any buyback minimum within the terminal minimum.", 422); }
+      try { passkeyPayMetadataSteps(args[6] as string); }
+      catch { fail("USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED", "A passkey payment carries empty or Juicebox hook metadata.", 422); }
     }
   }
 
@@ -515,6 +516,10 @@ export class UserOperationService {
       maxFeePerGas: toHex(fee),
       maxPriorityFeePerGas: toHex(priority),
     };
+    // The bundler simulates the calls; a payment it refuses says why when the calls do.
+    const explained = <T>(work: Promise<T>) => work.catch(async (error: unknown) => {
+      throw await explainedRefusal(error, chain, binding.wallet.chainId, operation.sender, operation.callData);
+    });
     const createdAt = this.now();
     let expiresAt = Math.min(plan.expiresAt, createdAt + 300_000);
     const dummy = (expiry = expiresAt) =>
@@ -543,11 +548,11 @@ export class UserOperationService {
       : undefined;
     if (gasEstimation) operation = gasEstimation.fit(operation, true);
     const stub = sponsored
-      ? await provider.stub(
+      ? await explained(provider.stub(
           binding.wallet.chainId,
           operation,
           signal,
-        )
+        ))
       : undefined;
     stage("stubMs");
     if (stub) operation = stub.operation;
@@ -555,12 +560,12 @@ export class UserOperationService {
       operation = gasEstimation.fit(operation);
     gasEstimation?.assert(operation);
     const estimateProvider = passkeyProfile ? passkeyEstimateProvider(provider, policy.gas.maximumVerificationGas) : provider;
-    const estimate = await estimateProvider.estimate(
+    const estimate = await explained(estimateProvider.estimate(
       binding.wallet.chainId,
       { ...operation, signature: dummy() },
       signal,
       gasEstimation,
-    );
+    ));
     if (stub?.isFinal) {
       // A final stub binds its exact supplied gas fields. Keep them if they cover the independent estimate.
       for (const [field, amount] of Object.entries(estimate))
@@ -580,7 +585,7 @@ export class UserOperationService {
     // step, rather than after it; a head that moved fails the preparation either way.
     const [funded] = await Promise.all([
       sponsored && !stub?.isFinal
-        ? finalizeUserOperationSponsorship({
+        ? explained(finalizeUserOperationSponsorship({
             chainId: binding.wallet.chainId,
             operation,
             gasPolicy: policy.gas,
@@ -592,7 +597,7 @@ export class UserOperationService {
             signal,
             // The passkey margins (calldata bytes and verification headroom) cover a same-size sponsorship.
             marginsCoverSameSizeSponsorship: passkeyProfile !== undefined,
-          })
+          }))
         : Promise.resolve(null),
       chain.canonical(evidence),
       // The plan's own evidence is proved here when it is not this head (a stale ahead read, or a
@@ -782,7 +787,8 @@ export class UserOperationService {
     catch (error) {
       const current = await this.options.store.get(actor, record.id);
       if (current?.submission && same(current.submission.commitment, signedCommitment)) return this.view(await this.refresh(current, signal));
-      throw error;
+      // The chain's or bundler's simulation of the signed calls refused it: say why, when the calls do.
+      throw await explainedRefusal(error, this.chain(signal), record.chainId, input.operation.sender, input.operation.callData);
     }
     stage("admitMs");
     if (!claim.dispatch)
@@ -1181,6 +1187,11 @@ export class UserOperationService {
         if (!settled) return "pending";
         this.verified.add(key);
       },
+      // Traced once per reverted transaction: a later observation of it keeps what the first found.
+      payFailure: async (hash: Hex) =>
+        previous?.semantic?.status === "failed" && previous.transactionHash && same(previous.transactionHash, hash)
+          ? previous.payFailure
+          : tracedPayFailure(this.chain(), record.chainId, hash, record.sender, record.submission.operation.callData),
       verifySemantics: async (receipt: StoredReceipt) => {
         if (previous?.semantic && previous.receipt && same(previous.receipt.blockHash, receipt.blockHash)
           && same(previous.receipt.transactionHash, receipt.transactionHash)) return previous.semantic;

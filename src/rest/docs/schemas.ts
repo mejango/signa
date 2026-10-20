@@ -55,8 +55,10 @@ export function sharedSchemas(chainIds: readonly number[]): Record<string, Schem
     Source: { type: "string", enum: ["onchain", "bendystraw"] },
     Problem: object({
       type: { type: "string", format: "uri" }, title: text, status: { type: "integer", minimum: 400, maximum: 599 },
-      detail: text, code: text, requestId: text, retryable: boolean,
-    }),
+      detail: text, code: text, requestId: text, retryable: boolean, payFailure: ref("PayFailure"),
+    }, ["type", "title", "status", "detail", "code", "requestId", "retryable"]),
+    PayFailure: { ...object({ reason: text, received: { ...text, pattern: "^(0|[1-9][0-9]*)$" }, minimum: { ...text, pattern: "^(0|[1-9][0-9]*)$" }, message: text },
+      ["reason", "message"]), description: "Why a payment reverts or reverted, decoded from revert data only. `received` and `minimum` (integer strings) are set when it fell short of a minimum, so the payer can lower it and retry. Present on a refused preparation or submission whose calls say why, and on a reverted operation's `observation`." },
     SafeError: object({ code: text, message: text }),
     Profile: object({ displayName: { ...text, "x-maxUtf8Bytes": 120 }, bio: { ...text, "x-maxUtf8Bytes": 2000 },
       avatarUri: nullable({ ...text, pattern: "^(?:https|ipfs)://", "x-maxUtf8Bytes": 2048, description: "Absolute HTTPS or IPFS URI without credentials. The account UI does not fetch it." }) }),

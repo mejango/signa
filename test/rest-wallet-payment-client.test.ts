@@ -418,8 +418,11 @@ describe('Center browser payment review continuity', () => {
 
   it('keeps canonical inner failure distinct from a successful outer transaction', async () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
-    f.observed(f.observedOperation('reverted'));
-    expect((await f.helper().refreshPayment()).status).toBe('reverted');
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'Lower your minimum.' };
+    const reverted = f.observedOperation('reverted');
+    f.observed({ ...reverted, observation: { ...reverted.observation, payFailure } });
+    const status = await f.helper().refreshPayment();
+    expect(status).toMatchObject({ status: 'reverted', payFailure });
     f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
   });
 

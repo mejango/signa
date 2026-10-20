@@ -161,6 +161,15 @@ describe("signed REST client request binding", () => {
     const failure = new SignedRestClient({ ...config, fetch: async () => Response.json({ error: { code: "DENIED", message: "private upstream token" } }, { status: 403 }) });
     await expect(failure.request({ requestTarget: "/api/v1/accounts/me" })).rejects.toMatchObject({ message: "The service rejected this request (403, DENIED)" });
   });
+
+  it("keeps a served payment failure reason in its exact shape, and nothing else", async () => {
+    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "Lower your minimum." };
+    const served = (body: unknown) => new SignedRestClient({ ...config, fetch: async () => Response.json(body, { status: 502 }) })
+      .request({ requestTarget: "/api/v1/accounts/me" }).then(() => undefined, (error: { payFailure?: unknown }) => error);
+    const refused = await served({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure });
+    expect(refused).toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure });
+    expect((await served({ code: "X", payFailure: { ...payFailure, detail: "https://node.example/key" } }))?.payFailure).toBeUndefined();
+  });
 });
 
 describe("public bot registration workflow", () => {

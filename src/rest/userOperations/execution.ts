@@ -26,6 +26,7 @@ import {
 } from "./codec.js";
 import type {
   PackedUserOperationV07,
+  PayFailure,
   UserOperationExecutionBinding,
   UserOperationObservation,
 } from "./types.js";
@@ -57,6 +58,8 @@ export interface ObserveUserOperationOptions {
   ): Promise<void | "pending">;
   /** Receives only logs within this operation's EntryPoint execution interval. */
   verifySemantics?(receipt: StoredReceipt): Promise<SemanticResult>;
+  /** Why the operation's payment reverted, for an execution the EntryPoint reports failed. */
+  payFailure?(transactionHash: Hex): Promise<PayFailure | undefined>;
 }
 /** A bundler receipt supplies only a hint. Every proof below comes from the configured chain. */
 export async function observeUserOperation(
@@ -384,7 +387,8 @@ export async function observeUserOperation(
     return unknown(
       "The reported operation gas charge exceeds its maximum prefund.",
     );
-  if (!event.success)
+  if (!event.success) {
+    const payFailure = await options.payFailure?.(transactionHash);
     return {
       ...base,
       transactionHash,
@@ -395,7 +399,9 @@ export async function observeUserOperation(
         details:
           "EntryPoint independently reports that this account execution failed.",
       },
+      ...(payFailure ? { payFailure } : {}),
     };
+  }
   const verified = (await options.verifyAccountAtBlock(binding, evidence, chain)) !== "pending";
   const start =
     position === 0 ? boundaries[0]! : events[position - 1]!.position;

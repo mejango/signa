@@ -334,5 +334,8 @@ calls per plan. Consult capabilities for current limits and honor `Retry-After`.
 Success responses use route-specific JSON shapes. Errors use
 `application/problem+json` with `type`, `title`, `status`, `detail`, `code`,
 `requestId`, and `retryable`. Preserve `X-Request-Id` when reporting failures.
+A payment the bundler or chain refuses also carries `payFailure`
+(`{ reason, received?, minimum?, message }`, amounts as integer strings) when its
+calls say why; a reverted payment operation carries it on its `observation`.
 Responses disable caching. A retryable transport error does not establish that
 a transaction was never submitted.

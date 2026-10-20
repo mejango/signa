@@ -662,6 +662,26 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
       semantic: { status: "failed" },
     });
     expect(f.semantic).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty("payFailure");
+  });
+  it("asks why a failed account execution's payment reverted, by its transaction", async () => {
+    const f = fixture();
+    f.state.mined = true;
+    f.state.eventSuccess = false;
+    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "Lower your minimum." };
+    const reason = vi.fn(async () => payFailure);
+    const result = await observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    expect(result).toMatchObject({ state: "reverted", semantic: { status: "failed" }, payFailure });
+    expect(reason).toHaveBeenCalledWith(txHash);
+    // A successful execution never asks.
+    f.state.eventSuccess = true;
+    reason.mockClear();
+    await observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    expect(reason).not.toHaveBeenCalled();
   });
   it("preserves an independently proven outer revert", async () => {
     const f = fixture();

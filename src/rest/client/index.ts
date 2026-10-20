@@ -4,6 +4,7 @@ import {
   REST_AUTH_HEADERS as H, validateAudience, type BotProof, type RequestClaims,
 } from "../auth/signatures.js";
 import { isCanonicalGrantScopes, type BotScope } from "../auth/shared.js";
+import type { PayFailure } from "../userOperations/types.js";
 
 export { accountIdFor, newRequestNonce, REST_AUTH_HEADERS } from "../auth/signatures.js";
 export { isCanonicalGrantScopes } from "../auth/shared.js";
@@ -51,9 +52,22 @@ export type ClientOptions = {
   maxResponseBytes?: number;
 };
 export class RestClientError extends Error {
-  constructor(readonly code: string, message: string, readonly status?: number) {
+  /** Why a payment the service refused would revert, when its calls say: the payer can adjust and retry. */
+  readonly payFailure?: PayFailure;
+  constructor(readonly code: string, message: string, readonly status?: number, payFailure?: PayFailure) {
     super(message); this.name = "RestClientError";
+    if (payFailure) this.payFailure = payFailure;
   }
+}
+const amount = (value: unknown) => value === undefined || (typeof value === "string" && /^(0|[1-9][0-9]{0,77})$/.test(value));
+/** A served payment failure reason, kept only in its exact shape. */
+export function payFailureOf(value: unknown): PayFailure | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { reason, received, minimum, message, ...rest } = value as Record<string, unknown>;
+  if (Object.keys(rest).length || typeof reason !== "string" || !/^[A-Z0-9_]{1,64}$/.test(reason) || typeof message !== "string"
+    || message.length > 512 || !amount(received) || !amount(minimum)) return undefined;
+  return { reason, message, ...(received === undefined ? {} : { received: received as string }),
+    ...(minimum === undefined ? {} : { minimum: minimum as string }) };
 }
 function invalid(message: string): never { throw new RestClientError("INVALID_INPUT", message); }
 export function clientAudience(value: string): string {
@@ -224,7 +238,8 @@ export class SignedRestClient {
           const error = result && typeof result === "object" && "error" in result ? result.error : result;
           const code = error && typeof error === "object" && "code" in error
             && typeof error.code === "string" && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : "REQUEST_FAILED";
-          throw new RestClientError(code, `The service rejected this request (${response.status}, ${code})`, response.status);
+          throw new RestClientError(code, `The service rejected this request (${response.status}, ${code})`, response.status,
+            payFailureOf(error && typeof error === "object" && "payFailure" in error ? error.payFailure : undefined));
         }
         return result as T;
       } catch (error) {

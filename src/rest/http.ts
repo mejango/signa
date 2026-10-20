@@ -225,6 +225,7 @@ export function problem(error: Error, context: Context): Response {
   let code = "INTERNAL_ERROR";
   let detail = "The operation could not be completed";
   let retryable = false;
+  let payFailure: unknown;
   if (
     error instanceof RestError ||
     error instanceof RestAuthError ||
@@ -232,6 +233,8 @@ export function problem(error: Error, context: Context): Response {
   ) {
     ({ status, code } = error);
     detail = error.message;
+    // A payment's failure reason is built only from decoded revert data (userOperations/payFailure.ts).
+    if (error instanceof RestError) payFailure = (error.details as { payFailure?: unknown } | undefined)?.payFailure;
     retryable =
       error instanceof IndexerError
         ? error.retryable
@@ -279,6 +282,7 @@ export function problem(error: Error, context: Context): Response {
       code,
       requestId,
       retryable,
+      ...(payFailure ? { payFailure } : {}),
     }),
     status as 400,
     {

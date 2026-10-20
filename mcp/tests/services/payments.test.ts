@@ -8,6 +8,8 @@ import {
 import {
   build721PayMetadata,
   buildBuybackCashOutMetadata,
+  buildUserPayMetadata,
+  prepareUserPay,
   v6Address,
 } from '@bananapus/nana-sdk-core/v6';
 import {
@@ -63,7 +65,16 @@ const evidence: BlockEvidence = {
   timestamp: '1000',
   source: 'rpc',
 };
-const payInput: PayInput = { project, account, token: NATIVE_TOKEN, amount: '100', beneficiary };
+// Caller metadata keeps the terminal-preview quote; without it the SDK's prepareUserPay sets the minimum.
+const payInput: PayInput = {
+  project,
+  account,
+  token: NATIVE_TOKEN,
+  amount: '100',
+  beneficiary,
+  metadata: '0x',
+};
+const { metadata: _callerMetadata, ...sdkPayInput } = payInput;
 const cashInput: CashOutInput & { account: Address } = {
   project,
   account,
@@ -642,6 +653,63 @@ describe('payment quotes and approval plans', () => {
       decodeFunctionData({ abi: jbMultiTerminalAbi, data: plan.calls[0]!.data }).args?.[4],
     ).toBe(247n);
     expect(plan.warnings.join(' ')).toContain('falls back');
+  });
+
+  it('without caller metadata pays with the SDK prepareUserPay metadata and minimum', async () => {
+    for (const skipSplits of [undefined, true, false]) {
+      for (const options of [
+        {},
+        {
+          dataHook: registry,
+          beneficiaryCount: 0n,
+          payHooks: [
+            {
+              hook: buybackHook,
+              noop: false,
+              amount: 100n,
+              metadata: payHookMetadata({ skipSplits: skipSplits ?? true }),
+            },
+          ],
+        },
+      ]) {
+        const f = fixture(options);
+        const input = skipSplits === undefined ? sdkPayInput : { ...sdkPayInput, skipSplits };
+        const plan = await f.service.preparePay(input);
+        const { client } = await f.snapshot();
+        const sdk = await prepareUserPay(client, {
+          chainId: project.chainId,
+          terminal,
+          projectId: BigInt(project.projectId),
+          token: NATIVE_TOKEN,
+          amount: 100n,
+          beneficiary,
+          slippageBps: 100n,
+          skipSplits: skipSplits ?? true,
+        });
+        expect(sdk.metadata).toBe(
+          buildUserPayMetadata({ chainId: project.chainId, skipSplits: skipSplits ?? true }),
+        );
+        const args = decodeFunctionData({
+          abi: jbMultiTerminalAbi,
+          data: plan.calls[0]!.data,
+        }).args!;
+        expect([args[4], args[6]]).toEqual([sdk.minReturnedTokens, sdk.metadata]);
+        expect(plan.summary).toMatchObject({
+          minimumBeneficiaryTokenCount: String(sdk.minReturnedTokens),
+          beneficiaryTokenCount: String(sdk.preview.beneficiaryTokenCount),
+          reservedTokenCount: String(sdk.preview.reservedTokenCount),
+          metadata: sdk.metadata,
+        });
+        // The hook specs checked are the terminal's answer for that exact metadata.
+        const previews = f.readContract.mock.calls.filter(
+          ([request]) => request.functionName === 'previewPayFor',
+        );
+        expect(previews.at(-1)?.[0].args?.[4]).toBe(sdk.metadata);
+      }
+    }
+    await expect(
+      fixture().service.preparePay({ ...payInput, skipSplits: false }),
+    ).rejects.toMatchObject({ code: 'INVALID_SKIP_SPLITS' });
   });
 
   it('supports the recorded 1.1.1 hook without accepting another generation or a partial buyback', async () => {
