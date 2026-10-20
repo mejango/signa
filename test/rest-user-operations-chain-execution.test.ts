@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { PAY_FAILURE_BUDGET_MS } from "../src/rest/userOperations/payFailure.js";
 import { readFileSync } from "node:fs";
 import { privateKeyToAccount } from "viem/accounts";
 import {
@@ -97,6 +98,7 @@ function fixture() {
     innerFailure: false,
     validationFailure: false,
     reorged: false,
+    stallBlocks: false,
     mined: false,
     transactionPending: false,
     receiptStatus: "0x1",
@@ -195,6 +197,7 @@ function fixture() {
   });
   const rpc = vi.fn<RestRpc["request"]>(async (_chain, method, params) => {
     if (method === "eth_chainId") return "0x1";
+    if (method === "eth_getBlockByNumber" && state.stallBlocks) return new Promise(() => undefined);
     if (method === "eth_getBlockByNumber")
       return {
         number: "0x64",
@@ -662,6 +665,59 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
       semantic: { status: "failed" },
     });
     expect(f.semantic).not.toHaveBeenCalled();
+    expect(result).not.toHaveProperty("payFailure");
+  });
+  it("asks why a failed account execution's payment reverted, by its transaction", async () => {
+    const f = fixture();
+    f.state.mined = true;
+    f.state.eventSuccess = false;
+    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: "This payment would get fewer tokens than your minimum, so lower your minimum or try again." };
+    const reason = vi.fn(async () => payFailure);
+    const result = await observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    expect(result).toMatchObject({ state: "reverted", semantic: { status: "failed" }, payFailure });
+    expect(reason).toHaveBeenCalledWith(txHash, expect.stringMatching(/^0x[0-9a-f]{64}$/i));
+    // A successful execution never asks.
+    f.state.eventSuccess = true;
+    reason.mockClear();
+    await observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    expect(reason).not.toHaveBeenCalled();
+    // A failed execution still confirming is not explained yet.
+    f.state.eventSuccess = false;
+    const confirming = await observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1024, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    expect(confirming).toMatchObject({ state: "confirming" });
+    expect(confirming).not.toHaveProperty("payFailure");
+    expect(reason).not.toHaveBeenCalled();
+    const observe = () => observeUserOperation({ chain: f.chain(), binding: f.binding,
+      signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
+      verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
+    // A reorg the recheck proves leaves no settled revert: the outcome is unknown again, with no reason.
+    reason.mockImplementationOnce(async () => { f.state.reorged = true; return payFailure; });
+    const reorged = await observe();
+    expect(reorged).toMatchObject({ state: "unknown" });
+    expect(reorged).not.toHaveProperty("payFailure");
+    expect(reorged).not.toHaveProperty("receipt");
+    f.state.reorged = false;
+    // A trace that never answers holds the outcome for the reason budget at most.
+    reason.mockImplementationOnce(() => new Promise(() => undefined));
+    const started = Date.now();
+    const slow = await observe();
+    expect(slow).toMatchObject({ state: "reverted" });
+    expect(slow).not.toHaveProperty("payFailure");
+    expect(Date.now() - started).toBeLessThan(PAY_FAILURE_BUDGET_MS + 1_000);
+    // A fast trace whose block recheck stalls is held to the same budget.
+    reason.mockImplementationOnce(async () => { f.state.stallBlocks = true; return payFailure; });
+    const recheckStarted = Date.now();
+    const stalled = await observe();
+    expect(stalled).toMatchObject({ state: "reverted" });
+    expect(stalled).not.toHaveProperty("payFailure");
+    expect(Date.now() - recheckStarted).toBeLessThan(PAY_FAILURE_BUDGET_MS + 1_000);
+    f.state.stallBlocks = false;
   });
   it("preserves an independently proven outer revert", async () => {
     const f = fixture();

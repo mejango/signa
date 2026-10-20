@@ -233,7 +233,7 @@ describe("owner-approved modeled payment review", () => {
       recommit(c); expect(() => assertWalletPaymentReviewContext(draft, c)).toThrow();
     }
   });
-  it("admits any Juicebox hook metadata whose buyback minimums the terminal minimum covers", () => {
+  it("admits any Juicebox hook metadata, whatever its buyback minimum", () => {
     const withMetadata = (metadata: Hex) => {
       const c = context(), summary = c.plan.draft.summary as { metadata: Hex };
       c.plan.draft.calls[1]!.data = encodeFunctionData({ abi: payAbi, functionName: "pay",
@@ -250,16 +250,16 @@ describe("owner-approved modeled payment review", () => {
       buildBuybackPayMetadata({ hook: registry, amountToSwapWith: 1n, minimumSwapAmountOut: 5n, skipSplits: true }),
       buildBuybackPayMetadata({ hook: terminal, amountToSwapWith: 0n, minimumSwapAmountOut: 5n, skipSplits: true }),
       createHookMetadata(["0xdeadbeef"], [`0x${"ab".repeat(40)}`]),
+      // A buyback minimum above the terminal minimum (5): with the reserved split honored it covers the
+      // swap and leftover mint before the split. It can only revert the pay; the terminal minimum holds.
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n, skipSplits: false }),
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n, tiers: { metadataIdTarget: terminal, tierIdsToMint: [1n] } }),
+      createHookMetadata(["0xdeadbeef"], [encodeAbiParameters([{ type: "bool" }, { type: "uint16[]" }], [true, []])]),
     ] as Hex[]) {
       const draft = createWalletPaymentReviewDraft(withMetadata(metadata), options());
       expect(validateWalletPaymentReviewDraft(draft)).toEqual(draft);
     }
     for (const metadata of [
-      // A buyback minimum above the terminal minimum (5) would make the terminal minimum no guarantee.
-      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }),
-      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n, tiers: { metadataIdTarget: terminal, tierIdsToMint: [1n] } }),
-      // Reads both as a 721 mint and as a buyback with minimum 64: an ambiguous reading's minimum counts too.
-      createHookMetadata(["0xdeadbeef"], [encodeAbiParameters([{ type: "bool" }, { type: "uint16[]" }], [true, []])]),
       concat([userPay, "0x00"]), userPay.slice(0, -2) as Hex, "0x1234" as Hex,
     ]) expect(() => createWalletPaymentReviewDraft(withMetadata(metadata), options())).toThrow();
   });

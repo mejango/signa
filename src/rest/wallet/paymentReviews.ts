@@ -164,7 +164,7 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
         providerId: r.providerId, createdAt: r.createdAt, expiresAt: r.expiresAt })) invalid();
     const payment = recognizeWalletV6UsdcPayment(p, r.stepIndexes, { chainId: 8453, token: c.token, directV6Terminal: c.directV6Terminal });
     if (!payment) invalid();
-    passkeyPayMetadataSteps(payment.metadata, BigInt(payment.minimumReturnedTokens));
+    passkeyPayMetadataSteps(payment.metadata);
     assertSafe7579Execution(r.operation.callData, r.stepIndexes.map(index => {
       const call = p.draft.calls[index]!; return { target: call.to, value: call.value, callData: call.data };
     }));
@@ -231,7 +231,7 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletPaymentR
         beneficiary: payment.beneficiary, minimumBeneficiaryTokenCount: payment.minimumReturnedTokens, metadata: payment.metadata } } },
       d.stepIndexes, { chainId: 8453, token: payment.token, directV6Terminal: payment.terminal });
     if (!checked || !same(checked, payment)) invalid();
-    passkeyPayMetadataSteps(payment.metadata, BigInt(payment.minimumReturnedTokens));
+    passkeyPayMetadataSteps(payment.metadata);
     fields(d.ceremony, ["id", "accountId", "purpose", "contextDigest", "challenge", "expiresAt"]); assertWalletCeremonyDraft(d.ceremony);
     const { ceremony, ...base } = d;
     if (ceremony.id !== d.id || ceremony.accountId !== a.accountId || ceremony.purpose !== "payment" || ceremony.expiresAt !== d.expiresAtMs ||

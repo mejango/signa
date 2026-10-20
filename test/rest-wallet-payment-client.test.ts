@@ -17,7 +17,7 @@ function fixture() {
   const calls: Array<{ path: string; body: any; key: string | null; search: string }> = [];
   const appKey = privateKeyToAccount(`0x${'37'.repeat(32)}`);
   let grant = { ...f.grant, signerAddress: appKey.address.toLowerCase() as typeof appKey.address }, active = true;
-  let now = f.nowMs, href = f.origin + '/pay', state = '', loseReview = false, loseSubmission = false, reviewMissing = false;
+  let now = f.nowMs, href = f.origin + '/pay', state = '', loseReview = false, loseSubmission = false, reviewMissing = false, refusal: unknown;
   let reviewStatus = 'approved', operation = { ...f.prepared, state: 'pending' } as any;
   let submissionBodyFailure: 'read' | 'truncated' | undefined;
   let heldSubmission: { started(): void; response: Response | undefined; promise: Promise<Response> } | undefined;
@@ -65,6 +65,7 @@ function fixture() {
       expect(body).toEqual({ signature: f.signature });
       expect([...data.values()].some(value => JSON.parse(value).submissionStarted === true)).toBe(true);
       if (loseSubmission) { loseSubmission = false; throw new Error('send result disappeared'); }
+      if (refusal) { const body = refusal; refusal = undefined; return Response.json(body, { status: 502 }); }
       if (submissionBodyFailure) {
         const failure = submissionBodyFailure; submissionBodyFailure = undefined;
         const body = new ReadableStream<Uint8Array>({ start(stream) {
@@ -98,7 +99,7 @@ function fixture() {
   return { ...f, data, calls, storage, options, transport, helper: () => createCenterWalletPaymentClient(options),
     input: () => ({ plan: f.plan, operation: f.prepared, expectedPayment: f.expected }),
     callback: () => { href = f.callbackUri + '?' + new URLSearchParams({ review: reviewId, state, iss: f.issuer }); return href; }, href: () => href,
-    loseReview: () => { loseReview = true; }, loseSubmission: () => { loseSubmission = true; }, expireReview: () => { reviewMissing = true; },
+    loseReview: () => { loseReview = true; }, loseSubmission: () => { loseSubmission = true; }, refuseSubmission: (body: unknown) => { refusal = body; }, expireReview: () => { reviewMissing = true; },
     loseSubmissionBody: (kind: 'read' | 'truncated') => { submissionBodyFailure = kind; },
     holdNextSubmission: () => holdNextResponse('submission'), holdNextReview: () => holdNextResponse('review'),
     replaceGrant: () => { grant = { ...grant, incarnation: '2' }; }, disconnect: () => { active = false; }, advance: (ms: number) => { now += ms; },
@@ -418,9 +419,48 @@ describe('Center browser payment review continuity', () => {
 
   it('keeps canonical inner failure distinct from a successful outer transaction', async () => {
     const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
-    f.observed(f.observedOperation('reverted'));
-    expect((await f.helper().refreshPayment()).status).toBe('reverted');
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
+    const reverted = f.observedOperation('reverted');
+    f.observed({ ...reverted, observation: { ...reverted.observation, payFailure } });
+    const status = await f.helper().refreshPayment();
+    expect(status).toMatchObject({ status: 'reverted', payFailure, observation: { payFailure } });
     f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
+  });
+
+  it('hands the app a refused submission\'s payment reason, in its exact shape only', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback());
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
+    f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', detail: 'Refused.', payFailure });
+    await expect(f.helper().submitPayment()).rejects.toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure });
+    f.refuseSubmission({ code: 'USER_OPERATION_PROVIDER_REJECTED', payFailure: { ...payFailure, message: 'https://node.example/key' } });
+    const error = await f.helper().submitPayment().catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ code: 'USER_OPERATION_PROVIDER_REJECTED' });
+    expect((error as { payFailure?: unknown }).payFailure).toBeUndefined();
+    // A reason never retires the approval: the payment stays held until Center shows its outcome.
+    expect(() => f.helper().clearPayment()).toThrow(expect.objectContaining({ code: 'WALLET_PAYMENT_UNRESOLVED' }));
+  });
+
+  it('shows a payment reason only while the payment stands reverted', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
+    const payFailure = { reason: 'TERMINAL_UNDER_MIN', received: '812', minimum: '900', message: 'This payment would get fewer tokens than your minimum, so lower your minimum or try again.' };
+    const confirming = f.observedOperation('confirming');
+    f.observed({ ...confirming, observation: { ...confirming.observation, payFailure } });
+    const status = await f.helper().refreshPayment();
+    expect(status.status).toBe('confirming');
+    expect(status).not.toHaveProperty('payFailure');
+    expect(status.observation).not.toHaveProperty('payFailure');
+  });
+
+  it('drops a served payment reason outside its exact shape, on the status and inside the observation', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
+    const reverted = f.observedOperation('reverted');
+    f.observed({ ...reverted, observation: { ...reverted.observation,
+      payFailure: { reason: 'TERMINAL_UNDER_MIN', message: 'See https://node.example/key', received: '812', minimum: '900' } } });
+    const status = await f.helper().refreshPayment();
+    expect(status.status).toBe('reverted');
+    expect(status).not.toHaveProperty('payFailure');
+    expect(status.observation).toBeDefined();
+    expect(status.observation).not.toHaveProperty('payFailure');
   });
 
   it('waits on the operation past the revision it last saw, once it has seen one', async () => {

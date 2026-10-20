@@ -7,15 +7,20 @@ import { passkeyPayMetadataSteps } from "../src/rest/userOperations/userPayMetad
 const max = 2n ** 256n - 1n;
 const buyback = (minimum: bigint) => encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }, { type: "bool" }], [0n, minimum, true]);
 
-// Pins the coupling to the SDK decoder's wording: a renamed label would let a minimum through.
 describe("passkey pay metadata steps", () => {
-  it("holds every buyback minimum the decoder reads to the terminal minimum", () => {
-    expect(passkeyPayMetadataSteps(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: max }), max)).toHaveLength(1);
-    expect(() => passkeyPayMetadataSteps(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: max }), max - 1n)).toThrow();
+  it("describes every Juicebox pay metadata, whatever its buyback minimum", () => {
+    // skipSplits false (and hook 1.1.1) put the minimum on the swap plus leftover mint before the
+    // reserved split, above the beneficiary's terminal minimum; it can only make the pay revert.
+    const honoring = passkeyPayMetadataSteps(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: max, skipSplits: false }));
+    expect(honoring).toHaveLength(1);
+    expect(JSON.stringify(honoring)).toContain(String(max));
+    expect(passkeyPayMetadataSteps(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: max }))).toHaveLength(1);
     const two = createHookMetadata(["0x11111111", "0x22222222"], [buyback(5n), buyback(9n)]);
-    expect(passkeyPayMetadataSteps(two, 9n)).toHaveLength(2);
-    expect(() => passkeyPayMetadataSteps(two, 8n)).toThrow();
-    expect(() => passkeyPayMetadataSteps(two.toUpperCase().replace("0X", "0x") as Hex, 8n)).toThrow();
-    expect(passkeyPayMetadataSteps("0X", 0n)).toEqual([]);
+    expect(passkeyPayMetadataSteps(two)).toHaveLength(2);
+    expect(passkeyPayMetadataSteps("0X")).toEqual([]);
+  });
+
+  it("refuses what is not the resolver format", () => {
+    expect(() => passkeyPayMetadataSteps("0x1234" as Hex)).toThrow();
   });
 });

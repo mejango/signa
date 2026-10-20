@@ -113,6 +113,16 @@ export interface UserOperationExecutionBinding {
   operationHash: Hex;
   calls: readonly RestCall[];
 }
+/** Why one payment attempt reverted, as the SDK's `decodePayFailure` reads it from revert data, with
+ * amounts as decimal strings in the failing check's units. Advisory and specific to that attempt:
+ * `received` and `minimum` are set only for a shortfall, and any changed minimum needs a fresh
+ * preparation, simulation and owner review. The message is the SDK's fixed sentence, never node text. */
+export interface PayFailure {
+  reason: string;
+  received?: string;
+  minimum?: string;
+  message: string;
+}
 export interface UserOperationObservation {
   /** `expired`: never included and past its validity window, so it can no longer execute. */
   state: "pending" | "unknown" | "confirming" | "confirmed" | "reverted" | "expired";
@@ -127,4 +137,6 @@ export interface UserOperationObservation {
   observedAt?: number;
   /** The execution block at which the account's authority was verified for this observation. */
   verifiedAtBlock?: Hex;
+  /** Why a reverted payment reverted, when its trace shows a known payment revert. */
+  payFailure?: PayFailure;
 }

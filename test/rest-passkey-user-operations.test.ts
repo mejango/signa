@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { decodeAbiParameters, decodeFunctionData, encodeFunctionData, encodeFunctionResult, erc20Abi, keccak256, parseAbi, size, sliceHex, toHex, type Address, type Hex } from "viem";
+import { decodeAbiParameters, decodeFunctionData, encodeAbiParameters, encodeFunctionData, encodeFunctionResult, erc20Abi, keccak256, parseAbi, size, sliceHex, toHex, type Address, type Hex } from "viem";
 import { buildUserPayMetadata } from "@bananapus/nana-sdk-core/v6";
 import { MemoryAccountStore } from "../src/rest/auth/memory.js";
 import type { RestPrincipal } from "../src/rest/auth/store.js";
@@ -277,13 +277,44 @@ describe("app UserOperation owner boundary", () => {
     expect(f.state.sends).toBe(1);
   });
 
-  it("prepares a passkey pay with any Juicebox hook metadata whose buyback minimums the terminal minimum covers", async () => {
+  it("prepares a passkey pay with any Juicebox hook metadata, whatever its buyback minimum", async () => {
+    // A minimum above the terminal's covers the swap and leftover mint before the reserved split.
     for (const metadata of ["0x", buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n }),
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n, skipSplits: false }),
       buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: usdc, tierIdsToMint: [3n] } })] as Hex[])
       expect((await (await fixture({ paymentMetadata: metadata })).prepare()).state).toBe("prepared");
-    for (const options of [{ paymentMetadata: "0x1234" as Hex }, { paymentMetadata: "0x1234" as Hex, paymentLabel: "contract_calls" },
-      { paymentMetadata: buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 6n }) }])
+    for (const options of [{ paymentMetadata: "0x1234" as Hex }, { paymentMetadata: "0x1234" as Hex, paymentLabel: "contract_calls" }])
       await expect((await fixture(options)).prepare()).rejects.toMatchObject({ code: "USER_OPERATION_PAYMENT_METADATA_UNSUPPORTED" });
+  });
+
+  it("says why a refused payment would revert, when the calls simulated from the account say", async () => {
+    // JBMultiTerminal_UnderMin(812, 900), as the terminal reverts it.
+    const underMin = `0x6b2bb382${encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [812n, 900n]).slice(2)}` as Hex;
+    const payFailure = { reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: expect.any(String) };
+    const simulating = (f: Awaited<ReturnType<typeof fixture>>) => f.rpc.mockImplementation(async (chain, method, params, signal) =>
+      method === "eth_simulateV1" ? [{ calls: [{ status: "0x1", returnData: "0x" }, { status: "0x0", returnData: underMin }] }]
+        : f.rpcDefault(chain, method, params, signal));
+    // The bundler refuses to estimate it.
+    const refused = await fixture({ paymentMetadata: "0x" });
+    refused.state.estimateFailure = true;
+    simulating(refused);
+    await expect(refused.prepare()).rejects.toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED", details: { payFailure } });
+    // The chain's simulation of the signed calls refuses it at submission.
+    const f = await fixture({ app: true, paymentMetadata: "0x" }), view = await f.prepare();
+    simulating(f);
+    const inner = f.rpc.getMockImplementation()!;
+    f.rpc.mockImplementation(async (chain, method, params, signal) => method === "eth_call" && (params[0] as { to: string }).to.toLowerCase() === safe
+      ? Promise.reject(new Error("execution reverted")) : inner(chain, method, params, signal));
+    const signature = encodeSafe7579PasskeyOwnerSignature({ validAfter: String(view.createdAt / 1000), validUntil: String(view.expiresAt / 1000),
+      signatures: [{ kind: "ecdsa", owner: ownerKey.address, signature: await ownerKey.sign({ hash: view.signing.digest }) }] });
+    await expect(f.service.submit(f.principal, view.id, signature, "submit"))
+      .rejects.toMatchObject({ code: "USER_OPERATION_RPC_UNAVAILABLE", details: { payFailure } });
+    expect(f.state.sends).toBe(0);
+    // An operation that pays nothing is never simulated for a reason.
+    const other = await fixture();
+    other.state.estimateFailure = true;
+    await expect(other.prepare()).rejects.toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED" });
+    expect(other.rpc.mock.calls.some(([, method]) => method === "eth_simulateV1")).toBe(false);
   });
 
   it("rejects a non-Base app plan before account/provider work", async () => {

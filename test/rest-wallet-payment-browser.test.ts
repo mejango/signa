@@ -147,7 +147,7 @@ describe('central payment review browser, virtual authenticator', () => {
   });
 
   it('shows the server-described hook metadata as text and refuses steps that do not fit the metadata', async () => {
-    const withMetadata = (metadata: Hex, metadataSteps: unknown = passkeyPayMetadataSteps(metadata, 5n)) => {
+    const withMetadata = (metadata: Hex, metadataSteps: unknown = passkeyPayMetadataSteps(metadata)) => {
       const f = createWalletPaymentClientFixture(Date.now(), metadata);
       if (!('signedData' in f.prepared.signing)) throw new Error('Fixture must use a passkey owner');
       review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment, metadataSteps,

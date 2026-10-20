@@ -1,12 +1,13 @@
 import { sha256, stringToHex, type Hex } from 'viem';
 import { RestClientError, newRequestNonce } from './index.js';
+import { payFailureOf } from './payFailure.js';
 import type { CenterClient } from './center.js';
 import { assertReviewedOperation, type PreparedUserOperation, type SmartWalletPlan } from './smartAccounts.js';
 import type { CenterWalletStorage } from './wallet.js';
 import { decodeSafe7579PasskeyOwnerSignature, safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { normalizeUserOperation, userOperationCommitment, userOperationMaximumCost, uoCanonical } from '../userOperations/codec.js';
 import { recognizeWalletV6UsdcPayment, type WalletV6UsdcPayment } from '../userOperations/semantics.js';
-import type { UserOperationObservation } from '../userOperations/types.js';
+import type { PayFailure, UserOperationObservation } from '../userOperations/types.js';
 import type { WalletAppGrant } from '../wallet/appGrants.js';
 import type { WalletPaymentReviewPublic, WalletPaymentAppPublic } from '../wallet/paymentPublic.js';
 import { validateWalletHandoffToken } from '../wallet/sharedHandoff.js';
@@ -36,6 +37,8 @@ export interface CenterWalletPaymentStatus {
   /** An observed outer transaction identifier, never an alias for operationHash. */
   transactionHash?: Hex;
   observation?: UserOperationObservation;
+  /** Why this payment reverted, when its trace says; shown only while it stands reverted. Advisory: a changed minimum needs a fresh preparation and review. */
+  payFailure?: PayFailure;
 }
 /** Internal composition used by wallet.payments(). No owner or app private key crosses this seam. */
 export interface CenterWalletPaymentClientOptions {
@@ -214,12 +217,19 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
     return value;
   }
   function status(value: Journal): CenterWalletPaymentStatus {
+    // A served reason reaches the app only in its exact shape, and only while this payment stands
+    // reverted: an unknown or changed outcome drops it, on the status and inside the observation.
+    const payFailure = value.status === 'reverted' && value.observation?.state === 'reverted'
+      ? payFailureOf(value.observation.payFailure) : undefined;
+    const { payFailure: _served, ...observed } = value.observation ?? {};
+    const observation = value.observation && { ...observed, ...(payFailure ? { payFailure } : {}) } as UserOperationObservation;
     return snapshot({ status: value.status, accountId: value.grant.accountId, chainId: 8453, operationId: value.operation.id,
       operationHash: value.operation.operationHash, reviewId: value.review?.id ?? null,
       approvalUrl: value.review ? issuer + '/wallet/payment?review=' + value.review.id : null,
       expiresAtMs: value.review?.expiresAtMs ?? value.operation.expiresAt, expectedPayment: value.expectedPayment,
-      ...(value.observation ? { observation: value.observation,
-        ...(hex32(value.observation.transactionHash) ? { transactionHash: value.observation.transactionHash } : {}) } : {}) });
+      ...(observation ? { observation,
+        ...(hex32(observation.transactionHash) ? { transactionHash: observation.transactionHash } : {}) } : {}),
+      ...(payFailure ? { payFailure } : {}) });
   }
   function receiveView(input: unknown, saved: Saved, appView: boolean): Saved {
     const reviewed = checkView(input, saved.value, appView);

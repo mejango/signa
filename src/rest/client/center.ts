@@ -1,4 +1,5 @@
 import { keccak256, parseTransaction, recoverTransactionAddress, type Hex, type TransactionSerialized } from "viem";
+import { payFailureOf } from "./payFailure.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { Account, BotGrant, BotScope } from "../auth/store.js";
 import { parseAccountId } from "../auth/signatures.js";
@@ -45,7 +46,7 @@ const id = (value: string) => {
 /** Named workflows over the same exact-request signing and authorization protocol. */
 export class CenterClient {
   private readonly client: SignedRestClient;
-  constructor(private readonly options: ClientOptions) { this.client = new SignedRestClient(options); }
+  constructor(private readonly options: ClientOptions) { this.client = new SignedRestClient({ payFailure: payFailureOf, ...options }); }
   request<T = unknown>(options: RequestOptions) { return this.client.request<T>(options); }
   /** Authorizes one exact GET for a relay. Send the returned URL and headers unchanged; this method does not send it. */
   authorizeRead(requestTarget: string) { return prepareSignedRequest(this.options, { method: "GET", requestTarget }); }

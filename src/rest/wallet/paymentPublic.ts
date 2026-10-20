@@ -59,5 +59,5 @@ export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView):
   return { ...publicWalletPaymentReview(view), passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId,
     challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' },
-    metadataSteps: passkeyPayMetadataSteps(d.payment.metadata, BigInt(d.payment.minimumReturnedTokens)) };
+    metadataSteps: passkeyPayMetadataSteps(d.payment.metadata) };
 }

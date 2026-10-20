@@ -55,8 +55,10 @@ export function sharedSchemas(chainIds: readonly number[]): Record<string, Schem
     Source: { type: "string", enum: ["onchain", "bendystraw"] },
     Problem: object({
       type: { type: "string", format: "uri" }, title: text, status: { type: "integer", minimum: 400, maximum: 599 },
-      detail: text, code: text, requestId: text, retryable: boolean,
-    }),
+      detail: text, code: text, requestId: text, retryable: boolean, payFailure: ref("PayFailure"),
+    }, ["type", "title", "status", "detail", "code", "requestId", "retryable"]),
+    PayFailure: { ...object({ reason: text, received: { ...text, pattern: "^(0|[1-9][0-9]*)$" }, minimum: { ...text, pattern: "^(0|[1-9][0-9]*)$" }, message: text },
+      ["reason", "message"]), description: "Why one payment attempt reverts or reverted, decoded from its revert data only; advisory, never authority. It describes only the enclosing refused request or the reverted operation that carries it: never carry it to another payment or a later attempt, and its absence means the reason is unknown. `reason` is a stable SDK code and `message` its fixed sentence. `received` and `minimum` (uint256 integer strings, in the failing check's own units: project tokens for a terminal or buyback minimum, the converted token for a router conversion) are set only for a shortfall. Only a terminal or buyback minimum the payer set can be relaxed; a derived price floor or a conversion is not. Any changed minimum needs a fresh preparation, simulation and owner review. Its presence neither cancels an approval nor proves the operation was never sent. Present on a refused preparation or submission, and on a reverted operation's `observation`." },
     SafeError: object({ code: text, message: text }),
     Profile: object({ displayName: { ...text, "x-maxUtf8Bytes": 120 }, bio: { ...text, "x-maxUtf8Bytes": 2000 },
       avatarUri: nullable({ ...text, pattern: "^(?:https|ipfs)://", "x-maxUtf8Bytes": 2048, description: "Absolute HTTPS or IPFS URI without credentials. The account UI does not fetch it." }) }),

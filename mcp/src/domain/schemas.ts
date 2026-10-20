@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { getAddress, isAddress } from 'viem';
+import { PAY_MAX_SLIPPAGE_BPS } from '@bananapus/nana-sdk-core/v6';
 import { assertUnambiguousJson } from './json.js';
 
 export const chainIdSchema = z.union([
@@ -54,6 +55,15 @@ export const slippageSchema = z
   .max(1000)
   .default(100)
   .describe('Slippage in basis points, 0–1000. Default 100 (1%).');
+/** A payment's tolerance reaches the SDK's payer maximum, the one every pay client caps at. Cash outs,
+ * payouts and loans keep the tighter 1000 above. */
+export const paySlippageSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(Number(PAY_MAX_SLIPPAGE_BPS))
+  .default(100)
+  .describe(`Slippage in basis points, 0–${PAY_MAX_SLIPPAGE_BPS}. Default 100 (1%).`);
 export const pageSchema = {
   limit: z.number().int().min(1).max(50).default(20),
   cursor: z.string().max(1024).optional(),

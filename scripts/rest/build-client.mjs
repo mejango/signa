@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const destination = join(root, '.generated/rest/client');
 await mkdir(destination, { recursive: true });
 await build({ absWorkingDir: root, entryPoints: ['src/rest/client/index.ts'], outfile: join(destination, 'index.js'),
-  bundle: true, platform: 'browser', format: 'esm', target: 'es2022', packages: 'external' });
+  bundle: true, platform: 'browser', format: 'esm', target: 'es2022', external: ['viem', 'viem/*'] });
 const types = await rollup({ input: join(root, 'dist/src/rest/client/index.d.ts'), plugins: [dts()],
   external: id => !id.startsWith('.') && !id.startsWith('/') });
 await types.write({ file: join(destination, 'index.d.ts'), format: 'es' });
@@ -23,11 +23,12 @@ await writeFile(join(destination, 'node.js'), `import { CenterClient } from './i
 await writeFile(join(destination, 'node.d.ts'), `import { CenterClient, ClientOptions } from './index.js';\nexport declare function connect(filename: string, options?: Pick<ClientOptions, 'fetch' | 'timeoutMs' | 'now'>): Promise<CenterClient>;\n`);
 const packed = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--cache', join(root, '.generated/npm-cache'), '--json', '--pack-destination', join(root, '.generated/rest')], { cwd: destination, encoding: 'utf8' }));
 console.log('Client package:', packed[0].filename);
-// The npm package `@me.jango/center-wallet` is the browser-only connection and payment slice.
+// The npm package `@me.jango/center-wallet` is the browser-only connection and payment slice. Both
+// packages keep viem as their only dependency: the SDK's payment-failure decoder is bundled in.
 const walletDestination = join(root, '.generated/rest/wallet-client');
 await mkdir(walletDestination, { recursive: true });
 await build({ absWorkingDir: root, entryPoints: ['src/rest/client/wallet-package.ts'], outfile: join(walletDestination, 'index.js'),
-  bundle: true, platform: 'browser', format: 'esm', target: 'es2022', packages: 'external' });
+  bundle: true, platform: 'browser', format: 'esm', target: 'es2022', external: ['viem', 'viem/*'] });
 const walletTypes = await rollup({ input: join(root, 'dist/src/rest/client/wallet-package.d.ts'), plugins: [dts()],
   external: id => !id.startsWith('.') && !id.startsWith('/') });
 await walletTypes.write({ file: join(walletDestination, 'index.d.ts'), format: 'es' });

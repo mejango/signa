@@ -4,6 +4,7 @@ import type { RestPlanDraft } from "../src/rest/core.js";
 import type { StoredReceipt } from "../src/rest/transactions/types.js";
 import { recognizeWalletV6UsdcPayment, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "../src/rest/userOperations/semantics.js";
 import { UserOperationService, type UserOperationServiceDependencies } from "../src/rest/userOperations/service.js";
+import { encodeSafe7579Execution } from "../src/rest/smartAccounts/accountExecution.js";
 import type { ObserveUserOperationOptions } from "../src/rest/userOperations/execution.js";
 import type { UserOperationObservation } from "../src/rest/userOperations/types.js";
 import { plan as storedFixture, record as operationFixture, account as accountFixture, binding as bindingFixture, owner as ownerFixture } from "./fixtures/user-operations.js";
@@ -234,5 +235,57 @@ describe("UserOperationService configured payment semantic routing", () => {
     expect(generic.observation?.semantic?.status).toBe("unknown"); expect(generic.legacy).toHaveBeenCalledTimes(3);
     const unconfigured = await routed(() => {}, [0, 1, 2], false);
     expect(unconfigured.observation?.semantic?.status).toBe("unknown"); expect(unconfigured.legacy).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("UserOperationService reverted payment reasons", () => {
+  // JBMultiTerminal_UnderMin(812, 900), as the terminal reverts it.
+  const underMin = `0x6b2bb382${encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [812n, 900n]).slice(2)}` as Hex;
+  const hash = `0x${"cd".repeat(32)}` as Hex;
+  async function reverted(previous?: UserOperationObservation, blockHash: Hex = `0x${"ef".repeat(32)}`) {
+    const p = plan(), now = Date.now(), owner = accountFixture(now);
+    const stored = storedFixture("payment-failure", ownerFixture(owner), bindingFixture(owner, now), now, 3); stored.draft = p.draft;
+    const record = operationFixture(stored); record.chainId = 8453; record.stepIndexes = [0, 1, 2];
+    const callData = encodeSafe7579Execution(p.draft.calls.map(call => ({ target: call.to, value: call.value, callData: call.data })));
+    record.state = "pending"; record.submission = { key: "failure", commitment: record.commitment, operation: { ...record.operation, callData }, startedAt: now };
+    if (previous) record.observation = previous;
+    let observation: UserOperationObservation | undefined;
+    observer.mockImplementation(async (options: ObserveUserOperationOptions) => {
+      const payFailure = await options.payFailure!(hash, blockHash);
+      return { state: "reverted", operationHash: record.operationHash, transactionHash: hash, receipt: { ...receipt(), blockHash },
+        semantic: { status: "failed" }, ...(payFailure ? { payFailure } : {}) };
+    });
+    const request = vi.fn(async (_chainId: number, method: string) => {
+      expect(method).toBe("debug_traceTransaction");
+      return { from: "0x0000000000000000000000000000000000000007", calls: [{ to: record.sender, input: callData,
+        calls: [{ from: record.sender, to: terminal, error: "execution reverted", output: underMin }] }] };
+    });
+    const deps = { policies: [{ chainId: 8453, confirmations: 1 }], now: Date.now, rpc: { request },
+      store: { recoverable: async () => [record], observe: async (_id: string, _revision: number, value: UserOperationObservation) => {
+        observation = value; return { ...record, state: value.state, observation: value };
+      } }, transactionStore: { get: async () => stored },
+      provider: { configuration: () => ({ providerId: record.providerId }), receipt: async () => undefined },
+      manifestForPlan: () => ({ entryPoint: { address: record.entryPoint }, proxyRuntimeCodeHash: record.commitment }),
+      verifyHistoricalAccount: async () => {}, semanticVerifier: { verify: async () => ({ status: "verified" as const }) },
+      v6UsdcPayment: config } as unknown as UserOperationServiceDependencies;
+    await new UserOperationService(deps).recoverPending(1);
+    return { observation, request };
+  }
+  it("traces a reverted payment once per block, by its operation, and keeps what it found", async () => {
+    const first = await reverted();
+    expect(first.observation?.payFailure).toEqual({ reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: expect.any(String) });
+    expect(first.request).toHaveBeenCalledTimes(1);
+    // (Its stored reason differs, so the unchanged trace result is written again and read here.)
+    const again = await reverted({ ...first.observation!, reason: "Seen before." });
+    expect(again.observation?.payFailure).toEqual(first.observation?.payFailure);
+    expect(again.request).not.toHaveBeenCalled();
+    // A revert first seen confirming, with nothing traced yet, is traced once it settles.
+    const { payFailure: _found, ...untraced } = first.observation!;
+    const settled = await reverted({ ...untraced, state: "confirming" });
+    expect(settled.request).toHaveBeenCalledTimes(1);
+    expect(settled.observation?.payFailure).toEqual(first.observation?.payFailure);
+    // Re-included in another block after a reorg, it is traced again.
+    const reorged = await reverted({ ...first.observation!, reason: "Seen before." }, `0x${"12".repeat(32)}`);
+    expect(reorged.request).toHaveBeenCalledTimes(1);
   });
 });

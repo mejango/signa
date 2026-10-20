@@ -13,7 +13,7 @@ import {
   hashSchema,
   positiveUintSchema,
   projectSchema,
-  slippageSchema,
+  paySlippageSchema,
   uintSchema,
 } from './schemas.js';
 import {
@@ -116,7 +116,7 @@ export const pay721Schema = z
       .array(uint(16).refine((v) => BigInt(v) > 0n))
       .min(1)
       .max(32),
-    slippageBps: slippageSchema,
+    slippageBps: paySlippageSchema,
     allowOverspending: z.boolean().default(false),
   })
   .strict();

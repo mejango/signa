@@ -139,6 +139,7 @@ function intent(version: string): CenterIntent {
     // verification itself is covered against signed fixtures in adapter tests.
     signature: `0x${'01'.repeat(65)}`,
     deployments: [],
+    deploys: [],
   };
 }
 

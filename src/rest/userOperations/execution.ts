@@ -8,6 +8,7 @@ import {
   toHex,
   type Hex,
 } from "viem";
+import { withinPayFailureBudget } from "./payFailure.js";
 import type { RestBlockEvidence } from "../core.js";
 import { assertSafe7579Execution } from "../smartAccounts/accountExecution.js";
 import type { SemanticResult, StoredReceipt } from "../transactions/types.js";
@@ -26,6 +27,7 @@ import {
 } from "./codec.js";
 import type {
   PackedUserOperationV07,
+  PayFailure,
   UserOperationExecutionBinding,
   UserOperationObservation,
 } from "./types.js";
@@ -57,6 +59,8 @@ export interface ObserveUserOperationOptions {
   ): Promise<void | "pending">;
   /** Receives only logs within this operation's EntryPoint execution interval. */
   verifySemantics?(receipt: StoredReceipt): Promise<SemanticResult>;
+  /** Why the operation's payment reverted, for an execution the EntryPoint reports failed. */
+  payFailure?(transactionHash: Hex, blockHash: Hex): Promise<PayFailure | undefined>;
 }
 /** A bundler receipt supplies only a hint. Every proof below comes from the configured chain. */
 export async function observeUserOperation(
@@ -384,18 +388,34 @@ export async function observeUserOperation(
     return unknown(
       "The reported operation gas charge exceeds its maximum prefund.",
     );
-  if (!event.success)
+  if (!event.success) {
+    const reverted = confirmations >= options.confirmations;
+    // Only a settled revert is explained, and only if its block is still canonical after the trace;
+    // the whole explanation is optional and bounded, so a slow or failed one never holds the outcome.
+    // A reorg the recheck proves is no settled revert at all: the outcome is unknown again.
+    const explain = options.payFailure;
+    const reorged = Symbol("reorged");
+    const explained = reverted && explain ? await withinPayFailureBudget((async () => {
+      const found = await explain(transactionHash, blockHash);
+      if (!found) return undefined;
+      try { await chain.canonical(evidence); return found; }
+      catch (error) { return (error as { code?: unknown } | null)?.code === "USER_OPERATION_REORGED" ? reorged : undefined; }
+    })().catch(() => undefined)) : undefined;
+    if (explained === reorged) return unknown("The observed block is no longer canonical.");
+    const payFailure = explained;
     return {
       ...base,
       transactionHash,
       receipt,
-      state: confirmations >= options.confirmations ? "reverted" : "confirming",
+      state: reverted ? "reverted" : "confirming",
       semantic: {
         status: "failed",
         details:
           "EntryPoint independently reports that this account execution failed.",
       },
+      ...(payFailure ? { payFailure } : {}),
     };
+  }
   const verified = (await options.verifyAccountAtBlock(binding, evidence, chain)) !== "pending";
   const start =
     position === 0 ? boundaries[0]! : events[position - 1]!.position;

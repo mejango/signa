@@ -23,6 +23,7 @@ import {
   positiveUintSchema,
   projectSchema,
   slippageSchema,
+  paySlippageSchema,
   uintSchema,
 } from '../domain/schemas.js';
 import {
@@ -92,8 +93,14 @@ const payShape = {
     'Input asset amount in its smallest units, as an exact integer string.',
   ),
   beneficiary: addressSchema,
-  slippageBps: slippageSchema,
+  slippageBps: paySlippageSchema,
   metadata: hexSchema.optional(),
+  skipSplits: z
+    .boolean()
+    .describe(
+      'Without metadata: whether tokens bought from the buyback pool skip the reserved split. Defaults to true. Omit when supplying metadata.',
+    )
+    .optional(),
 };
 const cashOutShape = {
   project: projectSchema,

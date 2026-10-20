@@ -4,6 +4,7 @@ import {
   REST_AUTH_HEADERS as H, validateAudience, type BotProof, type RequestClaims,
 } from "../auth/signatures.js";
 import { isCanonicalGrantScopes, type BotScope } from "../auth/shared.js";
+import type { PayFailure } from "../userOperations/types.js";
 
 export { accountIdFor, newRequestNonce, REST_AUTH_HEADERS } from "../auth/signatures.js";
 export { isCanonicalGrantScopes } from "../auth/shared.js";
@@ -16,6 +17,7 @@ export type TypedDocument = ReturnType<typeof buildRequestTypedData> | ReturnTyp
 export * from "./smartAccounts.js";
 export type { CenterWalletExpectedPayment, CenterWalletPaymentInput, CenterWalletPaymentState, CenterWalletPaymentStatus } from './walletPayments.js';
 export { userOperationMaximumCost } from '../userOperations/codec.js';
+export { payFailureOf } from "./payFailure.js";
 export type RestSigner = {
   address: Address;
   /** Required only for locally signing operations under an activated bot wallet permission. */
@@ -49,10 +51,16 @@ export type ClientOptions = {
   now?: () => number;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  /** Reads a refused request's served payment reason; without it, errors carry none. `CenterClient`
+   * and the wallet client use `payFailureOf`; the served pages, which never show one, leave it out. */
+  payFailure?: (served: unknown) => PayFailure | undefined;
 };
 export class RestClientError extends Error {
-  constructor(readonly code: string, message: string, readonly status?: number) {
+  /** Why this refused payment attempt would revert, when its calls say. Advisory and for this attempt only; a changed minimum needs a fresh preparation and review. */
+  readonly payFailure?: PayFailure;
+  constructor(readonly code: string, message: string, readonly status?: number, payFailure?: PayFailure) {
     super(message); this.name = "RestClientError";
+    if (payFailure) this.payFailure = payFailure;
   }
 }
 function invalid(message: string): never { throw new RestClientError("INVALID_INPUT", message); }
@@ -224,7 +232,8 @@ export class SignedRestClient {
           const error = result && typeof result === "object" && "error" in result ? result.error : result;
           const code = error && typeof error === "object" && "code" in error
             && typeof error.code === "string" && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : "REQUEST_FAILED";
-          throw new RestClientError(code, `The service rejected this request (${response.status}, ${code})`, response.status);
+          throw new RestClientError(code, `The service rejected this request (${response.status}, ${code})`, response.status,
+            error && typeof error === "object" && "payFailure" in error ? this.config.payFailure?.(error.payFailure) : undefined);
         }
         return result as T;
       } catch (error) {

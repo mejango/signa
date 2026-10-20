@@ -334,5 +334,15 @@ calls per plan. Consult capabilities for current limits and honor `Retry-After`.
 Success responses use route-specific JSON shapes. Errors use
 `application/problem+json` with `type`, `title`, `status`, `detail`, `code`,
 `requestId`, and `retryable`. Preserve `X-Request-Id` when reporting failures.
+A payment the bundler or chain refuses also carries `payFailure`
+(`{ reason, received?, minimum?, message }`, amounts as integer strings) when its
+calls say why; a reverted payment operation carries it on its `observation`.
+It is advisory and describes only that attempt: never apply it to another
+payment, and treat its absence as an unknown reason. `received` and `minimum`
+appear only for a shortfall, as raw base-unit integers in the failing check's units (project tokens for a
+terminal or buyback minimum, the converted token for a router conversion). Only
+a minimum the payer set can be relaxed, and any changed minimum needs a fresh
+preparation, simulation and owner review. Its presence neither cancels an
+approval nor proves the operation was never sent.
 Responses disable caching. A retryable transport error does not establish that
 a transaction was never submitted.
