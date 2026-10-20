@@ -698,7 +698,7 @@ export async function createRestRuntime(options: {
   if (options.startMaintenance !== false) void warmRoutes();
   if (options.startMaintenance !== false) void warmAccounts();
   if (options.startMaintenance !== false) wallet?.refresh.start();
-  const docsAssets = docsAssetNames(assets.docsScript);
+  const docsAssets = docsAssetNames(assets.docsScript ?? "");
   return {
     site: {
       ...(options.surface ? { surface: options.surface } : {}),

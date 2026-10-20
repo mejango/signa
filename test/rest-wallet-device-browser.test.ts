@@ -95,6 +95,15 @@ describe("served device pages", () => {
     await accountPage.locator("#wallet-device-add").click();
     await expect.poll(() => accountPage.locator("#wallet-device-code svg").count()).toBe(1);
     expect(qrRequests).toBe(1);
+    // Without the code (its bundle failed to load), the link is still offered.
+    const fallback = await account.newPage();
+    await fallback.route("**/wallet/assets/wallet-qr.js", route => route.abort());
+    await fallback.goto(`${origin}/wallet`);
+    await expect.poll(() => fallback.locator("#wallet-device-add").isVisible()).toBe(true);
+    await fallback.locator("#wallet-device-add").click();
+    await expect.poll(() => fallback.locator("#wallet-device-link").getAttribute("href")).toBe(`${origin}/wallet/add#${link}`);
+    expect(await fallback.locator("#wallet-device-code svg").count()).toBe(0);
+    await fallback.close();
     expect(await accountPage.locator("#wallet-device-link").getAttribute("href")).toBe(`${origin}/wallet/add#${link}`);
     expect(await accountPage.locator("#wallet-status").textContent()).toContain("Waiting for the other device");
 

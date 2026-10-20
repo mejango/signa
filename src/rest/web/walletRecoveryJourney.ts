@@ -287,10 +287,9 @@ el<HTMLInputElement>('recovery-file').addEventListener('change', event => { void
 }); });
 /** The backup password is read at the moment it is needed and never kept in the field. */
 async function loadPassword() {
-  const lib = await loadKit();
   const mnemonic = words().value; if (!mnemonic.trim()) { if (secret) return; throw new Error('Enter your backup password.'); }
   words().value = '';
-  const account = lib.recoveryAccountFromPhrase(mnemonic, view?.recoveryOwner); kit = null;
+  const account = (await loadKit()).recoveryAccountFromPhrase(mnemonic, view?.recoveryOwner); kit = null;
   secret = { mnemonic: mnemonic.trim().toLowerCase().replace(/\s+/g, ' '), recoveryOwner: account.address };
 }
 next.addEventListener('click', () => { void run(advance); }); check.addEventListener('click', () => { void run(observe); });

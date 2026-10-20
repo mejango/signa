@@ -670,10 +670,10 @@ async function deviceBegin() {
   const qr = lazyModule<typeof Qr>("wallet-qr"); qr.catch(() => {});
   const result = record(await request(`${base}/devices/begin`, { passkeyName: null }, csrf, 60_000)), view = record(result.view) as unknown as DeviceView, link = string(result.link, 4096);
   if (!link.startsWith(`${location.origin}${base}/add#`)) throw new InvalidResponse();
-  const { qrSvg } = await qr;
   device = { view, link };
-  element("wallet-device-code").innerHTML = qrSvg(link, "Link for the other device");
   const anchor = element<HTMLAnchorElement>("wallet-device-link"); anchor.href = link; anchor.textContent = "Open the link on this device instead";
+  // Without its code, the link still works: the other device can open it.
+  try { element("wallet-device-code").innerHTML = (await qr).qrSvg(link, "Link for the other device"); } catch { /* The link stays. */ }
   setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
 async function devicePoll() {

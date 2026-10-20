@@ -14,7 +14,7 @@ export function mountAccountsSite(app: Hono<JbcenterEnv>, options: { audience: s
   const headers = { ...REST_PAGE_HEADERS, "Content-Security-Policy": REST_PAGE_HEADERS["Content-Security-Policy"]
     .replace("connect-src 'self'", `connect-src 'self' ${audience}`) };
   const assets = mountAssets(app, "", { "accounts.js": options.accountsScript, "accounts.css": accountsCss(),
-    ...(options.accountsSignedInScript ? { "accounts-signed-in.js": options.accountsSignedInScript } : {}) });
+    ...(options.accountsSignedInScript ? { "accounts-signed-in.js": options.accountsSignedInScript } : {}) }, REST_PAGE_HEADERS);
   app.get("/accounts", context => context.html(accountsPage({ audience, faviconPath: "/assets/accounts-icon.svg?v=signa",
     scriptPath: assetHref("", "accounts.js", assets), stylePath: assetHref("", "accounts.css", assets),
     signedInPath: assetHref("", "accounts-signed-in.js", assets) }), 200, headers));

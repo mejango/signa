@@ -50,7 +50,11 @@ describe("static assets", () => {
     expect(page.headers.get("cache-control")).toBe("no-store");
     const refs = [...html.matchAll(/(?:src|href|content)="(\/assets\/accounts(?:-signed-in)?\.[0-9a-f]{12}\.(?:js|css))"/g)].map(match => match[1]!);
     expect(refs).toHaveLength(3);
-    for (const ref of refs) expect((await app.request(audience + ref)).headers.get("cache-control")).toBe(IMMUTABLE_CACHE);
+    for (const ref of refs) {
+      const asset = await app.request(audience + ref);
+      expect(asset.headers.get("cache-control")).toBe(IMMUTABLE_CACHE);
+      expect(asset.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    }
     expect((await app.request(audience + "/assets/accounts.0123456789ab.html")).status).toBe(404);
   });
 });

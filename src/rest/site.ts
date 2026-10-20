@@ -85,7 +85,7 @@ export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
   app.route("/api/v1", site.app);
   mountAccountsSite(app, { audience: site.audience, accountsScript: site.accountsScript,
     ...(site.accountsSignedInScript ? { accountsSignedInScript: site.accountsSignedInScript } : {}) });
-  const assets = mountAssets(app, "", { "docs.js": site.docsScript ?? "", "api.css": site.docsCss });
+  const assets = mountAssets(app, "", { "docs.js": site.docsScript ?? "", "api.css": site.docsCss }, REST_PAGE_HEADERS);
   app.get("/api/client/juicebox-center-client-0.1.0.tgz", (context) => {
     if (!site.clientPackage) return context.notFound();
     return new Response(site.clientPackage as BodyInit, { headers: { "Content-Type": "application/gzip", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache", "Content-Disposition": 'attachment; filename="juicebox-center-client-0.1.0.tgz"' } });

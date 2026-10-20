@@ -145,6 +145,16 @@ describe("served Center signup page", () => {
     } finally { await context.close(); }
   });
 
+  it("loads the kit beside its bundle for a page served before the deploy that added module tags", async () => {
+    const context = await browser.newContext(), signup = await context.newPage();
+    try {
+      await signup.route('**/wallet', route => route.fulfill({ contentType: 'text/html', body: pageHtml.replace(/<meta name="module:[^>]*>/, '') }));
+      const served = kitRequests;
+      await signup.goto(`${origin}/wallet`);
+      await expect.poll(() => kitRequests).toBe(served + 1);
+    } finally { await context.close(); }
+  });
+
   it("lets a resumed signup continue without reopening its backup file", async () => {
     const context = await browser.newContext(), signup = await context.newPage();
     const enrollmentId = 'resumed-kit', view = { phase: 'awaiting_activation', enrollmentId,

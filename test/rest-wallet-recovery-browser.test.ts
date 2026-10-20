@@ -147,6 +147,29 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
     } finally { await context.close(); }
   }, 30000);
 
+  it('clears the backup password from the page even when the backup kit cannot load', async () => {
+    const context = await browser.newContext(), page = await context.newPage();
+    await page.route(origin + '/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/wallet/recover') return route.fulfill({ contentType: 'text/html', body: walletRecoveryPage() });
+      if (path.includes('wallet-recovery-kit')) return route.abort();
+      if (path.endsWith('.js')) return route.fulfill({ contentType: 'text/javascript', body: script });
+      if (path.endsWith('.css')) return route.fulfill({ contentType: 'text/css', body: walletRecoveryCss() });
+      if (path.endsWith('/state')) return route.fulfill({ json: { view: null, csrfToken: Buffer.alloc(32, 3).toString('base64url') } });
+      return route.fulfill({ status: 500 });
+    });
+    try {
+      await page.goto(origin + '/wallet/recover');
+      await page.getByLabel('My backup password').check();
+      await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      await expect.poll(() => page.locator('#wallet-status').textContent()).toContain('Enter your backup password');
+      await page.getByLabel('Backup password', { exact: true }).fill('secret words stay private');
+      await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      await expect.poll(() => page.locator('#wallet-status').textContent()).not.toContain('Enter your backup password');
+      expect(await page.getByLabel('Backup password', { exact: true }).inputValue()).toBe('');
+    } finally { await context.close(); }
+  });
+
   it('refuses recovery secrets or arbitrary return URLs in the page URL before any API call', async () => {
     const context = await browser.newContext(), page = await context.newPage(); let apiCalls = 0;
     await page.route(origin + '/**', async route => {
