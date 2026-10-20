@@ -2703,10 +2703,10 @@
           },
           "slippageBps": {
             "default": 100,
-            "description": "Slippage in basis points, 0–1000. Default 100 (1%).",
+            "description": "Slippage in basis points, 0–4950. Default 100 (1%).",
             "type": "integer",
             "minimum": 0,
-            "maximum": 1000
+            "maximum": 4950
           },
           "metadata": {
             "type": "string",
@@ -2940,10 +2940,10 @@
           },
           "slippageBps": {
             "default": 100,
-            "description": "Slippage in basis points, 0–1000. Default 100 (1%).",
+            "description": "Slippage in basis points, 0–4950. Default 100 (1%).",
             "type": "integer",
             "minimum": 0,
-            "maximum": 1000
+            "maximum": 4950
           },
           "metadata": {
             "type": "string",
@@ -8837,10 +8837,10 @@
           },
           "slippageBps": {
             "default": 100,
-            "description": "Slippage in basis points, 0–1000. Default 100 (1%).",
+            "description": "Slippage in basis points, 0–4950. Default 100 (1%).",
             "type": "integer",
             "minimum": 0,
-            "maximum": 1000
+            "maximum": 4950
           },
           "allowOverspending": {
             "default": false,
@@ -9077,10 +9077,10 @@
           },
           "slippageBps": {
             "default": 100,
-            "description": "Slippage in basis points, 0–1000. Default 100 (1%).",
+            "description": "Slippage in basis points, 0–4950. Default 100 (1%).",
             "type": "integer",
             "minimum": 0,
-            "maximum": 1000
+            "maximum": 4950
           },
           "allowOverspending": {
             "default": false,

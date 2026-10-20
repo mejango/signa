@@ -42,7 +42,7 @@ export class ContractService {
   catalog() {
     return {
       version: 6,
-      source: '@bananapus/nana-sdk-core@3.3.0',
+      source: '@bananapus/nana-sdk-core@3.4.1',
       contracts: Object.entries(ABI_REGISTRY).map(([name, abi]) => ({
         name,
         abiEntries: rollout.contracts[name]?.abi.length ?? abi.length,
@@ -87,7 +87,7 @@ export class ContractService {
     return {
       version: 6,
       name,
-      source: rollout.contracts[name] ? rollout.source : '@bananapus/nana-sdk-core@3.3.0',
+      source: rollout.contracts[name] ? rollout.source : '@bananapus/nana-sdk-core@3.4.1',
       ...(chainId === undefined
         ? {}
         : { chainId, address: deploymentAddress(name, chainId) ?? null }),

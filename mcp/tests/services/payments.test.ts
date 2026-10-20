@@ -11,6 +11,7 @@ import {
   buildUserPayMetadata,
   prepareUserPay,
   v6Address,
+  PAY_MAX_SLIPPAGE_BPS,
 } from '@bananapus/nana-sdk-core/v6';
 import {
   decodeFunctionData,
@@ -31,6 +32,7 @@ import {
   type PayoutInput,
 } from '../../src/services/payments.js';
 import { deploymentAddress } from '../../src/services/rollout.js';
+import { paySlippageSchema, slippageSchema } from '../../src/domain/schemas.js';
 import type { BlockEvidence, RpcProvider } from '../../src/domain/types.js';
 
 const project = { chainId: 8453, projectId: '12', version: 6 } as const;
@@ -712,6 +714,24 @@ describe('payment quotes and approval plans', () => {
     await expect(
       fixture().service.preparePay({ ...payInput, skipSplits: false }),
     ).rejects.toMatchObject({ code: 'INVALID_SKIP_SPLITS' });
+  });
+
+  it('caps a payment tolerance at the SDK payer maximum, and other tolerances at 1000', async () => {
+    const { service } = fixture();
+    await expect(
+      service.preparePay({ ...payInput, slippageBps: Number(PAY_MAX_SLIPPAGE_BPS) }),
+    ).resolves.toBeDefined();
+    await expect(
+      service.preparePay({ ...payInput, slippageBps: Number(PAY_MAX_SLIPPAGE_BPS) + 1 }),
+    ).rejects.toMatchObject({ code: 'INVALID_SLIPPAGE' });
+    await expect(service.prepareCashOut({ ...cashInput, slippageBps: 1001 })).rejects.toMatchObject(
+      {
+        code: 'INVALID_SLIPPAGE',
+      },
+    );
+    expect(paySlippageSchema.safeParse(Number(PAY_MAX_SLIPPAGE_BPS)).success).toBe(true);
+    expect(paySlippageSchema.safeParse(Number(PAY_MAX_SLIPPAGE_BPS) + 1).success).toBe(false);
+    expect(slippageSchema.safeParse(1001).success).toBe(false);
   });
 
   it('validates the hook specs of the metadata it sends, quoted or fallen back after a tentative quote', async () => {

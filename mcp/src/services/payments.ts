@@ -9,6 +9,7 @@ import {
 import {
   buildPayTx,
   getCurrentRuleset,
+  PAY_MAX_SLIPPAGE_BPS,
   prepareHookAwareCashOut,
   prepareUserPay,
   previewPay,
@@ -128,9 +129,12 @@ function uint(value: string, name: string, positive = true): bigint {
   }
   return result;
 }
-function bps(value = 100): bigint {
-  if (!Number.isInteger(value) || value < 0 || value > 1000) {
-    throw new DomainError('INVALID_SLIPPAGE', 'Slippage must be between 0 and 1000 basis points.');
+function bps(value = 100, maximum = 1000n): bigint {
+  if (!Number.isInteger(value) || value < 0 || BigInt(value) > maximum) {
+    throw new DomainError(
+      'INVALID_SLIPPAGE',
+      `Slippage must be between 0 and ${maximum} basis points.`,
+    );
   }
   return BigInt(value);
 }
@@ -693,7 +697,7 @@ export class PaymentService {
       throw new DomainError('INVALID_MEMO', 'Payment memo must be at most 256 UTF-8 bytes.');
     }
     const amount = uint(input.amount, 'amount', verifiedNftHook === undefined);
-    const slippage = bps(input.slippageBps);
+    const slippage = bps(input.slippageBps, PAY_MAX_SLIPPAGE_BPS);
     const requested = Date.now();
     // A head the caller read moments ago pins the quote without another read of it.
     const snapshot =
