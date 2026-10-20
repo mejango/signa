@@ -52,7 +52,10 @@ Signa has not sent, or returns the submission that already claimed it.
 A reverted payment's status and a refused submission's `RestClientError` carry `payFailure`: the SDK's own
 `PayFailure`, as `decodePayFailure` reads the same revert (bigint `received` and `minimum`, plus `zeroFill`
 and `adjustable` for a shortfall), so it goes straight to the SDK's `payRetrySlippageBps` and to the same
-display as an external-wallet payment. `observation.payFailure` keeps the reason as Signa served it.
+display as an external-wallet payment. `observation.payFailure` keeps the reason as Signa served it. Because the
+amounts are bigints, `JSON.stringify` of a status or error needs a replacer such as
+`(_, value) => typeof value === 'bigint' ? value.toString() : value`. Without `adjustable`, no setting the
+payer controls would help, so never relax a minimum then.
 
 ## Connect
 

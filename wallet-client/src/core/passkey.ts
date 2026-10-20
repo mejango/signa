@@ -6,6 +6,7 @@ import {
   openCenterPopup,
   popupName,
 } from "./popup.js";
+import { isSettledPayment } from "../../../src/rest/client/paymentStates.js";
 
 /** The wallet client surface the passkey option needs (`createCenterWalletClient` satisfies it). */
 export type PasskeyWallet = {
@@ -21,7 +22,6 @@ export type PasskeyWallet = {
   disconnect(): void;
   payments(): { pendingPayment(): { status: string } | null };
 };
-const settled = new Set(["paid", "reverted", "cancelled", "expired"]);
 
 /** The built-in way in: a passkey account at Signa. By default Signa opens in a popup
  * and the page stays; the callback comes back by message and the exchange finishes here, then
@@ -52,7 +52,7 @@ export function passkeyOption(input: {
       try {
         const wallet = await input.wallet();
         const payment = wallet.payments().pendingPayment();
-        if (payment && !settled.has(payment.status))
+        if (payment && !isSettledPayment(payment.status))
           throw new Error(
             "Finish your pending Signa payment before signing in again.",
           );
