@@ -392,12 +392,17 @@ export async function observeUserOperation(
     const reverted = confirmations >= options.confirmations;
     // Only a settled revert is explained, and only if its block is still canonical after the trace;
     // the whole explanation is optional and bounded, so a slow or failed one never holds the outcome.
+    // A reorg the recheck proves is no settled revert at all: the outcome is unknown again.
     const explain = options.payFailure;
-    const payFailure = reverted && explain ? await withinPayFailureBudget((async () => {
+    const reorged = Symbol("reorged");
+    const explained = reverted && explain ? await withinPayFailureBudget((async () => {
       const found = await explain(transactionHash, blockHash);
       if (!found) return undefined;
-      try { await chain.canonical(evidence); return found; } catch { return undefined; }
+      try { await chain.canonical(evidence); return found; }
+      catch (error) { return (error as { code?: unknown } | null)?.code === "USER_OPERATION_REORGED" ? reorged : undefined; }
     })().catch(() => undefined)) : undefined;
+    if (explained === reorged) return unknown("The observed block is no longer canonical.");
+    const payFailure = explained;
     return {
       ...base,
       transactionHash,

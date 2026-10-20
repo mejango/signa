@@ -694,11 +694,12 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
     const observe = () => observeUserOperation({ chain: f.chain(), binding: f.binding,
       signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
       verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
-    // A reorg while the trace runs never pairs its reason with the old receipt; the outcome still comes back.
+    // A reorg the recheck proves leaves no settled revert: the outcome is unknown again, with no reason.
     reason.mockImplementationOnce(async () => { f.state.reorged = true; return payFailure; });
     const reorged = await observe();
-    expect(reorged).toMatchObject({ state: "reverted" });
+    expect(reorged).toMatchObject({ state: "unknown" });
     expect(reorged).not.toHaveProperty("payFailure");
+    expect(reorged).not.toHaveProperty("receipt");
     f.state.reorged = false;
     // A trace that never answers holds the outcome for the reason budget at most.
     reason.mockImplementationOnce(() => new Promise(() => undefined));

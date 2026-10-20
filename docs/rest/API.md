@@ -339,7 +339,7 @@ A payment the bundler or chain refuses also carries `payFailure`
 calls say why; a reverted payment operation carries it on its `observation`.
 It is advisory and describes only that attempt: never apply it to another
 payment, and treat its absence as an unknown reason. `received` and `minimum`
-appear only for a shortfall, in the failing check's units (project tokens for a
+appear only for a shortfall, as raw base-unit integers in the failing check's units (project tokens for a
 terminal or buyback minimum, the converted token for a router conversion). Only
 a minimum the payer set can be relaxed, and any changed minimum needs a fresh
 preparation, simulation and owner review. Its presence neither cancels an
