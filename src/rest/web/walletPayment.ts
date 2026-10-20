@@ -5,6 +5,7 @@ import { getUserOperationHash, normalizeUserOperation, uoCanonical, userOperatio
 import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
 import { recognizeWalletV6UsdcPayment } from '../userOperations/semantics.js';
+import { passkeyPayMinimumOf } from '../userOperations/userPayMetadata.js';
 import type { WalletPaymentCentralPublic } from '../wallet/paymentPublic.js';
 
 // Native assertions and CSRF values stay in this page's memory. A reload recovers
@@ -115,6 +116,7 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   address(payment.token); address(payment.terminal); address(payment.beneficiary);
   decimal(payment.amount); decimal(payment.projectId); decimal(payment.minimumReturnedTokens); text(payment.memo, 32768, true);
   if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(text(payment.metadata, 65538))) fail();
+  try { passkeyPayMinimumOf(String(payment.metadata)); } catch { fail(); }
   const operation = normalizeUserOperation(value.operation);
   if (operation.sender.toLowerCase() !== String(payment.account).toLowerCase() || operation.signature !== '0x' ||
     getUserOperationHash(operation, value.entryPoint, 8453) !== value.operationHash) fail();
@@ -142,13 +144,19 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   const next = JSON.stringify(stable); if (immutable && immutable !== next) fail();
   immutable = next; return structuredClone(value);
 }
+/** The buyback instruction in the payment's metadata, in the payer's terms. */
+function buybackText(metadata: string): string {
+  const minimum = passkeyPayMinimumOf(metadata);
+  if (minimum === null) return 'None';
+  return minimum > 0n ? `Pool buys skip the reserved split. Pool minimum: ${minimum} project tokens (base units).` : 'Pool buys skip the reserved split.';
+}
 function accept(input: unknown) {
   review = checkReview(input);
   const payment = review.payment;
   for (const [name, value] of Object.entries({ amount: `${formatUnits(BigInt(payment.amount), 6)} USDC`, project: payment.projectId,
     app: review.app.origin, account: payment.account, beneficiary: payment.beneficiary, minimum: payment.minimumReturnedTokens,
     memo: payment.memo || 'No memo', fee: `${formatUnits(userOperationMaximumCost(review.operation), 18)} ETH`, token: payment.token,
-    terminal: payment.terminal, metadata: payment.metadata, operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
+    terminal: payment.terminal, metadata: payment.metadata, buyback: buybackText(payment.metadata), operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
     element(`payment-${name}`).textContent = value;
   returnToApp.href = callback(review);
   if (review.status === 'approved') { pending = null; uncertain = false; setStatus('approved', 'Approved. Check the result in the app.'); }

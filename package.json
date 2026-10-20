@@ -33,6 +33,7 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
+    "@bananapus/nana-sdk-core": "3.0.0",
     "@hono/node-server": "^1.19.9",
     "@juicebox/mcp": "file:./mcp",
     "@scure/bip39": "1.6.0",

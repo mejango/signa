@@ -5,6 +5,8 @@ import { build } from 'esbuild';
 import { chromium, type Browser, type Page, type CDPSession } from 'playwright';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
+import { buildUserPayMetadata } from '@bananapus/nana-sdk-core/v6';
+import type { Hex } from 'viem';
 import type { WalletPaymentCentralPublic } from '../src/rest/wallet/paymentPublic.js';
 import { parseWalletRegistration, type WalletRegistrationCandidate } from '../src/rest/wallet/registration.js';
 import { verifyWalletAssertion } from '../src/rest/wallet/webauthn.js';
@@ -142,6 +144,23 @@ describe('central payment review browser, virtual authenticator', () => {
     await page.locator('#payment-return').click(); await expect.poll(() => page.url()).toBe(callback()); expect(errors).toEqual([]);
   });
 
+  it('shows a pay card buyback minimum decoded from metadata and refuses any other metadata', async () => {
+    const withMetadata = (metadata: Hex) => {
+      const f = createWalletPaymentClientFixture(Date.now(), metadata);
+      if (!('signedData' in f.prepared.signing)) throw new Error('Fixture must use a passkey owner');
+      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment,
+        signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
+        passkey: { ...review.passkey, challenge: encode(Buffer.from(f.prepared.signing.digest.slice(2), 'hex')) } };
+    };
+    await load(); expect(await page.locator('#payment-buyback').textContent()).toBe('None');
+    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n })); await load();
+    expect(await page.locator('#payment-buyback').textContent()).toBe('Pool buys skip the reserved split. Pool minimum: 5 project tokens (base units).');
+    withMetadata(buildUserPayMetadata({ chainId: 8453 })); await load();
+    expect(await page.locator('#payment-buyback').textContent()).toBe('Pool buys skip the reserved split.');
+    withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: review.payment.terminal, tierIdsToMint: [1n] } }));
+    await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+    expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+  });
   it('cancels the native prompt without approving and permits another explicit click', async () => {
     await load(); await cdp.send('WebAuthn.setAutomaticPresenceSimulation', { authenticatorId, enabled: false });
     await page.locator('#payment-approve').click(); await status('authenticating');

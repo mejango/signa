@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
-import { encodeFunctionData, erc20Abi, hashTypedData, parseAbi, type Address } from "viem";
+import { concat, encodeFunctionData, erc20Abi, hashTypedData, parseAbi, type Address, type Hex } from "viem";
 import { createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft, assertWalletPaymentReviewContext,
   verifyWalletPaymentReviewProof, type WalletPaymentReviewContext } from "../src/rest/wallet/paymentReviews.js";
 import { createWalletAuthorityContextFixture } from "./fixtures/wallet-authority-context.js";
@@ -17,6 +17,8 @@ import { getUserOperationHash, userOperationCommitment } from "../src/rest/userO
 import { createWalletRecoveryIntent, createWalletRecoveryMapping, prepareWalletRecoveryCandidate,
   verifyWalletRecoveryProof, walletRecoveryDocument } from '../src/rest/wallet/recovery.js';
 import { passkeyOnboardingDocument } from '../src/rest/smartAccounts/passkeyOnboarding.js';
+import { getJBContractAddress } from "@bananapus/nana-sdk-core";
+import { buildBuybackPayMetadata, buildUserPayMetadata } from "@bananapus/nana-sdk-core/v6";
 
 const now = 1_800_000_120_000, issuer = "https://wallet.juicebox.center", rpId = "wallet.juicebox.center";
 const audience = "https://juicebox.center";
@@ -230,6 +232,29 @@ describe("owner-approved modeled payment review", () => {
       c.operation.operation.callData = encodeSafe7579Execution(c.plan.draft.calls.map(call => ({ target: call.to, callData: call.data, value: call.value })));
       recommit(c); expect(() => assertWalletPaymentReviewContext(draft, c)).toThrow();
     }
+  });
+  it("admits empty metadata or exactly a pay card's buyback skipSplits metadata, nothing else", () => {
+    const withMetadata = (metadata: Hex) => {
+      const c = context(), summary = c.plan.draft.summary as { metadata: Hex };
+      c.plan.draft.calls[1]!.data = encodeFunctionData({ abi: payAbi, functionName: "pay",
+        args: [7n, token, 1_000_000n, c.plan.draft.account, 5n, "hello", metadata] });
+      summary.metadata = metadata;
+      c.operation.operation.callData = encodeSafe7579Execution(c.plan.draft.calls.map(call => ({ target: call.to, callData: call.data, value: call.value })));
+      recommit(c); return c;
+    };
+    for (const minimum of [0n, 5n]) {
+      const c = withMetadata(buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: minimum }));
+      const draft = createWalletPaymentReviewDraft(c, options());
+      expect(validateWalletPaymentReviewDraft(draft)).toEqual(draft);
+    }
+    const userPay = buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n });
+    for (const metadata of [
+      buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut: 5n, tiers: { metadataIdTarget: terminal, tierIdsToMint: [1n] } }),
+      buildBuybackPayMetadata({ hook: getJBContractAddress("JBBuybackHookRegistry", 6, 8453), amountToSwapWith: 0n, minimumSwapAmountOut: 5n }),
+      buildBuybackPayMetadata({ hook: getJBContractAddress("JBBuybackHookRegistry", 6, 8453), amountToSwapWith: 1n, minimumSwapAmountOut: 5n, skipSplits: true }),
+      buildBuybackPayMetadata({ hook: terminal, amountToSwapWith: 0n, minimumSwapAmountOut: 5n, skipSplits: true }),
+      concat([userPay, "0x00"]), userPay.slice(0, -2) as Hex, "0x1234" as Hex,
+    ]) expect(() => createWalletPaymentReviewDraft(withMetadata(metadata), options())).toThrow();
   });
   it("rejects corrupted plan and operation commitments before requesting owner approval", () => {
     for (const field of ["plan", "operation"] as const) {

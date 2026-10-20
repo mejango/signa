@@ -201,7 +201,7 @@ function fixture(
 }
 
 function payHookMetadata(
-  overrides: { beneficiaryCount?: bigint; skipSplits?: boolean; partialMint?: bigint } = {},
+  overrides: { beneficiaryCount?: bigint; skipSplits?: boolean; partialMint?: bigint; explicit?: boolean } = {},
 ): Hex {
   return encodeAbiParameters(
     parseAbiParameters(
@@ -211,7 +211,7 @@ function payHookMetadata(
       false,
       overrides.partialMint ?? 0n,
       300n,
-      false,
+      overrides.explicit ?? false,
       controller,
       200n,
       1n,
@@ -700,11 +700,37 @@ describe('payment quotes and approval plans', () => {
             hook: buybackHook,
             noop: false,
             amount: 100n,
-            metadata: payHookMetadata({ skipSplits: true }),
+            metadata: payHookMetadata({ skipSplits: true, partialMint: 1n }),
           },
         ],
       }).service.preparePay(payInput),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_CONFIGURATION' });
+  });
+
+  it('plans a skipSplits payment at the payer metadata minimum, or the beneficiary mint share without one', async () => {
+    const skipping = (explicit: boolean) =>
+      fixture({
+        dataHook: registry,
+        beneficiaryCount: 0n,
+        payHooks: [
+          { hook: buybackHook, noop: false, amount: 100n, metadata: payHookMetadata({ skipSplits: true, explicit }) },
+        ],
+      }).service.preparePay(payInput);
+    const explicit = await skipping(true);
+    expect(explicit.summary).toMatchObject({
+      beneficiaryTokenCount: '300',
+      reservedTokenCount: '0',
+      minimumBeneficiaryTokenCount: '300',
+    });
+    expect(
+      decodeFunctionData({ abi: jbMultiTerminalAbi, data: explicit.calls[0]!.data }).args?.[4],
+    ).toBe(300n);
+    expect(explicit.warnings.join(' ')).toContain('skips the reserved split');
+    const derived = await skipping(false);
+    expect(derived.summary).toMatchObject({
+      beneficiaryTokenCount: '200',
+      minimumBeneficiaryTokenCount: '198',
+    });
   });
 
   it('checks registry forwarding targets even when the outer call goes directly to the canonical router', async () => {

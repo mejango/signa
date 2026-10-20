@@ -1,4 +1,4 @@
-import { encodeFunctionData, erc20Abi, getAddress, parseAbi, type Address } from "viem";
+import { encodeFunctionData, erc20Abi, getAddress, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { PreparedUserOperation } from "../../src/rest/client/smartAccounts.js";
 import { encodeSafe7579Execution } from "../../src/rest/smartAccounts/accountExecution.js";
@@ -19,7 +19,7 @@ const payAbi = parseAbi([
 /** Real calldata, commitments and P256 proof; synthetic service records and chain observations.
  * No contract deployment, RPC, passkey device, database admission or payment is proved here.
  */
-export function createWalletPaymentClientFixture(nowMs = 1_900_000_000_000) {
+export function createWalletPaymentClientFixture(nowMs = 1_900_000_000_000, metadata: Hex = "0x") {
   const issuer = "https://wallet.juicebox.center", audience = "https://juicebox.center";
   const origin = "https://beep.biz", callbackUri = `${origin}/center/callback`, rpId = "wallet.juicebox.center";
   const safe = "0x3333333333333333333333333333333333333333" as Address;
@@ -39,7 +39,7 @@ export function createWalletPaymentClientFixture(nowMs = 1_900_000_000_000) {
   };
   const payment: WalletV6UsdcPayment = {
     kind: "v6-usdc-pay", chainId: 8453, account: safe, token, terminal, projectId: "7", amount: "1000000",
-    beneficiary: safe, minimumReturnedTokens: "5", memo: "hello", metadata: "0x", stepIndexes: [0, 1],
+    beneficiary: safe, minimumReturnedTokens: "5", memo: "hello", metadata, stepIndexes: [0, 1],
     approvalStepIndexes: [0], paymentStepIndex: 1, resetAllowance: false,
   };
   const approve = encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [terminal, BigInt(payment.amount)] });

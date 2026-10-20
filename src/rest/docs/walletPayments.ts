@@ -7,7 +7,8 @@ export function walletPaymentSchemas(): Record<string, Schema> {
   const state = { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$', description: 'Canonical base64url encoding of 32 random bytes retained by the initiating app.' };
   const payment = object({ kind: { const: 'v6-usdc-pay', type: 'string' }, chainId: { const: 8453, type: 'integer' },
     account: ref('Address'), token: ref('Address'), terminal: ref('Address'), projectId: ref('Uint256'), amount: ref('PositiveUint256'),
-    beneficiary: ref('Address'), minimumReturnedTokens: ref('Uint256'), memo: { type: 'string', maxLength: 32768 }, metadata: ref('HexBytes'),
+    beneficiary: ref('Address'), minimumReturnedTokens: ref('Uint256'), memo: { type: 'string', maxLength: 32768 },
+    metadata: { ...ref('HexBytes'), description: 'Empty (0x), or exactly buildUserPayMetadata({ chainId: 8453, minimumSwapAmountOut }) from @bananapus/nana-sdk-core: the buyback registry quote (0, minimum, skipSplits = true) with no tiers. Any other metadata is refused.' },
     stepIndexes: indexes, approvalStepIndexes: { ...indexes, minItems: 0, maxItems: 2 }, paymentStepIndex: { type: 'integer', minimum: 0, maximum: 31 }, resetAllowance: { type: 'boolean' } });
   const properties = { version: { type: 'string', const: 'center-wallet-payment-review-v1' }, id: ref('ResourceId'), state,
     issuer: { type: 'string', format: 'uri' }, accountId: ref('AccountId'),
