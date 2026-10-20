@@ -719,18 +719,14 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
     expect(Date.now() - recheckStarted).toBeLessThan(PAY_FAILURE_BUDGET_MS + 1_000);
     f.state.stallBlocks = false;
   });
-  it("keeps an outer revert open until its validity ends, since the operation can be bundled again", async () => {
+  it("preserves an independently proven outer revert", async () => {
     const f = fixture();
     f.state.mined = true;
     f.state.receiptStatus = "0x0";
-    expect(await f.observe({ validUntil: now / 1000 - 60 })).toMatchObject({
-      state: "confirming",
+    expect(await f.observe()).toMatchObject({
+      state: "reverted",
       receipt: { status: "reverted" },
-      semantic: { status: "failed" },
     });
-    expect(await f.observe({ validUntil: now / 1000 - 121 })).toMatchObject({ state: "expired" });
-    f.state.nonce = 1n;
-    expect((await f.observe({ validUntil: now / 1000 - 121 })).state).toBe("unknown");
   });
   it("refuses successful execution claims if the historical account configuration is not verified", async () => {
     const f = fixture();

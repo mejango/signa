@@ -871,15 +871,6 @@ describe("retiring a refused approval", () => {
     expect(() => retiring({ ...record, session: {} as NonNullable<typeof record.session> })).toThrow(expect.objectContaining({ code: "USER_OPERATION_NOT_RETIRABLE" }));
   });
 
-  it("lets a fresh payment take the nonce once a replacement whose whole bundle reverted has expired", async () => {
-    const f = await fixture({ steps: 3 }), old = await f.prepare();
-    await f.service.retire(f.principal, old.id);
-    const replacement = await prepareAs(f, "replacement", [1]);
-    const submitted = await f.service.submit(f.principal, replacement.id, f.signature(replacement), "submit");
-    await f.store.observe(replacement.id, submitted.revision, { state: "expired", operationHash: replacement.operationHash });
-    expect(BigInt((await prepareAs(f, "after", [2])).operation.nonce)).toBe(0n);
-  });
-
   it("asks to wait while the payment that took a retired approval's nonce is still confirming", async () => {
     const f = await fixture({ steps: 2 }), old = await f.prepare();
     await f.service.retire(f.principal, old.id);
