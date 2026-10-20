@@ -17,6 +17,7 @@ import {
   encodeAbiParameters,
   erc20Abi,
   getAddress,
+  keccak256,
   parseAbiParameters,
   zeroAddress,
   type Address,
@@ -222,6 +223,7 @@ function payHookMetadata(
     skipSplits?: boolean;
     partialMint?: bigint;
     explicit?: boolean;
+    poolId?: Hex;
   } = {},
 ): Hex {
   return encodeAbiParameters(
@@ -239,7 +241,7 @@ function payHookMetadata(
       100n,
       0,
       1n,
-      hash,
+      overrides.poolId ?? hash,
       overrides.beneficiaryCount ?? 250n,
       50n,
       999n,
@@ -675,6 +677,9 @@ describe('payment quotes and approval plans', () => {
         const f = fixture(options);
         const input = skipSplits === undefined ? sdkPayInput : { ...sdkPayInput, skipSplits };
         const plan = await f.service.preparePay(input);
+        const servicePreviews = f.readContract.mock.calls.filter(
+          ([request]) => request.functionName === 'previewPayFor',
+        );
         const { client } = await f.snapshot();
         const sdk = await prepareUserPay(client, {
           chainId: project.chainId,
@@ -701,15 +706,91 @@ describe('payment quotes and approval plans', () => {
           metadata: sdk.metadata,
         });
         // The hook specs checked are the terminal's answer for that exact metadata.
-        const previews = f.readContract.mock.calls.filter(
-          ([request]) => request.functionName === 'previewPayFor',
-        );
-        expect(previews.at(-1)?.[0].args?.[4]).toBe(sdk.metadata);
+        expect(servicePreviews.at(-1)?.[0].args?.[4]).toBe(sdk.metadata);
       }
     }
     await expect(
       fixture().service.preparePay({ ...payInput, skipSplits: false }),
     ).rejects.toMatchObject({ code: 'INVALID_SKIP_SPLITS' });
+  });
+
+  it('validates the hook specs of the metadata it sends, quoted or fallen back after a tentative quote', async () => {
+    const poolKey = {
+      currency0: zeroAddress,
+      currency1: '0x7777777777777777777777777777777777777777' as Address,
+      fee: 3000,
+      tickSpacing: 60,
+      hooks: zeroAddress,
+    };
+    const poolId = keccak256(
+      encodeAbiParameters(parseAbiParameters('address,address,uint24,int24,address'), [
+        poolKey.currency0,
+        poolKey.currency1,
+        poolKey.fee,
+        poolKey.tickSpacing,
+        poolKey.hooks,
+      ]),
+    );
+    const base = buildUserPayMetadata({ chainId: project.chainId, skipSplits: true });
+    // The pool pays 1000 for the 100 swapped against a 200-token mint: worth quoting.
+    const quoting = (swapsWhenQuoted: boolean) => {
+      const f = fixture({ dataHook: registry, beneficiaryCount: 0n });
+      const original = f.readContract.getMockImplementation()!;
+      f.readContract.mockImplementation(async (request) => {
+        if (request.functionName === 'poolKeyOf') return poolKey;
+        if (request.functionName !== 'previewPayFor') return original(request);
+        const quoted = request.args?.[4] !== base;
+        return [
+          ruleset,
+          0n,
+          10n,
+          [
+            {
+              hook: buybackHook,
+              noop: quoted && !swapsWhenQuoted,
+              amount: 100n,
+              metadata: payHookMetadata({ skipSplits: true, explicit: quoted, poolId }),
+            },
+          ],
+        ];
+      });
+      return f;
+    };
+    for (const swapsWhenQuoted of [true, false]) {
+      const f = quoting(swapsWhenQuoted);
+      const { client } = await f.snapshot();
+      Object.assign(client, {
+        call: vi.fn(async () => ({
+          data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
+        })),
+      });
+      const plan = await f.service.preparePay(sdkPayInput);
+      const servicePreviews = f.readContract.mock.calls.filter(
+        ([request]) => request.functionName === 'previewPayFor',
+      );
+      const reference = quoting(swapsWhenQuoted);
+      const { client: referenceClient } = await reference.snapshot();
+      Object.assign(referenceClient, {
+        call: vi.fn(async () => ({
+          data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
+        })),
+      });
+      const sdk = await prepareUserPay(referenceClient, {
+        chainId: project.chainId,
+        terminal,
+        projectId: BigInt(project.projectId),
+        token: NATIVE_TOKEN,
+        amount: 100n,
+        beneficiary,
+        slippageBps: 100n,
+      });
+      expect(sdk.metadata === base).toBe(!swapsWhenQuoted);
+      const args = decodeFunctionData({ abi: jbMultiTerminalAbi, data: plan.calls[0]!.data }).args!;
+      expect([args[4], args[6]]).toEqual([sdk.minReturnedTokens, sdk.metadata]);
+      // The SDK previewed the tentative quote too; the specs the service checked are for what it sends.
+      expect(servicePreviews.some(([request]) => request.args?.[4] !== sdk.metadata)).toBe(true);
+      expect(servicePreviews.at(-1)?.[0].args?.[4]).toBe(sdk.metadata);
+    }
   });
 
   it('supports the recorded 1.1.1 hook without accepting another generation or a partial buyback', async () => {

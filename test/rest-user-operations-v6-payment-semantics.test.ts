@@ -242,7 +242,7 @@ describe("UserOperationService reverted payment reasons", () => {
   // JBMultiTerminal_UnderMin(812, 900), as the terminal reverts it.
   const underMin = `0x6b2bb382${encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [812n, 900n]).slice(2)}` as Hex;
   const hash = `0x${"cd".repeat(32)}` as Hex;
-  async function reverted(previous?: UserOperationObservation) {
+  async function reverted(previous?: UserOperationObservation, blockHash: Hex = `0x${"ef".repeat(32)}`) {
     const p = plan(), now = Date.now(), owner = accountFixture(now);
     const stored = storedFixture("payment-failure", ownerFixture(owner), bindingFixture(owner, now), now, 3); stored.draft = p.draft;
     const record = operationFixture(stored); record.chainId = 8453; record.stepIndexes = [0, 1, 2];
@@ -251,12 +251,14 @@ describe("UserOperationService reverted payment reasons", () => {
     if (previous) record.observation = previous;
     let observation: UserOperationObservation | undefined;
     observer.mockImplementation(async (options: ObserveUserOperationOptions) => {
-      const payFailure = await options.payFailure!(hash);
-      return { state: "reverted", operationHash: record.operationHash, transactionHash: hash, semantic: { status: "failed" }, ...(payFailure ? { payFailure } : {}) };
+      const payFailure = await options.payFailure!(hash, blockHash);
+      return { state: "reverted", operationHash: record.operationHash, transactionHash: hash, receipt: { ...receipt(), blockHash },
+        semantic: { status: "failed" }, ...(payFailure ? { payFailure } : {}) };
     });
     const request = vi.fn(async (_chainId: number, method: string) => {
       expect(method).toBe("debug_traceTransaction");
-      return { from: "0x0000000000000000000000000000000000000007", calls: [{ from: record.sender, to: terminal, error: "execution reverted", output: underMin }] };
+      return { from: "0x0000000000000000000000000000000000000007", calls: [{ to: record.sender, input: callData,
+        calls: [{ from: record.sender, to: terminal, error: "execution reverted", output: underMin }] }] };
     });
     const deps = { policies: [{ chainId: 8453, confirmations: 1 }], now: Date.now, rpc: { request },
       store: { recoverable: async () => [record], observe: async (_id: string, _revision: number, value: UserOperationObservation) => {
@@ -269,12 +271,15 @@ describe("UserOperationService reverted payment reasons", () => {
     await new UserOperationService(deps).recoverPending(1);
     return { observation, request };
   }
-  it("traces a reverted payment once, by its account, and keeps what it found", async () => {
+  it("traces a reverted payment once per block, by its operation, and keeps what it found", async () => {
     const first = await reverted();
     expect(first.observation?.payFailure).toEqual({ reason: "TERMINAL_UNDER_MIN", received: "812", minimum: "900", message: expect.any(String) });
     expect(first.request).toHaveBeenCalledTimes(1);
     const again = await reverted({ ...first.observation!, state: "confirming" });
     expect(again.observation?.payFailure).toEqual(first.observation?.payFailure);
     expect(again.request).not.toHaveBeenCalled();
+    // Re-included in another block after a reorg, it is traced again.
+    const reorged = await reverted({ ...first.observation!, state: "confirming" }, `0x${"12".repeat(32)}`);
+    expect(reorged.request).toHaveBeenCalledTimes(1);
   });
 });

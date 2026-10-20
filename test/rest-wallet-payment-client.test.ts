@@ -422,8 +422,20 @@ describe('Center browser payment review continuity', () => {
     const reverted = f.observedOperation('reverted');
     f.observed({ ...reverted, observation: { ...reverted.observation, payFailure } });
     const status = await f.helper().refreshPayment();
-    expect(status).toMatchObject({ status: 'reverted', payFailure });
+    expect(status).toMatchObject({ status: 'reverted', payFailure, observation: { payFailure } });
     f.helper().clearPayment(); expect(f.helper().pendingPayment()).toBeNull();
+  });
+
+  it('drops a served payment reason outside its exact shape, on the status and inside the observation', async () => {
+    const f = fixture(); await f.helper().preparePayment(f.input()); await f.helper().completePayment(f.callback()); await f.helper().submitPayment();
+    const reverted = f.observedOperation('reverted');
+    f.observed({ ...reverted, observation: { ...reverted.observation,
+      payFailure: { reason: 'TERMINAL_UNDER_MIN', message: 'See https://node.example/key', received: '812', minimum: '900' } } });
+    const status = await f.helper().refreshPayment();
+    expect(status.status).toBe('reverted');
+    expect(status).not.toHaveProperty('payFailure');
+    expect(status.observation).toBeDefined();
+    expect(status.observation).not.toHaveProperty('payFailure');
   });
 
   it('waits on the operation past the revision it last saw, once it has seen one', async () => {

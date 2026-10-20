@@ -674,7 +674,7 @@ describe("independent EntryPoint receipt and per-operation log proof", () => {
       signedCommitment: userOperationCommitment(f.operation, entryPoint, 1), confirmations: 1, now,
       verifyAccountAtBlock: f.accountVerifier, verifySemantics: f.semantic, transactionHash: txHash, payFailure: reason });
     expect(result).toMatchObject({ state: "reverted", semantic: { status: "failed" }, payFailure });
-    expect(reason).toHaveBeenCalledWith(txHash);
+    expect(reason).toHaveBeenCalledWith(txHash, expect.stringMatching(/^0x[0-9a-f]{64}$/i));
     // A successful execution never asks.
     f.state.eventSuccess = true;
     reason.mockClear();

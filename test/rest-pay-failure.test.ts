@@ -65,17 +65,24 @@ describe("payment failure reasons", () => {
     expect(await explainedRefusal(refused, unexplained, 8453, sender, payment)).toBe(refused);
   });
 
-  it("reads a reverted payment from the account's own failed call in the transaction trace", async () => {
+  it("reads a reverted payment from its own operation's failed call in the transaction trace", async () => {
     const hash = `0x${"ab".repeat(32)}` as Hex;
     let traced: readonly unknown[] = [];
-    const trace = { from: "0xentrypoint", to: sender, error: "execution reverted", calls: [
-      { from: sender.toUpperCase().replace("0X", "0x"), to: "0x7579", error: "execution reverted", output: executionFailed, calls: [
-        { from: "0x7579", to: sender, calls: [{ from: sender, to: usdc, output: "0x01" },
-          { from: sender, to: terminal, error: "execution reverted", output: underMin }] }] }] };
+    // EntryPoint runs the operation's calldata on the account; Safe7579 wraps the failing pay in ExecutionFailed.
+    const operation = (callData: Hex, output: Hex) => ({ from: "0xentrypoint", to: sender.toUpperCase().replace("0X", "0x"), input: callData,
+      error: "execution reverted", calls: [{ from: sender, to: "0x7579", error: "execution reverted", output: executionFailed, calls: [
+        { from: "0x7579", to: sender, input: "0x468721a7", calls: [{ from: sender, to: usdc, output: "0x01" },
+          { from: sender, to: terminal, error: "execution reverted", output }] }] }] });
+    const other = `0x6b2bb382${encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [1n, 2n]).slice(2)}` as Hex;
+    const trace = { from: "0xbundler", to: "0xentrypoint", calls: [operation(transfer, other), operation(payment, underMin)] };
     const chain = chainWith(async (_chainId, method, params) => { expect(method).toBe("debug_traceTransaction"); traced = params; return trace; });
+    // Another operation from the same account in the bundle never lends its reason.
     expect(await tracedPayFailure(chain, 8453, hash, sender, payment)).toEqual(expected);
     expect(traced).toEqual([hash, { tracer: "callTracer", timeout: "10s", tracerConfig: { onlyTopCall: false } }]);
     expect(await tracedPayFailure(chainWith(async () => trace), 8453, hash, sender, transfer)).toBeUndefined();
+    // The same calldata run twice is ambiguous, so no reason.
+    const twice = { ...trace, calls: [operation(payment, other), operation(payment, underMin)] };
+    expect(await tracedPayFailure(chainWith(async () => twice), 8453, hash, sender, payment)).toBeUndefined();
     expect(await tracedPayFailure(chainWith(async () => { throw new Error("trace unavailable"); }), 8453, hash, sender, payment)).toBeUndefined();
   });
 
@@ -98,7 +105,9 @@ describe("payment failure reasons", () => {
     expect(new RestClientError("USER_OPERATION_PROVIDER_REJECTED", "Refused.", 502, served).payFailure).toEqual(served);
     expect(new RestClientError("X", "Refused.").payFailure).toBeUndefined();
     for (const bad of [null, "TERMINAL_UNDER_MIN", { ...served, url: "https://node.example" }, { ...served, received: "8.5" },
-      { ...served, minimum: 900 }, { ...served, reason: "not a reason" }, { reason: served.reason }])
+      { ...served, minimum: 900 }, { ...served, reason: "not a reason" }, { reason: served.reason },
+      { ...served, minimum: (2n ** 256n).toString() }, { ...served, message: "See https://node.example/key" },
+      { ...served, message: "Reverted 0x6b2bb382" }, { ...served, message: "" }])
       expect(clientPayFailureOf(bad)).toBeUndefined();
   });
 });

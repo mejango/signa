@@ -42,22 +42,33 @@ export async function simulatedPayFailure(chain: UserOperationChain, chainId: nu
   } catch { return undefined; }
 }
 
-type Frame = { from?: unknown; output?: unknown; error?: unknown; calls?: unknown };
-/** Why a mined operation's payment reverted: the first reverted call the account made, read from the
- * transaction's call trace. Without a trace there is no reason. */
+type Frame = { from?: unknown; to?: unknown; input?: unknown; output?: unknown; error?: unknown; calls?: unknown };
+const framesOf = (root: Frame) => {
+  const frames: Frame[] = [];
+  for (const queue = [root]; queue.length;) {
+    const frame = queue.shift()!;
+    frames.push(frame);
+    if (Array.isArray(frame.calls)) queue.push(...(frame.calls as Frame[]));
+  }
+  return frames;
+};
+const same = (a: unknown, b: string) => typeof a === "string" && a.toLowerCase() === b.toLowerCase();
+/** Why a mined operation's payment reverted: the first reverted call the account made inside this
+ * operation's own execution (the EntryPoint's call of the account with exactly its calldata), read from
+ * the transaction's call trace. A bundle can carry other operations of the same account, so an
+ * execution that is not found exactly once gives no reason, as does a missing trace. */
 export async function tracedPayFailure(chain: UserOperationChain, chainId: number, transactionHash: Hex,
   sender: Address, callData: Hex): Promise<PayFailure | undefined> {
   try {
     if (!pays(callData)) return undefined;
     const root = await chain.request(chainId, "debug_traceTransaction",
       [transactionHash, { tracer: "callTracer", timeout: "10s", tracerConfig: { onlyTopCall: false } }]);
-    const frames: Frame[] = [root as Frame];
-    for (let frame = frames.shift(); frame; frame = frames.shift()) {
-      if (typeof frame.from === "string" && frame.from.toLowerCase() === sender.toLowerCase() && frame.error !== undefined) {
-        const failure = payFailureOf(frame.output);
-        if (failure) return failure;
-      }
-      if (Array.isArray(frame.calls)) frames.push(...(frame.calls as Frame[]));
+    const executions = framesOf(root as Frame).filter(frame => same(frame.to, sender) && same(frame.input, callData));
+    if (executions.length !== 1) return undefined;
+    for (const frame of framesOf(executions[0]!)) {
+      if (!same(frame.from, sender) || frame.error === undefined) continue;
+      const failure = payFailureOf(frame.output);
+      if (failure) return failure;
     }
   } catch { /* No trace, no reason. */ }
   return undefined;

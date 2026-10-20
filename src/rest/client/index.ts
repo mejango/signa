@@ -59,13 +59,15 @@ export class RestClientError extends Error {
     if (payFailure) this.payFailure = payFailure;
   }
 }
-const amount = (value: unknown) => value === undefined || (typeof value === "string" && /^(0|[1-9][0-9]{0,77})$/.test(value));
-/** A served payment failure reason, kept only in its exact shape. */
+const amount = (value: unknown) => value === undefined
+  || (typeof value === "string" && /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) < 2n ** 256n);
+/** A served payment failure reason, kept only in its exact shape: an SDK reason, its plain sentence
+ * (letters and punctuation only, so no URL, hex or node text can pass) and integer amounts. */
 export function payFailureOf(value: unknown): PayFailure | undefined {
   if (!value || typeof value !== "object") return undefined;
   const { reason, received, minimum, message, ...rest } = value as Record<string, unknown>;
-  if (Object.keys(rest).length || typeof reason !== "string" || !/^[A-Z0-9_]{1,64}$/.test(reason) || typeof message !== "string"
-    || message.length > 512 || !amount(received) || !amount(minimum)) return undefined;
+  if (Object.keys(rest).length || typeof reason !== "string" || !/^[A-Z][A-Z_]{0,63}$/.test(reason) || typeof message !== "string"
+    || !/^[A-Za-z][A-Za-z ,.'’]{0,299}$/.test(message) || !amount(received) || !amount(minimum)) return undefined;
   return { reason, message, ...(received === undefined ? {} : { received: received as string }),
     ...(minimum === undefined ? {} : { minimum: minimum as string }) };
 }

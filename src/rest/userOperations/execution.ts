@@ -59,7 +59,7 @@ export interface ObserveUserOperationOptions {
   /** Receives only logs within this operation's EntryPoint execution interval. */
   verifySemantics?(receipt: StoredReceipt): Promise<SemanticResult>;
   /** Why the operation's payment reverted, for an execution the EntryPoint reports failed. */
-  payFailure?(transactionHash: Hex): Promise<PayFailure | undefined>;
+  payFailure?(transactionHash: Hex, blockHash: Hex): Promise<PayFailure | undefined>;
 }
 /** A bundler receipt supplies only a hint. Every proof below comes from the configured chain. */
 export async function observeUserOperation(
@@ -388,7 +388,7 @@ export async function observeUserOperation(
       "The reported operation gas charge exceeds its maximum prefund.",
     );
   if (!event.success) {
-    const payFailure = await options.payFailure?.(transactionHash);
+    const payFailure = await options.payFailure?.(transactionHash, blockHash);
     return {
       ...base,
       transactionHash,

@@ -216,13 +216,16 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
     return value;
   }
   function status(value: Journal): CenterWalletPaymentStatus {
+    // A served reason reaches the app only in its exact shape, on the status and inside the observation.
     const payFailure = payFailureOf(value.observation?.payFailure);
+    const { payFailure: _served, ...observed } = value.observation ?? {};
+    const observation = value.observation && { ...observed, ...(payFailure ? { payFailure } : {}) } as UserOperationObservation;
     return snapshot({ status: value.status, accountId: value.grant.accountId, chainId: 8453, operationId: value.operation.id,
       operationHash: value.operation.operationHash, reviewId: value.review?.id ?? null,
       approvalUrl: value.review ? issuer + '/wallet/payment?review=' + value.review.id : null,
       expiresAtMs: value.review?.expiresAtMs ?? value.operation.expiresAt, expectedPayment: value.expectedPayment,
-      ...(value.observation ? { observation: value.observation,
-        ...(hex32(value.observation.transactionHash) ? { transactionHash: value.observation.transactionHash } : {}) } : {}),
+      ...(observation ? { observation,
+        ...(hex32(observation.transactionHash) ? { transactionHash: observation.transactionHash } : {}) } : {}),
       ...(payFailure ? { payFailure } : {}) });
   }
   function receiveView(input: unknown, saved: Saved, appView: boolean): Saved {

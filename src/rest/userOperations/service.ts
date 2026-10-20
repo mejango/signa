@@ -1187,9 +1187,11 @@ export class UserOperationService {
         if (!settled) return "pending";
         this.verified.add(key);
       },
-      // Traced once per reverted transaction: a later observation of it keeps what the first found.
-      payFailure: async (hash: Hex) =>
+      // Traced once per reverted execution: a later observation of the same transaction in the same
+      // block keeps what the first found; a reorg's re-inclusion is traced again.
+      payFailure: async (hash: Hex, blockHash: Hex) =>
         previous?.semantic?.status === "failed" && previous.transactionHash && same(previous.transactionHash, hash)
+          && previous.receipt && same(previous.receipt.blockHash, blockHash)
           ? previous.payFailure
           : tracedPayFailure(this.chain(), record.chainId, hash, record.sender, record.submission.operation.callData),
       verifySemantics: async (receipt: StoredReceipt) => {
