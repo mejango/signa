@@ -45,6 +45,12 @@ export function passkeyOption(input: {
     name: "Signa account",
     async connect({ signal, frame }) {
       signal.throwIfAborted();
+      // A sign-in closed while its exchange finished must not connect the app: the person may
+      // already have chosen another wallet. The connection stays saved for their next tap.
+      const connected = async (connection: unknown) => {
+        signal.throwIfAborted();
+        await input.connected?.(connection);
+      };
       const win = input.window ?? globalThis.window;
       // Before any await: browsers only allow the window inside the click itself.
       const popup =
@@ -89,7 +95,7 @@ export function passkeyOption(input: {
         if (!prepared) {
           const restored = wallet.restoreConnection?.();
           if (restored) {
-            await input.connected?.(restored);
+            await connected(restored);
             return;
           }
           let connection: unknown;
@@ -104,7 +110,7 @@ export function passkeyOption(input: {
                 ? wallet.restoreConnection?.()
                 : null;
             if (raced) {
-              await input.connected?.(raced);
+              await connected(raced);
               return;
             }
             if (code !== "WALLET_REQUEST_REJECTED") throw error;
@@ -114,7 +120,7 @@ export function passkeyOption(input: {
             prepared = await wallet.prepareConnection();
           }
           if (!prepared) {
-            await input.connected?.(connection);
+            await connected(connection);
             return;
           }
         }
@@ -126,7 +132,7 @@ export function passkeyOption(input: {
           prepared.launch({ target: frameName });
           const url = await awaitFrameCallback(win!, element, signal);
           const connection = await wallet.completeConnection(url);
-          await input.connected?.(connection);
+          await connected(connection);
           return;
         }
         if (!popup) {
@@ -142,7 +148,7 @@ export function passkeyOption(input: {
         prepared.launch({ target: popupName });
         const url = await awaitPopupCallback(win!, popup, signal);
         const connection = await wallet.completeConnection(url);
-        await input.connected?.(connection);
+        await connected(connection);
       } finally {
         popup?.close();
       }

@@ -546,4 +546,26 @@ describe("passkeyOption", () => {
     expect(w.launch).not.toHaveBeenCalled();
     expect(p.popup.close).toHaveBeenCalled();
   });
+  test("a sign-in closed while its exchange finishes never connects the app", async () => {
+    const w = wallet(),
+      p = page(),
+      connected = vi.fn();
+    let finish!: (value: { url: string }) => void;
+    w.wallet.completeConnection.mockReturnValue(
+      new Promise((resolve) => (finish = resolve)),
+    );
+    const controller = new AbortController();
+    const connecting = passkeyOption({
+      wallet: () => w.wallet,
+      connected,
+      window: p.win,
+    }).connect({ signal: controller.signal, handoff: () => {}, frame: () => {} });
+    await vi.waitFor(() => expect(w.launch).toHaveBeenCalled());
+    p.callback(url);
+    await vi.waitFor(() => expect(w.wallet.completeConnection).toHaveBeenCalled());
+    controller.abort();
+    finish({ url });
+    await expect(connecting).rejects.toMatchObject({ name: "AbortError" });
+    expect(connected).not.toHaveBeenCalled();
+  });
 });
