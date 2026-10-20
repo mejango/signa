@@ -99,7 +99,7 @@ export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
     const page = site.apiReference?.get(context.req.param("operationId"));
     return page ? context.html(page, 200, REST_DOCS_HEADERS) : context.notFound();
   });
-  app.get("/api/terms.json", (context) =>
+  app.get("/api/:file{terms(?:\\.[0-9a-f]{12})?\\.json}", (context) =>
     context.body(site.apiTerms ?? "{}", 200, { ...REST_DOCS_HEADERS, "Content-Type": "application/json; charset=utf-8" }),
   );
   app.get("/api/docs/:name", (context) => {

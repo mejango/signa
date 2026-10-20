@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, apiTermsPath, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
 import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { mountRestSite, type RestSite } from "../src/rest/site.js";
 import type { JbcenterEnv } from "../src/types.js";
@@ -37,7 +37,7 @@ beforeEach(async () => {
       fetched.push(url.pathname);
       if (failReference) return route.fulfill({ status: 503, body: "unavailable" });
     }
-    if (url.pathname === "/api/terms.json") {
+    if (/^\/api\/terms\.[0-9a-f]{12}\.json$/.test(url.pathname)) {
       fetched.push(url.pathname);
       if (failTerms) return route.fulfill({ status: 503, body: "unavailable" });
     }
@@ -127,6 +127,7 @@ describe("/api endpoint reference", () => {
     await expect.poll(() => shown.count()).toBe(0);
     await page.fill("#endpoint-filter", "");
     expect(await shown.count()).toBe(await page.locator(".endpoint").count());
-    expect(fetched).toEqual(["/api/terms.json", "/api/terms.json", `/api/reference/${operationId}`]);
+    const terms = apiTermsPath(spec);
+    expect(fetched).toEqual([terms, terms, `/api/reference/${operationId}`]);
   });
 });
