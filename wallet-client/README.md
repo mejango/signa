@@ -5,11 +5,11 @@ This is the browser-only slice of the Center client. Bot access and the CLI ship
 full client archive linked from https://juicebox.center/api/docs/client.
 
 ```sh
-npm install @me.jango/center-wallet
+npm install @me.jango/signa
 ```
 
 ```js
-import { createCenterWalletClient } from '@me.jango/center-wallet';
+import { createCenterWalletClient } from '@me.jango/signa';
 const wallet = createCenterWalletClient({
   issuer: 'https://my.juicebox.center', audience: 'https://juicebox.center',
   callbackUri: window.location.origin + '/center/callback',
