@@ -14,6 +14,8 @@ it("keeps every browser bundle within its budget and the SDK on the server", asy
   const result = await build({ ...webBuildOptions, write: false, metafile: true });
   const sizes = Object.fromEntries(result.outputFiles!.map(file =>
     [file.path.split("/").pop()!.replace(/\.js$/, ""), gzipSync(file.contents).length]));
+  // Every emitted file needs its own budget, so a new page or split chunk cannot escape the gate.
+  expect(Object.keys(sizes).sort()).toEqual(Object.keys(budgets).sort());
   for (const [name, budget] of Object.entries(budgets)) expect(sizes[name], name).toBeLessThanOrEqual(budget);
   // The SDK's generated ABI and address tables are server-side; pages get its decoded results.
   const inputs = Object.values(result.metafile!.outputs).flatMap(output => Object.keys(output.inputs));
