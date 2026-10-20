@@ -1,0 +1,231 @@
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { passkeyLabel } from "./passkeyLabel.js";
+import type { ConnectController, ConnectOption } from "../core/controller.js";
+import { connectModalCss } from "./styles.js";
+
+export type JBConnectModalProps = {
+  open: boolean;
+  controller: ConnectController;
+  /** Called for Escape, the backdrop and the cancel button, after the controller is cancelled. */
+  onClose(): void;
+  /** Which option is the passkey account; it renders as the primary button. */
+  passkeyId?: string;
+  /** The primary button's text. Defaults to the platform's prompt: Touch ID, Face ID, Windows Hello, or a passkey. */
+  passkeyLabel?: string;
+  title?: ReactNode;
+  /** Renders a pairing URI (a QR code, a deep link) once an option publishes one. */
+  renderHandoff?(uri: string, option: ConnectOption): ReactNode;
+  /** A mark for an option without an icon. Defaults to the option's initial. */
+  renderIcon?(option: ConnectOption): ReactNode;
+  /** Extra footer actions, laid out on the cancel button's baseline. */
+  footer?: ReactNode;
+  /** App content shown under the wallet tiles while idle, such as mobile wallet links. */
+  children?: ReactNode;
+  className?: string;
+};
+
+export function JBConnectModal(props: JBConnectModalProps) {
+  const { controller, open, onClose, passkeyId = "juicebox-center" } = props;
+  const state = useSyncExternalStore(
+    controller.subscribe,
+    controller.getState,
+    controller.getState,
+  );
+  const dialog = useRef<HTMLDialogElement>(null);
+  // Resolved after mount so server and first client render agree.
+  const [platformLabel, setPlatformLabel] = useState("Continue with a passkey");
+  useEffect(() => {
+    setPlatformLabel(passkeyLabel(navigator.userAgent));
+  }, []);
+  useEffect(() => {
+    // The dialog always renders, so its ref is set before any effect runs.
+    const element = dialog.current!;
+    if (open && !element.open) {
+      element.showModal();
+      element.querySelector<HTMLElement>("h2")?.focus();
+    } else if (!open && element.open) {
+      element.close();
+      // A finished wallet option keeps its pending state so the passkey redirect is not
+      // interrupted; the next open must start clean.
+      controller.cancel();
+    }
+  }, [open, controller]);
+  const cancel = () => {
+    controller.cancel();
+    onClose();
+  };
+  // A framed sign-in: the frame is as tall as the page inside says it is (Signa reports its
+  // height whenever it changes); only the frame's own window is heard. Each report is answered
+  // with this dialog's theme, so the page inside takes the app's colours, font and corners.
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [frameHeight, setFrameHeight] = useState<number>();
+  useEffect(() => {
+    if (!state.frameName) return;
+    setFrameHeight(undefined);
+    const sized = (event: MessageEvent) => {
+      const data = event.data as { type?: unknown; height?: unknown } | null;
+      if (
+        !frame.current?.contentWindow ||
+        event.source !== frame.current.contentWindow ||
+        data?.type !== "juicebox-center:size" ||
+        typeof data.height !== "number" ||
+        !Number.isFinite(data.height)
+      )
+        return;
+      setFrameHeight(Math.min(1200, Math.max(160, Math.ceil(data.height))) + 2);
+      if (dialog.current)
+        frame.current.contentWindow.postMessage(
+          { type: "juicebox-center:theme", theme: themeOf(dialog.current) },
+          // Design tokens only; the page inside checks its framer, this dialog does not learn the issuer.
+          "*",
+        );
+    };
+    window.addEventListener("message", sized);
+    return () => window.removeEventListener("message", sized);
+  }, [state.frameName]);
+  const passkey = controller.options.find((option) => option.id === passkeyId);
+  const wallets = controller.options.filter(
+    (option) => option.id !== passkeyId,
+  );
+  const pending = state.pending
+    ? controller.options.find((option) => option.id === state.pending)
+    : undefined;
+  return (
+    <dialog
+      ref={dialog}
+      className={"jb-connect" + (props.className ? " " + props.className : "")}
+      aria-label={typeof props.title === "string" ? props.title : "Sign in"}
+      onCancel={(event) => {
+        event.preventDefault();
+        cancel();
+      }}
+      onMouseDown={(event) => {
+        // The dialog element receives clicks on its own padding too; only the backdrop cancels.
+        if (event.target !== event.currentTarget) return;
+        const box = event.currentTarget.getBoundingClientRect();
+        if (
+          event.clientX < box.left ||
+          event.clientX > box.right ||
+          event.clientY < box.top ||
+          event.clientY > box.bottom
+        )
+          cancel();
+      }}
+    >
+      <style>{connectModalCss}</style>
+      <h2 tabIndex={-1}>{props.title ?? "Sign in"}</h2>
+      {pending ? (
+        <div role="status" aria-label="Connection">
+          {state.frameName ? (
+            <iframe
+              ref={frame}
+              name={state.frameName}
+              className="jb-connect-frame"
+              title="Signa"
+              allow={`publickey-credentials-get ${state.frameOrigin}; publickey-credentials-create ${state.frameOrigin}`}
+              referrerPolicy="no-referrer"
+              style={frameHeight ? { height: frameHeight } : undefined}
+            />
+          ) : state.handoffUri && props.renderHandoff ? (
+            <div className="jb-connect-handoff">
+              {props.renderHandoff(state.handoffUri, pending)}
+            </div>
+          ) : (
+            <p className="jb-connect-status">
+              {pending === passkey
+                ? "Continuing at Signa…"
+                : `Opening ${pending.name}…`}
+            </p>
+          )}
+        </div>
+      ) : (
+        <>
+          {passkey && (
+            <>
+              <button
+                type="button"
+                className="jb-connect-primary"
+                disabled={passkey.disabled}
+                onClick={() => void controller.choose(passkey.id)}
+              >
+                {props.passkeyLabel ?? platformLabel}
+              </button>
+              <p className="jb-connect-powered">Powered by Signa</p>
+            </>
+          )}
+          {wallets.length > 0 && (
+            <>
+              <p className="jb-connect-divider">
+                {passkey ? "or connect a wallet" : "Connect a wallet"}
+              </p>
+              <div className="jb-connect-tiles">
+                {wallets.map((option) => (
+                  <button
+                    type="button"
+                    key={option.id}
+                    className="jb-connect-tile"
+                    title={option.name}
+                    aria-label={option.name}
+                    disabled={option.disabled}
+                    onClick={() => void controller.choose(option.id)}
+                  >
+                    {option.icon ? (
+                      <img src={option.icon} alt="" />
+                    ) : (
+                      (props.renderIcon?.(option) ?? (
+                        <span aria-hidden="true">
+                          {option.name.slice(0, 1)}
+                        </span>
+                      ))
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {props.children}
+        </>
+      )}
+      {state.error && (
+        <p role="alert" className="jb-connect-error">
+          {state.error}
+        </p>
+      )}
+      <div className="jb-connect-footer">
+        {props.footer}
+        <button type="button" className="jb-connect-text" onClick={cancel}>
+          Cancel
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
+/** The dialog's resolved theme, as the framed Signa page understands it. */
+export function themeOf(dialog: HTMLElement): Record<string, string> {
+  const style = getComputedStyle(dialog);
+  const token = (name: string) => style.getPropertyValue(name).trim();
+  const theme: Record<string, string> = {};
+  for (const [key, name] of [
+    ["background", "--jb-connect-bg"],
+    ["foreground", "--jb-connect-fg"],
+    ["muted", "--jb-connect-muted"],
+    ["line", "--jb-connect-line"],
+    ["accent", "--jb-connect-accent"],
+    ["accentForeground", "--jb-connect-accent-fg"],
+    ["radius", "--jb-connect-radius"],
+    ["inset", "--jb-connect-pad"],
+  ] as const) {
+    const value = token(name);
+    if (value) theme[key] = value;
+  }
+  const font = style.fontFamily;
+  if (font) theme.font = font;
+  return theme;
+}

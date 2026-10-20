@@ -1,6 +1,8 @@
-import { decodePayFailure, type PayFailureReason } from "@bananapus/nana-sdk-core/v6";
+import { decodePayFailure, type PayFailure, type PayFailureReason } from "@bananapus/nana-sdk-core/v6";
 import { encodeAbiParameters, keccak256, toFunctionSelector, type Hex } from "viem";
-import type { PayFailure } from "../userOperations/types.js";
+import type { PayFailure as ServedPayFailure } from "../userOperations/types.js";
+
+export type { PayFailure };
 
 const amount = (value: unknown) => value === undefined
   || (typeof value === "string" && /^(0|[1-9][0-9]{0,77})$/.test(value) && BigInt(value) < 2n ** 256n);
@@ -40,17 +42,16 @@ function sdkPayFailures(reason: PayFailureReason, received?: bigint, minimum?: b
   });
 }
 /** A served payment failure reason, kept only when the SDK's decoder gives exactly it: a known reason,
- * that reason's own sentence for these amounts, and the shortfall's amounts as uint256 integers. */
+ * that reason's own sentence for these amounts, and the shortfall's amounts as uint256 integers. The
+ * result is the decoder's own `PayFailure`, so it carries the SDK's `zeroFill` and `adjustable` for the
+ * shortfall (the served payload never does) and goes straight to helpers such as `payRetrySlippageBps`. */
 export function payFailureOf(value: unknown): PayFailure | undefined {
   if (!value || typeof value !== "object") return undefined;
-  const { reason, received, minimum, message, ...rest } = value as Record<string, unknown>;
+  const { reason, received, minimum, message, ...rest } = value as Partial<ServedPayFailure> & Record<string, unknown>;
   if (Object.keys(rest).length || typeof reason !== "string" || !Object.hasOwn(payFailureReverts, reason)
     || typeof message !== "string" || !amount(received) || !amount(minimum)) return undefined;
-  const settled = received === undefined ? undefined : BigInt(received as string);
-  const floor = minimum === undefined ? undefined : BigInt(minimum as string);
-  const canonical = sdkPayFailures(reason as PayFailureReason, settled, floor).some(failure => failure
-    && failure.reason === reason && failure.message === message && failure.received === settled && failure.minimum === floor);
-  if (!canonical) return undefined;
-  return { reason, message, ...(received === undefined ? {} : { received: received as string }),
-    ...(minimum === undefined ? {} : { minimum: minimum as string }) };
+  const settled = received === undefined ? undefined : BigInt(received);
+  const floor = minimum === undefined ? undefined : BigInt(minimum);
+  return sdkPayFailures(reason as PayFailureReason, settled, floor).find(failure => failure
+    && failure.reason === reason && failure.message === message && failure.received === settled && failure.minimum === floor) ?? undefined;
 }

@@ -4,7 +4,7 @@ import {
   REST_AUTH_HEADERS as H, validateAudience, type BotProof, type RequestClaims,
 } from "../auth/signatures.js";
 import { isCanonicalGrantScopes, type BotScope } from "../auth/shared.js";
-import type { PayFailure } from "../userOperations/types.js";
+import type { PayFailure } from "./payFailure.js";
 
 export { accountIdFor, newRequestNonce, REST_AUTH_HEADERS } from "../auth/signatures.js";
 export { isCanonicalGrantScopes } from "../auth/shared.js";

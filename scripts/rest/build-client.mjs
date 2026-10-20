@@ -10,8 +10,9 @@ const destination = join(root, '.generated/rest/client');
 await mkdir(destination, { recursive: true });
 await build({ absWorkingDir: root, entryPoints: ['src/rest/client/index.ts'], outfile: join(destination, 'index.js'),
   bundle: true, platform: 'browser', format: 'esm', target: 'es2022', external: ['viem', 'viem/*'] });
-const types = await rollup({ input: join(root, 'dist/src/rest/client/index.d.ts'), plugins: [dts()],
-  external: id => !id.startsWith('.') && !id.startsWith('/') });
+// The SDK is bundled into the JavaScript, so its types are inlined too: the packages never depend on it.
+const external = id => !id.startsWith('.') && !id.startsWith('/') && !id.startsWith('@bananapus/nana-sdk-core');
+const types = await rollup({ input: join(root, 'dist/src/rest/client/index.d.ts'), plugins: [dts({ respectExternal: true, tsconfig: join(root, 'tsconfig.json') })], external });
 await types.write({ file: join(destination, 'index.d.ts'), format: 'es' });
 await types.close();
 for (const name of ['package.json', 'README.md']) await copyFile(join(root, 'client', name), join(destination, name));
@@ -29,9 +30,28 @@ const walletDestination = join(root, '.generated/rest/wallet-client');
 await mkdir(walletDestination, { recursive: true });
 await build({ absWorkingDir: root, entryPoints: ['src/rest/client/wallet-package.ts'], outfile: join(walletDestination, 'index.js'),
   bundle: true, platform: 'browser', format: 'esm', target: 'es2022', external: ['viem', 'viem/*'] });
-const walletTypes = await rollup({ input: join(root, 'dist/src/rest/client/wallet-package.d.ts'), plugins: [dts()],
-  external: id => !id.startsWith('.') && !id.startsWith('/') });
+const walletTypes = await rollup({ input: join(root, 'dist/src/rest/client/wallet-package.d.ts'), plugins: [dts({ respectExternal: true, tsconfig: join(root, 'tsconfig.json') })], external });
 await walletTypes.write({ file: join(walletDestination, 'index.d.ts'), format: 'es' });
 await walletTypes.close();
 for (const name of ['package.json', 'README.md']) await copyFile(join(root, 'wallet-client', name), join(walletDestination, name));
 console.log('Wallet package:', walletDestination);
+// The connect subpaths `/core`, `/wagmi` and `/react`. `/core` re-exports the root entry from
+// `../index.js`, so an app importing both loads one copy; React and wagmi stay the app's own
+// optional peers, and the root entry never imports them.
+const connect = ['core', 'wagmi', 'react'];
+const rootEntry = /\/src\/rest\/client\/wallet-package\.js$/;
+const rootImport = { name: 'root-entry', setup(builder) {
+  builder.onResolve({ filter: rootEntry }, () => ({ path: '../index.js', external: true }));
+} };
+await build({ absWorkingDir: root, entryPoints: Object.fromEntries(connect.map(name => [`${name}/index`, `wallet-client/src/${name}/index.ts`])),
+  outdir: walletDestination, bundle: true, platform: 'browser', format: 'esm', target: 'es2022', jsx: 'automatic',
+  external: ['viem', 'viem/*', 'react', 'react/*', 'wagmi', 'wagmi/*'], plugins: [rootImport],
+  // The modal and the connector are client boundaries for React server frameworks.
+  banner: { js: '"use client";' } });
+const connectTypes = await rollup({ input: Object.fromEntries(connect.map(name => [`${name}/index`, join(root, `wallet-client/src/${name}/index.ts`)])),
+  plugins: [{ name: 'root-entry', resolveId: source => rootEntry.test(source) ? { id: '../index.js', external: true } : null },
+    dts({ tsconfig: join(root, 'wallet-client/tsconfig.json') })],
+  external: id => !id.startsWith('.') && !id.startsWith('/') });
+await connectTypes.write({ dir: walletDestination, format: 'es', chunkFileNames: 'core/[name].d.ts' });
+await connectTypes.close();
+console.log('Connect subpaths:', connect.join(', '));

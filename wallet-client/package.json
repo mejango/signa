@@ -1,15 +1,22 @@
 {
   "name": "@me.jango/signa",
-  "version": "0.3.8",
-  "description": "Connect a Juicebox Center account to your app and review passkey payments",
+  "version": "0.4.0",
+  "description": "Sign in to an app with a Signa passkey account or an external wallet, and review passkey payments",
   "repository": { "type": "git", "url": "https://github.com/mejango/signa.git", "directory": "wallet-client" },
   "type": "module",
   "sideEffects": false,
   "main": "./index.js",
   "types": "./index.d.ts",
-  "exports": { ".": { "types": "./index.d.ts", "import": "./index.js" } },
-  "files": ["index.js", "index.d.ts", "README.md"],
+  "exports": {
+    ".": { "types": "./index.d.ts", "import": "./index.js" },
+    "./core": { "types": "./core/index.d.ts", "import": "./core/index.js" },
+    "./wagmi": { "types": "./wagmi/index.d.ts", "import": "./wagmi/index.js" },
+    "./react": { "types": "./react/index.d.ts", "import": "./react/index.js" }
+  },
+  "files": ["index.js", "index.d.ts", "core/", "wagmi/", "react/", "README.md"],
   "publishConfig": { "access": "public" },
   "engines": { "node": ">=22" },
-  "dependencies": { "viem": "^2.37.5" }
+  "dependencies": { "viem": "^2.37.5" },
+  "peerDependencies": { "react": "^18.3.1 || ^19.0.0", "wagmi": "^2.10.2 || ^3.0.0" },
+  "peerDependenciesMeta": { "react": { "optional": true }, "wagmi": { "optional": true } }
 }

@@ -1,13 +1,14 @@
 import { sha256, stringToHex, type Hex } from 'viem';
 import { RestClientError, newRequestNonce } from './index.js';
-import { payFailureOf } from './payFailure.js';
+import { payFailureOf, type PayFailure } from './payFailure.js';
+import { isSettledPayment } from './paymentStates.js';
 import type { CenterClient } from './center.js';
 import { assertReviewedOperation, type PreparedUserOperation, type SmartWalletPlan } from './smartAccounts.js';
 import type { CenterWalletStorage } from './wallet.js';
 import { decodeSafe7579PasskeyOwnerSignature, safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { normalizeUserOperation, userOperationCommitment, userOperationMaximumCost, uoCanonical } from '../userOperations/codec.js';
 import { recognizeWalletV6UsdcPayment, type WalletV6UsdcPayment } from '../userOperations/semantics.js';
-import type { PayFailure, UserOperationObservation } from '../userOperations/types.js';
+import type { UserOperationObservation } from '../userOperations/types.js';
 import type { WalletAppGrant } from '../wallet/appGrants.js';
 import type { WalletPaymentReviewPublic, WalletPaymentAppPublic } from '../wallet/paymentPublic.js';
 import { validateWalletHandoffToken } from '../wallet/sharedHandoff.js';
@@ -38,7 +39,9 @@ export interface CenterWalletPaymentStatus {
   /** An observed outer transaction identifier, never an alias for operationHash. */
   transactionHash?: Hex;
   observation?: UserOperationObservation;
-  /** Why this payment reverted, when its trace says; shown only while it stands reverted. Advisory: a changed minimum needs a fresh preparation and review. */
+  /** Why this payment reverted, when its trace says; shown only while it stands reverted. The SDK's own
+   * `PayFailure` (bigint amounts, with `zeroFill` and `adjustable` for a shortfall); `observation.payFailure`
+   * keeps the served form. Advisory: a changed minimum needs a fresh preparation and review. */
   payFailure?: PayFailure;
 }
 /** Internal composition used by wallet.payments(). No owner or app private key crosses this seam. */
@@ -75,7 +78,7 @@ const reviewPath = '/api/v1/wallet/payment-reviews';
 const reviewIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const paymentFields = ['kind', 'chainId', 'account', 'token', 'terminal', 'projectId', 'amount', 'beneficiary', 'minimumReturnedTokens', 'memo', 'metadata'] as const;
 const states = ['reviewing', 'approved', 'submitting', 'pending', 'confirming', 'paid', 'reverted', 'cancelled', 'unknown', 'expired', 'refused'];
-const terminal = (status: string) => ['paid', 'reverted', 'cancelled', 'expired', 'refused'].includes(status);
+const terminal = isSettledPayment;
 const hex32 = (value: unknown): value is Hex => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value);
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const integer = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
@@ -220,17 +223,18 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
   function status(value: Journal): CenterWalletPaymentStatus {
     // A served reason reaches the app only in its exact shape, and only while this payment stands
     // reverted: an unknown or changed outcome drops it, on the status and inside the observation.
-    const payFailure = value.status === 'reverted' && value.observation?.state === 'reverted'
-      ? payFailureOf(value.observation.payFailure) : undefined;
+    const served = value.status === 'reverted' && value.observation?.state === 'reverted' ? value.observation.payFailure : undefined;
+    const payFailure = payFailureOf(served);
     const { payFailure: _served, ...observed } = value.observation ?? {};
-    const observation = value.observation && { ...observed, ...(payFailure ? { payFailure } : {}) } as UserOperationObservation;
-    return snapshot({ status: value.status, accountId: value.grant.accountId, chainId: 8453, operationId: value.operation.id,
+    const observation = value.observation && { ...observed, ...(payFailure ? { payFailure: served } : {}) } as UserOperationObservation;
+    // The decoded reason carries bigints, so it joins after the JSON copy.
+    const copy = snapshot<CenterWalletPaymentStatus>({ status: value.status, accountId: value.grant.accountId, chainId: 8453, operationId: value.operation.id,
       operationHash: value.operation.operationHash, reviewId: value.review?.id ?? null,
       approvalUrl: value.review ? issuer + '/wallet/payment?review=' + value.review.id : null,
       expiresAtMs: value.review?.expiresAtMs ?? value.operation.expiresAt, expectedPayment: value.expectedPayment,
       ...(observation ? { observation,
-        ...(hex32(observation.transactionHash) ? { transactionHash: observation.transactionHash } : {}) } : {}),
-      ...(payFailure ? { payFailure } : {}) });
+        ...(hex32(observation.transactionHash) ? { transactionHash: observation.transactionHash } : {}) } : {}) });
+    return payFailure ? { ...copy, payFailure } : copy;
   }
   function receiveView(input: unknown, saved: Saved, appView: boolean): Saved {
     const reviewed = checkView(input, saved.value, appView);
@@ -407,7 +411,9 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
     try {
       const history = existing === null ? [] : JSON.parse(existing);
       if (!Array.isArray(history)) throw new Error();
-      const receipt = { ...status(saved.value), ...(!settled ? { status: 'unknown', archiveReason: unsignedWindowElapsed ? 'no-local-submission-recorded' : 'grant-expired' } : {}),
+      // The archive is JSON: it keeps the served reason inside the observation, not the decoded one.
+      const { payFailure: _decoded, ...archived } = status(saved.value);
+      const receipt = { ...archived, ...(!settled ? { status: 'unknown', archiveReason: unsignedWindowElapsed ? 'no-local-submission-recorded' : 'grant-expired' } : {}),
         issuer, audience, callbackUri, archivedAtMs, grantId: saved.value.grant.id, grantIncarnation: saved.value.grant.incarnation,
         planId: saved.value.plan.id, planCommitment: saved.value.plan.commitment, operationCommitment: saved.value.operation.commitment,
         reviewState: saved.value.state, reviewKey: saved.value.reviewKey, submissionKey: saved.value.submissionKey,

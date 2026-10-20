@@ -26,7 +26,7 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
     await writeFile(join(directory, ".generated/rest/removed-client.tgz"), "obsolete");
     await writeFile(join(directory, ".generated/checks/retained.json"), "{}");
 
-    await execute("npm", ["run", "build"], { cwd: directory, timeout: 75_000, maxBuffer: 1024 * 1024 });
+    await execute("npm", ["run", "build"], { cwd: directory, timeout: 110_000, maxBuffer: 1024 * 1024 });
 
     for (const name of ["dist/src/removed.js", "dist/src/db/migrations/999_removed.sql", ".generated/rest/removed-client.tgz",
       "dist/.generated/rest/removed-client.tgz", "dist/test", "dist/scripts"])
@@ -45,6 +45,9 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
       import { CenterClient } from './.generated/rest/client/index.js';
       import { connect } from './.generated/rest/client/node.js';
       import { createCenterWalletClient } from './.generated/rest/wallet-client/index.js';
+      import * as core from './.generated/rest/wallet-client/core/index.js';
+      import { centerAccountConnector } from './.generated/rest/wallet-client/wagmi/index.js';
+      import { JBConnectModal } from './.generated/rest/wallet-client/react/index.js';
       const assets = await readRestAssets();
       for (const key of ['accountsScript', 'walletScript', 'walletPaymentScript', 'walletSignupScript', 'walletRecoveryScript', 'walletDeviceScript', 'docsScript'])
         assert(assets[key].length > 0, key);
@@ -53,10 +56,13 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
       assert.equal(typeof CenterClient, 'function');
       assert.equal(typeof connect, 'function');
       assert.equal(typeof createCenterWalletClient, 'function');
+      // /core re-exports the root entry instead of bundling a second copy.
+      assert.equal(core.createCenterWalletClient, createCenterWalletClient);
+      for (const value of [core.passkeyOption, centerAccountConnector, JBConnectModal]) assert.equal(typeof value, 'function');
       console.log('assets and client ready');
     `], { cwd: directory, timeout: 15_000, maxBuffer: 1024 * 1024 });
     expect(smoke.stdout.trim()).toBe("assets and client ready");
     const cli = await execute(process.execPath, [".generated/rest/client/cli.mjs", "--help"], { cwd: directory, timeout: 15_000 });
     expect(cli.stdout).toContain("Install the Center client package");
   } finally { await rm(directory, { recursive: true, force: true }); }
-}, 120_000);
+}, 150_000);

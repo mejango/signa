@@ -27,7 +27,8 @@ Guide: https://juicebox.center/api/docs/quickstart
 Client workflows: https://juicebox.center/api/docs/client
 
 Apps that only connect a passkey account and review payments should use the smaller npm package
-`@me.jango/signa` (or the Juicebox SDK's `@bananapus/nana-sdk-connect`, which wraps it).
+`@me.jango/signa`. Its `/core`, `/wagmi` and `/react` subpaths carry the sign-in step that used to
+ship as `@bananapus/nana-sdk-connect`.
 
 The experimental `createCenterWalletClient` export connects an app to an explicitly
 configured Center passkey service. It requires fixed `issuer`, `audience` and exact
