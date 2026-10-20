@@ -13,13 +13,18 @@ function pays(callData: Hex): boolean {
   });
 }
 
+// ponytail: owned here until the SDK's own sentence for a zero shortfall ships; then drop it.
+const NO_TOKENS = "This payment would get no tokens, so lowering your minimum will not help.";
+
 /** Why revert data reverted a payment, from the SDK's table: a fixed reason and sentence, with the
- * amounts as decimal strings. Only revert data is read, so no node text or URL can reach it. */
+ * amounts as decimal strings. Only raw revert data is read, never node text, so the SDK takes amounts
+ * from the custom error's own bytes and an `Error(string)` naming one decodes to nothing. A payment
+ * that would get no tokens never suggests lowering the minimum. */
 export function payFailureOf(revertData: unknown): PayFailure | undefined {
   if (typeof revertData !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(revertData)) return undefined;
   const failure = decodePayFailure(revertData);
   if (!failure) return undefined;
-  return { reason: failure.reason, message: failure.message,
+  return { reason: failure.reason, message: failure.received === 0n ? NO_TOKENS : failure.message,
     ...(failure.received === undefined ? {} : { received: failure.received.toString() }),
     ...(failure.minimum === undefined ? {} : { minimum: failure.minimum.toString() }) };
 }

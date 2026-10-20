@@ -30,6 +30,14 @@ describe("payment failure reasons", () => {
     // Node text quoting a revert is never read: only exact revert data counts.
     expect(payFailureOf(`execution reverted ${underMin} https://node.example/key`)).toBeUndefined();
     expect(payFailureOf({ data: underMin })).toBeUndefined();
+    // An Error(string) that names or quotes the terminal's error is text, not the error.
+    const said = (text: string) => encodeFunctionData({ abi: parseAbi(["function Error(string)"]), functionName: "Error", args: [text] });
+    expect(payFailureOf(said(`JBMultiTerminal_UnderMin(812, 900) ${underMin}`))).toBeUndefined();
+    // Nothing to receive is never a minimum to lower.
+    const none = payFailureOf(`0x6b2bb382${encodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], [0n, 900n]).slice(2)}`);
+    expect(none).toMatchObject({ reason: "TERMINAL_UNDER_MIN", received: "0", minimum: "900" });
+    expect(none!.message).not.toMatch(/lower your minimum/i);
+    expect(clientPayFailureOf(none)).toEqual(none);
   });
 
   it("simulates a refused payment's calls from the account and reads the failing one", async () => {
