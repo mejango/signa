@@ -3,7 +3,8 @@ import { defaultPasskeyName } from './passkeyName.js';
 import { base } from './walletBase.js';
 import { getAddress, hashTypedData, isAddress, type Address, type TypedDataDefinition } from 'viem';
 import type { WalletRecoveryView } from '../wallet/recoveryService.js';
-import { readWalletRecoveryKit, recoveryAccountFromPhrase, type WalletRecoveryKit, type WalletRecoverySecret } from './walletRecoveryKit.js';
+import type { WalletRecoveryKit, WalletRecoverySecret } from './walletRecoveryKit.js';
+import { loadRecoveryKit as loadKit, preloadRecoveryKit } from './walletRecoveryKitLoader.js';
 import { assertWalletRecoveryRotationReview } from './walletRecoveryReview.js';
 
 type Ethereum = { request(input: { method: string; params?: unknown[] }): Promise<unknown> };
@@ -168,9 +169,9 @@ async function signBackup(document: TypedDataDefinition, owner: string) {
   let signature: unknown;
   if (kitMode()) {
     // After a reload the password field is the only place the backup can come from mid-recovery.
-    if (method() === 'password') loadPassword();
+    if (method() === 'password') await loadPassword();
     if (!secret) throw new Error('Open your backup file or enter your backup password again.');
-    signature = await recoveryAccountFromPhrase(secret.mnemonic, getAddress(owner)).signTypedData(document);
+    signature = await (await loadKit()).recoveryAccountFromPhrase(secret.mnemonic, getAddress(owner)).signTypedData(document);
   } else signature = await provider().request({ method: 'eth_signTypedData_v4', params: [await recoveryOwner(owner),
     JSON.stringify(document, (_key, value) => typeof value === 'bigint' ? value.toString() : value)] });
   if (typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature)) throw new Error('The recovery owner signature is unavailable.');
@@ -241,7 +242,7 @@ async function resumeRecovery() {
   const expectedWallet = view?.walletAddress ?? kit?.walletAddress ?? wallet.value.trim();
   if (!isAddress(expectedWallet)) throw new Error('Enter the account address or open its backup file.');
   selectedWallet = getAddress(expectedWallet);
-  if (method() === 'password') loadPassword();
+  if (method() === 'password') await loadPassword();
   const owner = kitMode() ? secret?.recoveryOwner : await recoveryOwner(view?.recoveryOwner);
   if (!owner) throw new Error('Open your backup file or enter your backup password again.');
   const begun = await request('resume/begin', { recoveryId }), challenge = begun.challenge, document = challenge.document as TypedDocument, value = document.message;
@@ -264,7 +265,7 @@ async function resumeRecovery() {
 }
 form.addEventListener('submit', event => { event.preventDefault(); void run(async () => {
   if (reference.value || pending) throw new Error('Resume or check the original recovery before starting another.');
-  if (method() === 'password') loadPassword();
+  if (method() === 'password') await loadPassword();
   const address = wallet.value.trim(); if (!isAddress(address)) throw new Error(method() === 'kit' ? 'Open your backup file first.' : 'Enter the account address. It is in your backup file.');
   if (kitMode() && !secret) throw new Error('Open your backup file or enter your backup password first.');
   if (kit && !sameAddress(kit.walletAddress, address)) throw new Error('Use the account address in your backup file.');
@@ -278,17 +279,18 @@ el('recovery-method').addEventListener('change', () => { secret = null; kit = nu
 el<HTMLInputElement>('recovery-file').addEventListener('change', event => { void run(async () => {
   const input = event.target as HTMLInputElement, file = input.files?.[0]; input.value = '';
   if (!file || file.size > 8192) throw new Error('Choose the backup file you saved for this account.');
-  const value = readWalletRecoveryKit(await file.text(), view ? { network: 'base', chainId: 8453, walletAddress: view.walletAddress,
+  const value = (await loadKit()).readWalletRecoveryKit(await file.text(), view ? { network: 'base', chainId: 8453, walletAddress: view.walletAddress,
     recoveryOwner: view.recoveryOwner, initializerHash: view.initializerHash } : undefined);
   kit = value; secret = { mnemonic: value.mnemonic, recoveryOwner: value.recoveryOwner }; wallet.value = value.walletAddress;
   words().value = ''; el('recovery-kit-status').textContent = 'Backup file loaded in this tab.';
   message('Backup file loaded. Continue the original recovery, or name your replacement passkey.');
 }); });
 /** The backup password is read at the moment it is needed and never kept in the field. */
-function loadPassword() {
+async function loadPassword() {
+  const lib = await loadKit();
   const mnemonic = words().value; if (!mnemonic.trim()) { if (secret) return; throw new Error('Enter your backup password.'); }
   words().value = '';
-  const account = recoveryAccountFromPhrase(mnemonic, view?.recoveryOwner); kit = null;
+  const account = lib.recoveryAccountFromPhrase(mnemonic, view?.recoveryOwner); kit = null;
   secret = { mnemonic: mnemonic.trim().toLowerCase().replace(/\s+/g, ' '), recoveryOwner: account.address };
 }
 next.addEventListener('click', () => { void run(advance); }); check.addEventListener('click', () => { void run(observe); });
@@ -307,3 +309,4 @@ void run(async () => {
   const locator = sessionStorage.getItem(locatorKey); if (locator && uuid.test(locator)) reference.value = locator;
   await observe();
 });
+preloadRecoveryKit();

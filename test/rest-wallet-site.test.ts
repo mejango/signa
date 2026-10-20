@@ -157,7 +157,11 @@ describe('dedicated Center wallet HTTP journey',()=>{
     expect((await app.fetch(new Request(origin+'/wallet/assets/wallet.css'))).status).toBe(200);
   });
   it('serves the wallet at the host root when mounted without a path prefix, and keeps /wallet links working',async()=>{
-    const {app}=setup({ basePath: '', signup: {} as never, signupBrowserScript: '/* signup */' });
+    const {app}=setup({ basePath: '', signup: {} as never, signupBrowserScript: '/* signup */', recoveryKitScript: '/* kit */' });
+    // The signup page names the backup kit it loads on demand by its hashed, immutable URL.
+    const kit=(await (await app.fetch(new Request(origin+'/create'))).text()).match(/<meta name="module:wallet-recovery-kit" content="(\/assets\/wallet-recovery-kit\.[0-9a-f]{12}\.js)">/)?.[1];
+    const kitResponse=await app.fetch(new Request(origin+kit));
+    expect(await kitResponse.text()).toBe('/* kit */');expect(kitResponse.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     const root=await app.fetch(new Request(origin+'/'));
     expect(root.status).toBe(200);expect(await root.text()).toContain('>Signa in</button>');
     expect(await (await app.fetch(new Request(origin+'/'))).text()).toContain('content=""');

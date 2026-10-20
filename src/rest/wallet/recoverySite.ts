@@ -1,4 +1,4 @@
-import { mountAssets } from '../web/assets.js';
+import { mountAssets, type AssetNames } from '../web/assets.js';
 import type { Context, Hono } from 'hono';
 import type { Address, Hex } from 'viem';
 import { RestError } from '../core.js';
@@ -11,6 +11,8 @@ import { assertWalletHttpHost, assertWalletHttpRequest, assertWalletCsrf, readWa
 
 export interface WalletRecoverySiteOptions {
   origin: string; browserScript: string;
+  /** Assets the wallet site serves for this page too (the backup kit). */
+  assets?: AssetNames;
   /** Mount path of the wallet pages on this host ('' on the dedicated host). */
   basePath?: string;
   recovery: Pick<ReturnType<typeof createLocalWalletRecovery>, 'begin' | 'status' | 'register' | 'prove' | 'prepareRotation'
@@ -51,7 +53,7 @@ export function mountWalletRecovery(app: Hono, options: WalletRecoverySiteOption
     c.header('Set-Cookie', walletCookie(walletRecoveryCookie, token, Math.max(1, Math.min(86400, Math.floor((view.expiresAtMs - Date.now()) / 1000)))), { append: true });
     return { view, csrfToken: walletCsrfToken(token), ...(replayed === undefined ? {} : { replayed }) };
   }
-  const assets = mountAssets(app, base, { 'wallet-recovery.js': options.browserScript, 'wallet-recovery.css': walletRecoveryCss() });
+  const assets = { ...options.assets, ...mountAssets(app, base, { 'wallet-recovery.js': options.browserScript, 'wallet-recovery.css': walletRecoveryCss() }) };
   app.get(`${base}/recover`, c => c.html(walletRecoveryPage({ base, assets })));
   app.get(`${base}/recovery/state`, async c => {
     const token = readWalletCookie(c.req.raw, walletRecoveryCookie);

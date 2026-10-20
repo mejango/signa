@@ -3,7 +3,7 @@ import { BRAND_ICON } from '../../branding.js';
 import { walletCss } from './walletPage.js';
 export function walletSignupPage(options: { base?: string; framed?: boolean; assets?: AssetNames } = {}) {
   const base = options.base ?? '/wallet';
-  return `<!doctype html><html lang="en"${options.framed ? ' class="framed"' : ''}><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+  return `<!doctype html><html lang="en"${options.framed ? ' class="framed"' : ''}><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><meta name="module:wallet-recovery-kit" content="${assetHref(base, 'wallet-recovery-kit.js', options.assets)}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>Your account | Signa</title>
 <link rel="stylesheet" href="${assetHref(base, 'wallet-signup.css', options.assets)}"><script type="module" src="${assetHref(base, 'wallet-signup.js', options.assets)}"></script></head>
 <body><main><a class="brand" id="wallet-back" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a>

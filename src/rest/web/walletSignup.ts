@@ -4,8 +4,10 @@ import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'vi
 import type { createLocalWalletSignup } from '../wallet/signup.js';
 import { base } from './walletBase.js';
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from './walletFramed.js';
-import { createWalletRecoverySecret, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit,
-  type WalletRecoveryKitIdentity, type WalletRecoverySecret } from './walletRecoveryKit.js';
+import type { WalletRecoveryKitIdentity, WalletRecoverySecret } from './walletRecoveryKit.js';
+import { loadRecoveryKit as loadKit, loadedRecoveryKit, preloadRecoveryKit } from './walletRecoveryKitLoader.js';
+/** A backup secret only exists once the kit made or read it, so the kit is loaded by the time a backup is saved. */
+const loadedKit = () => { const kit = loadedRecoveryKit(); if (!kit) throw new Error('Your backup is still loading. Try again.'); return kit; };
 
 type Signup = ReturnType<typeof createLocalWalletSignup>;
 type View = Awaited<ReturnType<Signup['status']>>;
@@ -283,7 +285,7 @@ async function advance() {
     let backupSignature: unknown;
     if (kitMode()) {
       if (!recoverySecret) throw new Error('Restore your backup password or saved backup file before continuing this signup.');
-      backupSignature = await recoveryAccountFromPhrase(recoverySecret.mnemonic, view.recoveryOwner).signTypedData(document);
+      backupSignature = await (await loadKit()).recoveryAccountFromPhrase(recoverySecret.mnemonic, view.recoveryOwner).signTypedData(document);
     } else {
       const owner = await recoveryOwner(view.recoveryOwner);
       backupSignature = await provider().request({ method: 'eth_signTypedData_v4', params: [owner, JSON.stringify(document)] });
@@ -328,7 +330,7 @@ async function session(): Promise<boolean> {
 }
 form.addEventListener('submit', event => { event.preventDefault(); void run(async () => {
   const passkeyName = name.value.trim(), selected = choice();
-  if (selected === 'kit' && !recoverySecret) recoverySecret = createWalletRecoverySecret();
+  if (selected === 'kit' && !recoverySecret) recoverySecret = (await loadKit()).createWalletRecoverySecret();
   const owner = selected === 'wallet' ? await recoveryOwner() : recoverySecret!.recoveryOwner;
   await send('begin', { recoveryOwner: owner, passkeyName });
   remember(view!.enrollmentId, selected);
@@ -339,7 +341,7 @@ el('recovery-method').addEventListener('change', render);
 const backupFileName = 'signa-account-backup.json';
 el('recovery-download').addEventListener('click', () => { void run(async () => {
   if (!recoverySecret) throw new Error('Restore your backup password first.');
-  const encoded = serializeWalletRecoveryKit(recoverySecret, kitIdentity());
+  const encoded = loadedKit().serializeWalletRecoveryKit(recoverySecret, kitIdentity());
   const url = URL.createObjectURL(new Blob([encoded], { type: 'application/json' })); downloadUrls.add(url);
   const link = document.createElement('a'); link.href = url; link.download = backupFileName;
   document.body.append(link); link.click(); link.remove();
@@ -349,7 +351,7 @@ el('recovery-download').addEventListener('click', () => { void run(async () => {
 }); });
 el('recovery-share').addEventListener('click', () => { void run(async () => {
   if (!recoverySecret) throw new Error('Restore your backup password first.');
-  const file = new File([serializeWalletRecoveryKit(recoverySecret, kitIdentity())], backupFileName, { type: 'application/json' });
+  const file = new File([loadedKit().serializeWalletRecoveryKit(recoverySecret, kitIdentity())], backupFileName, { type: 'application/json' });
   if (!navigator.canShare({ files: [file] })) throw new Error('This device cannot share files. Save the backup file instead.');
   try { await navigator.share({ files: [file], title: 'Signa account backup' }); }
   catch (error) {
@@ -371,7 +373,7 @@ el('recovery-file').addEventListener('change', () => { void run(async () => {
   const input = el<HTMLInputElement>('recovery-file'), file = input.files?.[0];
   if (!file || file.size > 8192) throw new Error('Choose a valid backup file.');
   try {
-    const kit = readWalletRecoveryKit(await file.text(), kitIdentity());
+    const kit = (await loadKit()).readWalletRecoveryKit(await file.text(), kitIdentity());
     recoverySecret = { mnemonic: kit.mnemonic, recoveryOwner: kit.recoveryOwner };
     kitSavedWallet = view!.walletAddress!;
     message('Backup file verified. You can continue.');
@@ -381,7 +383,7 @@ el('recovery-restore').addEventListener('click', () => { void run(async () => {
   const input = el<HTMLTextAreaElement>('recovery-words');
   const mnemonic = input.value.trim().toLowerCase().replace(/\s+/g, ' ');
   try {
-    const owner = recoveryAccountFromPhrase(mnemonic, kitIdentity().recoveryOwner);
+    const owner = (await loadKit()).recoveryAccountFromPhrase(mnemonic, kitIdentity().recoveryOwner);
     recoverySecret = { mnemonic, recoveryOwner: owner.address }; kitSavedWallet = null;
     message('Backup password restored. Save the complete backup file before continuing.');
   } finally { input.value = ''; }
@@ -507,3 +509,4 @@ void run(async () => {
   }
   await observe();
 });
+preloadRecoveryKit();

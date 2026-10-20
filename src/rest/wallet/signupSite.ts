@@ -1,4 +1,4 @@
-import { mountAssets } from '../web/assets.js';
+import { mountAssets, type AssetNames } from '../web/assets.js';
 import type { Hono, Context } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { Address, Hex } from 'viem';
@@ -13,6 +13,8 @@ import { assertWalletHttpHost, assertWalletHttpRequest, assertWalletCsrf, readWa
 
 export interface WalletSignupSiteOptions {
   origin: string; browserScript: string;
+  /** Assets the wallet site serves for this page too (the backup kit). */
+  assets?: AssetNames;
   /** Mount path of the wallet pages on this host ('' on the dedicated host). */
   basePath?: string;
   /** The authority refresh worker hooks; a "preparing" view asks it to verify the new wallet. */
@@ -66,7 +68,7 @@ export function mountWalletSignup(app: Hono, options: WalletSignupSiteOptions) {
     kick((value as { view?: { phase?: string; walletAddress?: string | null } } | null)?.view);
     return c.body(serialize(value), 200, { 'Content-Type': 'application/json' });
   };
-  const assets = mountAssets(app, base, { 'wallet-signup.js': options.browserScript, 'wallet-signup.css': walletSignupCss() });
+  const assets = { ...options.assets, ...mountAssets(app, base, { 'wallet-signup.js': options.browserScript, 'wallet-signup.css': walletSignupCss() }) };
   app.get(`${base}/create`, async c => {
     // The signup for an app's intent may be framed by that app, when it is admitted to (see the wallet landing).
     const intentId = c.req.query('intent');

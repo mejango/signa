@@ -583,6 +583,7 @@ export async function createRestRuntime(options: {
     browserScript: assets.walletScript, login: wallet.login, policy: wallet.policy,
     handoff: wallet.handoff, refresh: wallet.refresh,
     ...(walletPayments ? { payments: walletPayments, paymentBrowserScript: assets.walletPaymentScript } : {}),
+    ...(wallet.signup || wallet.recovery ? { recoveryKitScript: assets.walletRecoveryKitScript } : {}),
     ...(wallet.signup ? { signup: wallet.signup, signupBrowserScript: assets.walletSignupScript } : {}),
     ...(wallet.recovery ? { recovery: wallet.recovery, recoveryBrowserScript: assets.walletRecoveryScript } : {}),
     ...(wallet.devices ? { devices: wallet.devices, deviceBrowserScript: assets.walletDeviceScript } : {}),
