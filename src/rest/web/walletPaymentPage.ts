@@ -1,11 +1,12 @@
+import { assetHref, type AssetNames } from './assets.js';
 import { BRAND_ICON } from '../../branding.js';
 /** Dedicated owner approval surface. Values are populated with textContent, never HTML. */
-export function walletPaymentPage(base = '/wallet'): string {
+export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>Review payment | Signa</title>
-<link rel="stylesheet" href="${base}/assets/wallet.css"><link rel="stylesheet" href="${base}/assets/wallet-payment.css">
-<script type="module" src="${base}/assets/wallet-payment.js"></script></head>
+<link rel="stylesheet" href="${assetHref(base, 'wallet.css', assets)}"><link rel="stylesheet" href="${assetHref(base, 'wallet-payment.css', assets)}">
+<script type="module" src="${assetHref(base, 'wallet-payment.js', assets)}"></script></head>
 <body><main><a class="brand" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a><h1>Review payment</h1>
 <p id="payment-status" role="status" aria-live="polite" aria-atomic="true" data-state="loading">Checking this payment…</p>
 <section id="payment-review" aria-label="Payment details" hidden>

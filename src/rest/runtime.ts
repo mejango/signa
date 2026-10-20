@@ -29,6 +29,7 @@ import { createProtocolReadService } from "./protocol/index.js";
 import { createProtocolSemanticVerifier } from "./protocol/semantics.js";
 import { createRestRpc } from "./rpc.js";
 import { readRestAssets, type RestSite } from "./site.js";
+import { hashedAssetName } from "./web/assets.js";
 import {
   RelayrSponsorshipService,
   PostgresSponsorshipStore,
@@ -703,7 +704,7 @@ export async function createRestRuntime(options: {
       ...(walletSite ? { wallet: walletSite, walletOrigins: [wallet!.origin, ...(options.wallet?.legacyOrigins ?? [])] } : {}),
       app,
       audience: auth.audience,
-      docsHtml: apiDocsPage(openapi, options.surface),
+      docsHtml: apiDocsPage(openapi, options.surface, { "docs.js": hashedAssetName("docs.js", assets.docsScript), "api.css": hashedAssetName("api.css", apiDocsCss) }),
       docsCss: apiDocsCss,
       ...assets,
     },

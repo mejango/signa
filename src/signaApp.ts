@@ -27,8 +27,9 @@ function exactOrigin(value: string): URL {
   return url;
 }
 
-const apiAssets = new Set(['/assets/accounts.css', '/assets/accounts.js', '/assets/accounts-icon.svg', '/assets/docs.js', '/assets/api.css']);
-const apiPath = (path: string) => path === '/api' || path.startsWith('/api/') || path === '/accounts' || apiAssets.has(path);
+// The API host's assets, under their plain or content-hashed names (see src/rest/web/assets.ts).
+const apiAsset = /^\/assets\/(?:accounts\.(?:[0-9a-f]{12}\.)?(?:css|js)|docs\.(?:[0-9a-f]{12}\.)?js|api\.(?:[0-9a-f]{12}\.)?css|accounts-icon\.svg)$/;
+const apiPath = (path: string) => path === '/api' || path.startsWith('/api/') || path === '/accounts' || apiAsset.test(path);
 
 /** Credential pages and the public signed API have separate, exact HTTP hosts. */
 export function createSignaApp(options: SignaAppOptions) {
