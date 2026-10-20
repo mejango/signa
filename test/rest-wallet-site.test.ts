@@ -61,14 +61,16 @@ describe('central payment approval HTTP boundary',()=>{
   it('mounts the emitted payment approval URL and its production assets only with explicit configuration',async()=>{
     const {app}=setup({payments:payments(),paymentBrowserScript:'/* reviewed payment browser */'});
     const response=await app.fetch(new Request(origin+'/wallet/payment?review='+loginId));
-    expect(response.status).toBe(200);expect(await response.text()).toContain('/wallet/assets/wallet-payment.js');
-    expect(response.headers.get('content-security-policy')).toContain("script-src 'self';");
-    const script=await app.fetch(new Request(origin+'/wallet/assets/wallet-payment.js'));
+    expect(response.status).toBe(200);const src=(await response.text()).match(/src="(\/wallet\/assets\/wallet-payment\.[0-9a-f]{12}\.js)"/)?.[1];
+    expect(src).toBeDefined();expect(response.headers.get('content-security-policy')).toContain("script-src 'self';");
+    const script=await app.fetch(new Request(origin+src));
     expect(script.status).toBe(200);expect(await script.text()).toBe('/* reviewed payment browser */');
     expect(script.headers.get('content-type')).toContain('application/javascript');
+    expect(script.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     expect((await app.fetch(new Request(origin+'/wallet/assets/wallet-payment.css'))).status).toBe(200);
-    for(const path of ['/wallet/payment?review='+loginId,'/wallet/assets/wallet-payment.js','/wallet/assets/wallet-payment.css'])
-      expect((await setup().app.fetch(new Request(origin+path))).status).toBe(503);
+    expect((await setup().app.fetch(new Request(origin+'/wallet/payment?review='+loginId))).status).toBe(503);
+    for(const path of ['/wallet/assets/wallet-payment.js','/wallet/assets/wallet-payment.css'])
+      expect((await setup().app.fetch(new Request(origin+path))).status).toBe(404);
   });
   it('lets exactly the review\'s app origin frame the payment page, and nothing frame it otherwise',async()=>{
     const service={...payments(),frameOrigin:vi.fn(async(id:string)=>{if(id!==loginId)throw new RestError(404,'WALLET_PAYMENT_REVIEW_MISSING','private');return 'https://beep.example';})};
@@ -155,7 +157,11 @@ describe('dedicated Center wallet HTTP journey',()=>{
     expect((await app.fetch(new Request(origin+'/wallet/assets/wallet.css'))).status).toBe(200);
   });
   it('serves the wallet at the host root when mounted without a path prefix, and keeps /wallet links working',async()=>{
-    const {app}=setup({ basePath: '', signup: {} as never, signupBrowserScript: '/* signup */' });
+    const {app}=setup({ basePath: '', signup: {} as never, signupBrowserScript: '/* signup */', recoveryKitScript: '/* kit */' });
+    // The signup page names the backup kit it loads on demand by its hashed, immutable URL.
+    const kit=(await (await app.fetch(new Request(origin+'/create'))).text()).match(/<meta name="module:wallet-recovery-kit" content="(\/assets\/wallet-recovery-kit\.[0-9a-f]{12}\.js)">/)?.[1];
+    const kitResponse=await app.fetch(new Request(origin+kit));
+    expect(await kitResponse.text()).toBe('/* kit */');expect(kitResponse.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
     const root=await app.fetch(new Request(origin+'/'));
     expect(root.status).toBe(200);expect(await root.text()).toContain('>Signa in</button>');
     expect(await (await app.fetch(new Request(origin+'/'))).text()).toContain('content=""');

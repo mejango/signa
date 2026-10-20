@@ -1,5 +1,10 @@
+import { assetHref, hashedAssetName, type AssetNames } from "../web/assets.js";
 import { BRAND_CSS, BRAND_ICON, FAVICON_LINK } from "../../branding.js";
 import type { OpenApiDocument, OpenApiOperation } from "./openapi.js";
+
+/** Hashed names for a deploy's docs script and the shared stylesheet, as mountAssets serves them. */
+export const docsAssetNames = (docsScript: string): AssetNames =>
+  ({ "docs.js": hashedAssetName("docs.js", docsScript), "api.css": hashedAssetName("api.css", apiDocsCss) });
 
 const escape = (value: unknown): string => String(value).replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -68,18 +73,38 @@ function endpointFields(operation: OpenApiOperation, spec: OpenApiDocument): str
   return params + showSchema("Request body", request) + showSchema(`Response ${escape(success?.[0] ?? "")}`, result);
 }
 
+const operationRows = (spec: OpenApiDocument) => Object.entries(spec.paths).flatMap(([path, methods]) => Object.entries(methods).map(([method, operation]) => ({ path, method: method.toUpperCase(), operation })));
+export const apiReferencePath = (operationId: string) => `/api/reference/${encodeURIComponent(operationId)}`;
+
+/** Each endpoint's parameter and schema tables, as small pages /api loads when an endpoint is opened. */
+export function apiReferencePages(spec: OpenApiDocument, surface?: "wallet", assets?: AssetNames): Map<string, string> {
+  const brand = surface === "wallet" ? 'Signa</title><link rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg?v=signa">' : `Juicebox Center</title>${FAVICON_LINK}`;
+  const pages = new Map<string, string>();
+  for (const { path, method, operation } of operationRows(spec)) {
+    const fields = endpointFields(operation, spec);
+    if (fields) pages.set(operation.operationId, `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(method)} ${escape(path)} | ${brand}<link rel="stylesheet" href="${assetHref("", "api.css", assets)}"></head>
+<body><main id="main" class="endpoint"><p><a href="/api#reference">Endpoint reference</a></p><h1><span class="verb">${escape(method)}</span> ${escape(path)}</h1><div class="endpoint-fields">${fields}</div></main></body></html>`);
+  }
+  return pages;
+}
+
 /** Server-rendered documentation with optional search and copy controls. Descriptions are escaped and never executed. */
-export function apiDocsPage(spec: OpenApiDocument, surface?: "wallet"): string {
-  const rows = Object.entries(spec.paths).flatMap(([path, methods]) => Object.entries(methods).map(([method, operation]) => ({ path, method: method.toUpperCase(), operation })));
+export function apiDocsPage(spec: OpenApiDocument, surface?: "wallet", assets?: AssetNames): string {
+  const rows = operationRows(spec);
   const groups = spec.tags.map((tag) => {
     const entries = rows.filter((row) => row.operation.tags.includes(tag.name));
-    return `<details class="group" id="${escape(tag.name.toLowerCase())}"><summary>${escape(tag.name)} <span class="muted">(${entries.length})</span></summary><p class="muted">${renderProse(tag.description)}</p>${entries.map(({ path, method, operation }) =>
-      `<details class="endpoint"><summary><span class="verb">${escape(method)}</span><span class="route">${escape(path)}</span> <span class="auth">${escape(authLabel(operation))}</span></summary><p>${renderProse(operation.summary)}</p>${operation.description ? `<p class="muted">${renderProse(operation.description)}</p>` : ""}${endpointFields(operation, spec)}<p><code>operationId: ${escape(operation.operationId)}</code></p></details>`).join("")}</details>`;
+    return `<details class="group" id="${escape(tag.name.toLowerCase())}"><summary>${escape(tag.name)} <span class="muted">(${entries.length})</span></summary><p class="muted">${renderProse(tag.description)}</p>${entries.map(({ path, method, operation }) => {
+      const fields = endpointFields(operation, spec);
+      // Field names stay searchable; the tables themselves load when the endpoint is opened.
+      const terms = [...new Set(Array.from(fields.matchAll(/<th scope="row"><code>([^<]*)<\/code>/g), match => match[1]))].join(" ");
+      return `<details class="endpoint"${terms ? ` data-terms="${terms}"` : ""}><summary><span class="verb">${escape(method)}</span><span class="route">${escape(path)}</span> <span class="auth">${escape(authLabel(operation))}</span></summary><p>${renderProse(operation.summary)}</p>${operation.description ? `<p class="muted">${renderProse(operation.description)}</p>` : ""}${fields ? `<div class="endpoint-fields"><p><a href="${escape(apiReferencePath(operation.operationId))}">Parameters and schemas</a></p></div>` : ""}<p><code>operationId: ${escape(operation.operationId)}</code></p></details>`;
+    }).join("")}</details>`;
   }).join("");
   if (surface === "wallet") {
     const origin = escape(spec.servers[0]!.url);
     return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Signa API: accounts, wallet approvals and transaction execution."><title>Wallet API | Signa</title><link rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg?v=signa"><script type="module" src="/assets/docs.js"></script><link rel="stylesheet" href="/assets/api.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Signa API: accounts, wallet approvals and transaction execution."><title>Wallet API | Signa</title><link rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg?v=signa"><script type="module" src="${assetHref("", "docs.js", assets)}"></script><link rel="stylesheet" href="${assetHref("", "api.css", assets)}"></head>
 <body><a class="skip" href="#main">Skip to content</a><main id="main"><header><nav aria-label="Primary"><a href="/accounts">${BRAND_ICON} SIGNA</a><a href="/accounts">Accounts and bots</a><a href="https://juicebox.center/api">Juicebox protocol reference</a></nav><h1>Build with your wallet.</h1><p>Manage accounts and API access, prepare wallet transactions, approve spending and follow execution. Fresh owner approval is the default; a bot grant alone never authorizes spending.</p><nav aria-label="API resources"><a href="/api/v1/openapi.json">OpenAPI 3.1.2</a><a href="/api/v1/capabilities">Live capabilities</a><a href="#reference">Endpoint reference</a><a href="https://juicebox.center/api/docs/client">Shared SDK guide</a><a href="https://juicebox.center/api/docs/authentication">Signature format</a></nav></header>
 <section id="start"><h2>Connect to Signa</h2><p>Check this deployment's supported chains and execution options before preparing a transaction.</p><div class="code-example"><button type="button" class="copy-code" hidden>Copy</button><pre><code>curl ${origin}/api/v1/capabilities</code></pre></div><p><a href="/accounts">Create an API connection</a>, download its file, then install the client:</p><div class="code-example"><button type="button" class="copy-code" hidden>Copy</button><pre><code>npm install ${origin}/api/client/juicebox-center-client-0.1.0.tgz
 chmod 600 juicebox-connection.json
@@ -91,7 +116,7 @@ npx center account --connection juicebox-connection.json</code></pre></div><p>Th
 <footer><a href="/api/v1/openapi.json">Machine-readable wallet API</a> / <a href="https://juicebox.center/api">Juicebox Center protocol reference</a></footer></main><p id="copy-status" role="status" aria-live="polite" class="sr-only"></p></body></html>`;
   }
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Juicebox V6 API: read projects, prepare transactions, and check their results."><title>Developer API | Juicebox Center</title>${FAVICON_LINK}<script type="module" src="/assets/docs.js"></script><link rel="stylesheet" href="/assets/api.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Juicebox V6 API: read projects, prepare transactions, and check their results."><title>Developer API | Juicebox Center</title>${FAVICON_LINK}<script type="module" src="${assetHref("", "docs.js", assets)}"></script><link rel="stylesheet" href="${assetHref("", "api.css", assets)}"></head>
 <body><a class="skip" href="#main">Skip to content</a><main id="main"><header><nav aria-label="Primary"><a href="/">${BRAND_ICON} Juicebox Center</a><a href="/accounts">Accounts and bots</a><a href="/#agents">Assistant tools</a></nav><h1>Build with Juicebox.</h1><p>Read projects, prepare transactions, and follow results across chains. Start with a public request or connect your app in a few steps.</p><nav aria-label="API resources"><a href="/api/docs/user-journeys">Choose your journey</a><a href="/api/docs/project-intents">Project intents</a><a href="/api/v1/openapi.json">OpenAPI 3.1.2</a><a href="/api/v1/capabilities">Live capabilities</a><a href="/api/docs/api">Full guide</a><a href="/api/docs/ai-guide">Agent guide</a><a href="#glossary">Glossary</a></nav></header>
 <section aria-label="Choose a starting point" class="start"><a href="#read"><strong>I need data →</strong><span>Read current values or search project history.</span></a><a href="#write"><strong>I need a transaction →</strong><span>Prepare, review, sign, then check the result.</span></a><a href="#reference"><strong>I am building an integration →</strong><span>Find request formats and supported actions.</span></a></section>
 <section id="start"><h2>Your first request</h2><p>Explore supported chains and execution options. No account required.</p><div class="code-example"><button type="button" class="copy-code" hidden>Copy</button><pre><code>curl https://juicebox.center/api/v1/capabilities</code></pre></div><p>For protected requests, <a href="/accounts">create an API connection</a>, download its file, and install the client:</p><div class="code-example"><button type="button" class="copy-code" hidden>Copy</button><pre><code>npm install https://juicebox.center/api/client/juicebox-center-client-0.1.0.tgz

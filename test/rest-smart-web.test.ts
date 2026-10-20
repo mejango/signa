@@ -479,9 +479,7 @@ it("keeps transaction setup optional, names networks, and only offers discovery 
   expect(f.field("smart-discover").hidden).toBe(false);
   await f.click("smart-discover");
   expect(f.field("smart-discover").hidden).toBe(true);
-  f.browser.location.hash = "#operation-heading";
-  f.browser.dispatchEvent(new Event("hashchange"));
-  expect(f.field("smart-setup").open).toBe(true);
+  // A linked section opens from the page itself (test/rest-accounts-browser.test.ts), before this UI loads.
   expect(f.walletRequests).toEqual([]);
 });
 

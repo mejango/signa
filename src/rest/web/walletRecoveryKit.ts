@@ -1,6 +1,7 @@
 import { validateMnemonic } from '@scure/bip39';
 import { getAddress, isAddress, type Address, type Hex } from 'viem';
-import { english, generateMnemonic, mnemonicToAccount } from 'viem/accounts';
+import { wordlist as english } from '@scure/bip39/wordlists/english';
+import { generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 
 export const walletRecoveryDerivationPath = "m/44'/60'/0'/0/0";
 export interface WalletRecoverySecret { mnemonic: string; recoveryOwner: Address }

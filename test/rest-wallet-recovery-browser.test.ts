@@ -6,9 +6,11 @@ import { walletRecoveryCss, walletRecoveryPage } from '../src/rest/web/walletRec
 
 const origin = 'http://localhost:34171', walletAddress = `0x${'33'.repeat(20)}` as const;
 const initializerHash = `0x${'44'.repeat(32)}` as const, id = '10000000-0000-4000-8000-000000000001';
-let browser: Browser, script: string;
+let browser: Browser, script: string, kitScript: string;
 beforeAll(async () => {
   script = (await build({ entryPoints: ['src/rest/web/walletRecoveryJourney.ts'], bundle: true, platform: 'browser', format: 'esm', write: false })).outputFiles[0]!.text;
+  // The page imports the backup kit, its own bundle, from the URL its HTML names.
+  kitScript = (await build({ entryPoints: ['src/rest/web/walletRecoveryKit.ts'], bundle: true, platform: 'browser', format: 'esm', write: false })).outputFiles[0]!.text;
   browser = await chromium.launch({ headless: true });
 });
 afterAll(async () => { await browser?.close(); });
@@ -23,6 +25,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
     await page.route(origin + '/**', async route => {
       const path = new URL(route.request().url()).pathname;
       if (path === '/wallet/recover') return route.fulfill({ contentType: 'text/html', body: walletRecoveryPage() });
+      if (path.endsWith('wallet-recovery-kit.js')) return route.fulfill({ contentType: 'text/javascript', body: kitScript });
       if (path.endsWith('.js')) return route.fulfill({ contentType: 'text/javascript', body: script });
       if (path.endsWith('.css')) return route.fulfill({ contentType: 'text/css', body: walletRecoveryCss() });
       if (path.endsWith('/state')) return route.fulfill({ json: { view, csrfToken: Buffer.alloc(32, 3).toString('base64url') } });
@@ -61,6 +64,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       const request = route.request(), path = new URL(request.url()).pathname;
       const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
       if (path === '/wallet/recover') return route.fulfill({ contentType: 'text/html', body: walletRecoveryPage() });
+      if (path.endsWith('wallet-recovery-kit.js')) return route.fulfill({ contentType: 'text/javascript', body: kitScript });
       if (path.endsWith('wallet-recovery.js')) return route.fulfill({ contentType: 'text/javascript', body: script });
       if (path.endsWith('wallet-recovery.css')) return route.fulfill({ contentType: 'text/css', body: walletRecoveryCss() });
       if (request.postData()) bodies.push(request.postData()!);
@@ -143,11 +147,35 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
     } finally { await context.close(); }
   }, 30000);
 
+  it('clears the backup password from the page even when the backup kit cannot load', async () => {
+    const context = await browser.newContext(), page = await context.newPage();
+    await page.route(origin + '/**', async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path === '/wallet/recover') return route.fulfill({ contentType: 'text/html', body: walletRecoveryPage() });
+      if (path.includes('wallet-recovery-kit')) return route.abort();
+      if (path.endsWith('.js')) return route.fulfill({ contentType: 'text/javascript', body: script });
+      if (path.endsWith('.css')) return route.fulfill({ contentType: 'text/css', body: walletRecoveryCss() });
+      if (path.endsWith('/state')) return route.fulfill({ json: { view: null, csrfToken: Buffer.alloc(32, 3).toString('base64url') } });
+      return route.fulfill({ status: 500 });
+    });
+    try {
+      await page.goto(origin + '/wallet/recover');
+      await page.getByLabel('My backup password').check();
+      await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      await expect.poll(() => page.locator('#wallet-status').textContent()).toContain('Enter your backup password');
+      await page.getByLabel('Backup password', { exact: true }).fill('secret words stay private');
+      await page.getByRole('button', { name: 'Continue', exact: true }).click();
+      await expect.poll(() => page.locator('#wallet-status').textContent()).not.toContain('Enter your backup password');
+      expect(await page.getByLabel('Backup password', { exact: true }).inputValue()).toBe('');
+    } finally { await context.close(); }
+  });
+
   it('refuses recovery secrets or arbitrary return URLs in the page URL before any API call', async () => {
     const context = await browser.newContext(), page = await context.newPage(); let apiCalls = 0;
     await page.route(origin + '/**', async route => {
       const path = new URL(route.request().url()).pathname;
       if (path === '/wallet/recover') return route.fulfill({ contentType: 'text/html', body: walletRecoveryPage() });
+      if (path.endsWith('wallet-recovery-kit.js')) return route.fulfill({ contentType: 'text/javascript', body: kitScript });
       if (path.endsWith('.js')) return route.fulfill({ contentType: 'text/javascript', body: script });
       if (path.endsWith('.css')) return route.fulfill({ contentType: 'text/css', body: walletRecoveryCss() });
       apiCalls++; return route.fulfill({ status: 500 });

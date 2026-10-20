@@ -1,13 +1,12 @@
 import { getAddress, type Address, type Hex } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { verifyBotProof } from "../auth/signatures.js";
 import type { Account, BotGrant, BotScope } from "../auth/store.js";
 import {
-  SignedRestClient, connectionForBot, accountIdFor, createBotRegistration, newRequestNonce, parseBotRegistration,
+  SignedRestClient, accountIdFor, newRequestNonce,
   signWalletTypedData,
   type BotConnection, type BotRegistration, type RestSigner, type TypedDocument,
 } from "../client/index.js";
-import { installSmartWalletUI } from "./smartSessions.js";
+import type * as SignedIn from "./accountsSignedIn.js";
+import { lazyModule } from "./lazyModule.js";
 
 import * as authApi from "./externalWallet.js";
 import type { Provider } from "./externalWallet.js";
@@ -25,7 +24,7 @@ let pending: { privateKey: Hex; proof: BotRegistration; attempted: boolean } | u
 let savedConnection: BotConnection | undefined;
 let reviewed: BotRegistration | undefined;
 let busy = false;
-let smartUi: ReturnType<typeof installSmartWalletUI> | undefined;
+let smartUi: ReturnType<typeof SignedIn.installSmartWalletUI> | undefined;
 let authRevision = 0;
 let identitySubscription: { provider: Provider; invalidate: () => void; networkChanged: () => void; dispose?: () => void } | undefined;
 
@@ -33,6 +32,19 @@ function status(message: string, error = false) {
   const node = element("status"); node.textContent = message; node.dataset.error = String(error);
   if (error) node.scrollIntoView({ block: "nearest" });
 }
+/** Smart wallets, sessions and bot keys are their own bundle, loaded with the first signed-in account. */
+function signedIn() {
+  return lazyModule<typeof SignedIn>("accounts-signed-in").then(module => {
+    smartUi ??= module.installSmartWalletUI({ audience, connection: () => current, run, status });
+    return module;
+  });
+}
+function revealLinkedSetup() {
+  if (["#smart-heading", "#operation-heading", "#session-heading"].includes(window.location.hash))
+    element<HTMLDetailsElement>("smart-setup").open = true;
+}
+window.addEventListener("hashchange", revealLinkedSetup);
+revealLinkedSetup();
 function active() { if (!current) throw new Error("Sign in first."); return current; }
 function accountReady(ready: boolean) {
   element<HTMLFieldSetElement>("bot-fields").disabled = !ready;
@@ -97,6 +109,8 @@ async function connectAccount(sourceProvider: Provider, enroll: boolean, revisio
       if (current === connection && error instanceof Error && "code" in error && error.code === 4900) invalidate();
     }); });
   };
+  // Fetched alongside the sign-in requests below; awaited before the account's controls are shown.
+  const loading = signedIn(); loading.catch(() => {});
   identitySubscription = { provider: sourceProvider, invalidate, networkChanged };
   for (const event of ["accountsChanged", "disconnect"]) sourceProvider.on?.(event, invalidate);
   sourceProvider.on?.("chainChanged", networkChanged);
@@ -130,6 +144,8 @@ async function connectAccount(sourceProvider: Provider, enroll: boolean, revisio
     if (current !== connection) return;
     if (result.account.id !== accountId) throw new Error("Unexpected account identity.");
   }
+  if (revision !== authRevision || current !== connection) return;
+  await loading;
   if (revision !== authRevision || current !== connection) return;
   // This remembers only a public reconnect hint. The wallet still validates and signs every protected action.
   ready = true;
@@ -176,7 +192,8 @@ function download(filename: string, value: unknown) {
   document.body.append(anchor); anchor.click(); anchor.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 button("generate-bot").addEventListener("click", () => void run(async () => {
-  const connection = active();
+  const connection = active(), { generatePrivateKey, privateKeyToAccount, createBotRegistration, connectionForBot } = await signedIn();
+  if (current !== connection) return;
   if (!pending) {
     const settings = botSettings();
     const privateKey = generatePrivateKey();
@@ -219,7 +236,7 @@ button("generate-bot").addEventListener("click", () => void run(async () => {
 async function register(document: BotRegistration) {
   const connection = active();
   if (document.audience !== audience || document.accountId !== connection.accountId) throw new Error("Registration belongs to another account or service.");
-  await verifyBotProof(audience, { accountId: document.accountId, ownerRequestNonce: document.ownerRequestNonce, ...document.registration }, document.registration.proofSignature);
+  await (await signedIn()).verifyBotProof(audience, { accountId: document.accountId, ownerRequestNonce: document.ownerRequestNonce, ...document.registration }, document.registration.proofSignature);
   status("Review the bot details and approve registration in your wallet.");
   const { bot } = await connection.client.request<{ bot: BotGrant }>({
     method: "POST", requestTarget: "/api/v1/accounts/me/bots", json: document.registration, nonce: document.ownerRequestNonce,
@@ -243,9 +260,9 @@ button("review-proof").addEventListener("click", () => void run(async () => {
   reviewed = undefined; button("register-proof").hidden = true;
   const raw = element<HTMLTextAreaElement>("registration-json").value;
   if (raw.length > 16 * 1024) throw new Error("Registration document is too large.");
-  const parsed = parseBotRegistration(JSON.parse(raw));
+  const parsed = (await signedIn()).parseBotRegistration(JSON.parse(raw));
   if (parsed.accountId !== active().accountId || parsed.audience !== audience) throw new Error("Registration account or service does not match.");
-  await verifyBotProof(audience, { accountId: parsed.accountId, ownerRequestNonce: parsed.ownerRequestNonce, ...parsed.registration }, parsed.registration.proofSignature);
+  await (await signedIn()).verifyBotProof(audience, { accountId: parsed.accountId, ownerRequestNonce: parsed.ownerRequestNonce, ...parsed.registration }, parsed.registration.proofSignature);
   const { botAddress, scopes, expiresAt, label } = parsed.registration;
   if (expiresAt <= Math.floor(Date.now() / 1000)) throw new Error("Bot proof is expired.");
   element("proof-preview").textContent = JSON.stringify({ accountId: parsed.accountId, botAddress, scopes, label, expires: new Date(expiresAt * 1000).toISOString() }, null, 2);
@@ -279,7 +296,6 @@ function renderBots(bots: BotGrant[]) {
 button("refresh-bots").addEventListener("click", () => void run(async () => {
   const { bots } = await active().client.request<{ bots: BotGrant[] }>({ requestTarget: "/api/v1/accounts/me/bots" }); renderBots(bots); status("Bot list refreshed.");
 }));
-smartUi = installSmartWalletUI({ audience, connection: () => current, run, status });
 void (async () => {
   const revision = authRevision;
   status("Checking your sign-in…");

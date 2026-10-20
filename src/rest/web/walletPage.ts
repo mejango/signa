@@ -1,10 +1,11 @@
+import { assetHref, type AssetNames } from './assets.js';
 import { BRAND_ICON, BRAND_CSS } from '../../branding.js';
 /** Dedicated credential surface. All behavior and styles are served as same-origin assets. */
-export function walletPage(signup = false, recovery = false, base = '/wallet', framed = false): string {
+export function walletPage(signup = false, recovery = false, base = '/wallet', framed = false, assets?: AssetNames): string {
   return `<!doctype html>
-<html lang="en"${framed ? ' class="framed"' : ''}><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"${framed ? ' class="framed"' : ''}><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><meta name="module:wallet-qr" content="${assetHref(base, 'wallet-qr.js', assets)}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>Your account | Signa</title>
-<link rel="stylesheet" href="${base}/assets/wallet.css"><script type="module" src="${base}/assets/wallet.js"></script></head>
+<link rel="stylesheet" href="${assetHref(base, 'wallet.css', assets)}"><script type="module" src="${assetHref(base, 'wallet.js', assets)}"></script></head>
 <body><main><a class="brand" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a>
 <h1>Your account</h1>
 <p id="wallet-destination" hidden></p>

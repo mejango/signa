@@ -16,7 +16,7 @@ import { createContractOwnerVerifier } from "./contractOwner.js";
 import { getContractCatalog, type ContractCatalog } from "./contracts/catalog.js";
 import { RestError, type RestRpc } from "./core.js";
 import { restRequest } from "./context.js";
-import { apiDocsCss, apiDocsPage, buildRestOpenApi } from "./docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, buildRestOpenApi, docsAssetNames } from "./docs/index.js";
 import {
   createTransactionDispatchAuthorizer,
   createSponsorshipDispatchAuthorizer,
@@ -579,9 +579,10 @@ export async function createRestRuntime(options: {
   const walletSite = wallet ? createWalletSite({ origin: wallet.origin, audience: auth.audience, ...(options.wallet?.legacyOrigins ? { legacyOrigins: options.wallet.legacyOrigins } : {}),
     ...(options.wallet?.frameableAppOrigins ? { frameableAppOrigins: options.wallet.frameableAppOrigins } : {}),
     ...(options.wallet?.basePath !== undefined ? { basePath: options.wallet.basePath } : {}),
-    browserScript: assets.walletScript, login: wallet.login, policy: wallet.policy,
+    browserScript: assets.walletScript, qrScript: assets.walletQrScript, login: wallet.login, policy: wallet.policy,
     handoff: wallet.handoff, refresh: wallet.refresh,
     ...(walletPayments ? { payments: walletPayments, paymentBrowserScript: assets.walletPaymentScript } : {}),
+    ...(wallet.signup || wallet.recovery ? { recoveryKitScript: assets.walletRecoveryKitScript } : {}),
     ...(wallet.signup ? { signup: wallet.signup, signupBrowserScript: assets.walletSignupScript } : {}),
     ...(wallet.recovery ? { recovery: wallet.recovery, recoveryBrowserScript: assets.walletRecoveryScript } : {}),
     ...(wallet.devices ? { devices: wallet.devices, deviceBrowserScript: assets.walletDeviceScript } : {}),
@@ -697,13 +698,15 @@ export async function createRestRuntime(options: {
   if (options.startMaintenance !== false) void warmRoutes();
   if (options.startMaintenance !== false) void warmAccounts();
   if (options.startMaintenance !== false) wallet?.refresh.start();
+  const docsAssets = docsAssetNames(assets.docsScript ?? "");
   return {
     site: {
       ...(options.surface ? { surface: options.surface } : {}),
       ...(walletSite ? { wallet: walletSite, walletOrigins: [wallet!.origin, ...(options.wallet?.legacyOrigins ?? [])] } : {}),
       app,
       audience: auth.audience,
-      docsHtml: apiDocsPage(openapi, options.surface),
+      docsHtml: apiDocsPage(openapi, options.surface, docsAssets),
+      apiReference: apiReferencePages(openapi, options.surface, docsAssets),
       docsCss: apiDocsCss,
       ...assets,
     },

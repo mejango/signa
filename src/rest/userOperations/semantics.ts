@@ -1,4 +1,4 @@
-import { decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionData, erc20Abi, getAddress, isAddress, parseAbi, zeroAddress, type Address, type Hex } from "viem";
+import { decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionData, erc20Abi, getAddress, isAddress, zeroAddress, type Address, type Hex } from "viem";
 import type { StoredPlan, StoredReceipt, SemanticResult } from "../transactions/types.js";
 
 /** Trusted host configuration; never populate these addresses from a payment request. */
@@ -29,10 +29,7 @@ export interface WalletV6UsdcPayment {
 
 // Exact JBMultiTerminal / IJBTerminal ABI at the catalog's nana-core-v6 source pin
 // feff600654aee6fb1747dded692f18068b2230a6. No router or arbitrary multicall ABI.
-export const terminalAbi = parseAbi([
-  "function pay(uint256 projectId,address token,uint256 amount,address beneficiary,uint256 minReturnedTokens,string memo,bytes metadata) payable returns(uint256)",
-  "event Pay(uint256 indexed rulesetId,uint256 indexed rulesetCycleNumber,uint256 indexed projectId,address payer,address beneficiary,uint256 amount,uint256 newlyIssuedTokenCount,string memo,bytes metadata,address caller)",
-]);
+export const terminalAbi = [{"name":"pay","type":"function","stateMutability":"payable","inputs":[{"type":"uint256","name":"projectId"},{"type":"address","name":"token"},{"type":"uint256","name":"amount"},{"type":"address","name":"beneficiary"},{"type":"uint256","name":"minReturnedTokens"},{"type":"string","name":"memo"},{"type":"bytes","name":"metadata"}],"outputs":[{"type":"uint256"}]},{"name":"Pay","type":"event","inputs":[{"type":"uint256","name":"rulesetId","indexed":true},{"type":"uint256","name":"rulesetCycleNumber","indexed":true},{"type":"uint256","name":"projectId","indexed":true},{"type":"address","name":"payer"},{"type":"address","name":"beneficiary"},{"type":"uint256","name":"amount"},{"type":"uint256","name":"newlyIssuedTokenCount"},{"type":"string","name":"memo"},{"type":"bytes","name":"metadata"},{"type":"address","name":"caller"}]}] as const;
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const sameTopics = (a: readonly Hex[], b: readonly (Hex | readonly Hex[] | null)[]) => a.length === b.length && a.every((topic, i) => typeof b[i] === "string" && same(topic, b[i] as string));
 const hash = (v: unknown): v is Hex => typeof v === "string" && /^0x[0-9a-fA-F]{64}$/.test(v);

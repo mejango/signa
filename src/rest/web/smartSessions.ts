@@ -486,12 +486,6 @@ export function installSmartWalletUI(options: {
     }
     refreshReadiness();
   });
-  function revealLinkedSetup() {
-    if (["#smart-heading", "#operation-heading", "#session-heading"].includes(window.location.hash))
-      element<HTMLDetailsElement>("smart-setup").open = true;
-  }
-  window.addEventListener("hashchange", revealLinkedSetup);
-  revealLinkedSetup();
   event("smart-switch", async () => {
     const c = connection(),
       d = host?.smartAccounts.deployments.find(

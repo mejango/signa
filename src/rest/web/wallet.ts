@@ -1,6 +1,7 @@
 import { nativePasskeyError, takeSignInNotice } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
-import { qrSvg } from "./qr.js";
+import type * as Qr from "./qr.js";
+import { lazyModule } from "./lazyModule.js";
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
 /** No credentials, assertions, CSRF values or handoff codes are persisted by this page. It keeps only Coinbase's
  * returning-user token for Apple Pay (no personal data), per account, on this device. */
@@ -665,11 +666,15 @@ function renderDevice() {
 }
 async function deviceBegin() {
   setStatus("checking", "Preparing a link for the other device…");
+  // The QR code is drawn by its own bundle, fetched alongside the link (most visitors only sign in).
+  // A failed load is handled here at once, so it never surfaces as an unhandled rejection, whatever the request below does.
+  const qr = lazyModule<typeof Qr>("wallet-qr").catch(() => null);
   const result = record(await request(`${base}/devices/begin`, { passkeyName: null }, csrf, 60_000)), view = record(result.view) as unknown as DeviceView, link = string(result.link, 4096);
   if (!link.startsWith(`${location.origin}${base}/add#`)) throw new InvalidResponse();
   device = { view, link };
-  element("wallet-device-code").innerHTML = qrSvg(link, "Link for the other device");
   const anchor = element<HTMLAnchorElement>("wallet-device-link"); anchor.href = link; anchor.textContent = "Open the link on this device instead";
+  // The code is drawn when its bundle arrives; until then, or if it never does, the link works on its own.
+  void qr.then(module => { if (module && device?.link === link) element("wallet-device-code").innerHTML = module.qrSvg(link, "Link for the other device"); });
   setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
 async function devicePoll() {

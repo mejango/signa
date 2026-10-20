@@ -1,3 +1,4 @@
+import { mountAssets } from '../web/assets.js';
 import type { Context, Hono } from 'hono';
 import { RestError } from '../core.js';
 import { walletAppFields } from './appGrants.js';
@@ -39,9 +40,8 @@ export function mountWalletDevices(app: Hono, options: WalletDeviceSiteOptions) 
   const json = (c: Context, value: unknown) => c.body(JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? String(item) : item), 200, { 'Content-Type': 'application/json' });
   const emit = (action: string) => { try { options.onEvent?.(action, 'ok'); } catch { /* observation only */ } };
 
-  app.get(`${base}/add`, c => c.html(walletDevicePage({ base })));
-  app.get(`${base}/assets/wallet-device.js`, c => c.body(options.browserScript, 200, { 'Content-Type': 'application/javascript; charset=utf-8' }));
-  app.get(`${base}/assets/wallet-device.css`, c => c.body(walletDeviceCss(), 200, { 'Content-Type': 'text/css; charset=utf-8' }));
+  const assets = mountAssets(app, base, { 'wallet-device.js': options.browserScript, 'wallet-device.css': walletDeviceCss() });
+  app.get(`${base}/add`, c => c.html(walletDevicePage({ base, assets })));
 
   // The primary's page.
   app.post(`${base}/devices/begin`, async c => {

@@ -1,11 +1,12 @@
+import { assetHref, type AssetNames } from './assets.js';
 import { BRAND_ICON } from '../../branding.js';
 import { walletSignupCss } from './walletSignupPage.js';
 
-export function walletRecoveryPage(options: { base?: string } = {}) {
+export function walletRecoveryPage(options: { base?: string; assets?: AssetNames } = {}) {
   const base = options.base ?? '/wallet';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><meta name="module:wallet-recovery-kit" content="${assetHref(base, 'wallet-recovery-kit.js', options.assets)}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>Get back into your account | Signa</title>
-<link rel="stylesheet" href="${base}/assets/wallet-recovery.css"><script type="module" src="${base}/assets/wallet-recovery.js"></script></head>
+<link rel="stylesheet" href="${assetHref(base, 'wallet-recovery.css', options.assets)}"><script type="module" src="${assetHref(base, 'wallet-recovery.js', options.assets)}"></script></head>
 <body><main><a class="brand" id="wallet-back" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a>
 <h1>Get back into your account</h1>
 <p>Replace a lost passkey with your backup file, your backup password, or the wallet you chose at signup. Your account address stays the same.</p>

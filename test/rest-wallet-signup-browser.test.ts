@@ -2,17 +2,22 @@ import { build } from "esbuild";
 import { createServer, type Server } from "node:http";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+// @ts-expect-error The build script is plain ESM without declarations.
+import { webBuildOptions } from "../scripts/rest/build-web.mjs";
 
 /** The served signup page in Chromium, with a modeled Center. */
 describe("served Center signup page", () => {
-  let server: Server, browser: Browser, page: Page, origin: string, script: string, pageHtml: string, framedHtml: string, css: string;
+  let server: Server, browser: Browser, page: Page, origin: string, script: string, kitScript: string, pageHtml: string, framedHtml: string, css: string;
+  let kitRequests = 0;
   let releaseLogin: (() => void) | null = null;
   const errors: string[] = [];
 
   beforeAll(async () => {
-    const built = await build({ entryPoints: [new URL("../src/rest/web/walletSignup.ts", import.meta.url).pathname],
-      bundle: true, platform: "browser", format: "esm", target: "es2022", write: false });
-    script = built.outputFiles[0]!.text;
+    // The production build: the backup kit is its own bundle, which the page imports from the URL its HTML names.
+    const built = await build({ ...webBuildOptions, entryPoints: { "wallet-signup": "src/rest/web/walletSignup.ts",
+      "wallet-recovery-kit": "src/rest/web/walletRecoveryKit.ts" }, write: false });
+    const output = (name: string) => built.outputFiles!.find((file: { path: string }) => file.path.endsWith(`/${name}.js`))!.text;
+    script = output("wallet-signup"); kitScript = output("wallet-recovery-kit");
     const production = await import("../src/rest/web/walletSignupPage.js");
     pageHtml = production.walletSignupPage(); framedHtml = production.walletSignupPage({ framed: true }); css = production.walletSignupCss();
     server = createServer(async (request, response) => {
@@ -22,6 +27,7 @@ describe("served Center signup page", () => {
       };
       if (path === "/wallet") { response.writeHead(200, { "content-type": "text/html" }); response.end(request.headers['sec-fetch-dest'] === 'iframe' ? framedHtml : pageHtml); return; }
       if (path === "/wallet/assets/wallet-signup.js") { response.writeHead(200, { "content-type": "text/javascript" }); response.end(script); return; }
+      if (path === "/wallet/assets/wallet-recovery-kit.js") { kitRequests++; response.writeHead(200, { "content-type": "text/javascript" }); response.end(kitScript); return; }
       if (path === "/wallet/assets/wallet-signup.css") { response.writeHead(200, { "content-type": "text/css" }); response.end(css); return; }
       if (path === "/wallet/config") return json({ version: "center-wallet-v1", issuer: origin, audience: `${origin}/v1`, rpId: "localhost" });
       if (path.startsWith('/wallet/authorize/')) return json({ request: { callbackUri: `${origin}/app/callback`, state: 'state', origin } });
@@ -119,6 +125,33 @@ describe("served Center signup page", () => {
       await signup.getByRole('button', { name: 'Signa up', exact: true }).click();
       await expect.poll(() => signup.locator('#wallet-status').textContent()).toContain('The device prompt didn’t finish. Try again.');
       expect(begins).toBe(1);
+    } finally { await context.close(); }
+  });
+
+  it("loads the backup kit once the page is idle, and again at signup if that load failed", async () => {
+    expect(kitScript).toContain("abandon"); expect(script).not.toContain("abandon");
+    const context = await browser.newContext(), signup = await context.newPage();
+    try {
+      let aborted = 0, begins = 0;
+      await signup.route('**/wallet/assets/wallet-recovery-kit.js', route => aborted++ ? route.fallback() : route.abort());
+      await signup.route('**/wallet/signup/begin', route => { begins++; return route.fulfill({ status: 503, json: { error: { message: 'stop here' } } }); });
+      await signup.goto(`${origin}/wallet`);
+      await expect.poll(() => aborted).toBe(1);
+      await signup.getByLabel('A backup password made for you', { exact: true }).check();
+      const served = kitRequests;
+      await signup.locator('#signup-begin').click();
+      await expect.poll(() => begins).toBe(1);
+      expect(kitRequests).toBe(served + 1);
+    } finally { await context.close(); }
+  });
+
+  it("loads the kit beside its bundle for a page served before the deploy that added module tags", async () => {
+    const context = await browser.newContext(), signup = await context.newPage();
+    try {
+      await signup.route('**/wallet', route => route.fulfill({ contentType: 'text/html', body: pageHtml.replace(/<meta name="module:[^>]*>/, '') }));
+      const served = kitRequests;
+      await signup.goto(`${origin}/wallet`);
+      await expect.poll(() => kitRequests).toBe(served + 1);
     } finally { await context.close(); }
   });
 

@@ -7,8 +7,6 @@ import {
   getAddress,
   hashMessage,
   hashTypedData,
-  parseAbi,
-  parseAbiParameters,
   recoverAddress,
   size,
   sliceHex,
@@ -26,12 +24,8 @@ import {
 import type { UserOperationV07 } from "../userOperations/types.js";
 
 /** f22a194 Safe7579.sol and src/lib/ExecutionLib.sol, not an SDK execution mode. */
-export const SAFE7579_EXECUTION_ABI = parseAbi([
-  "function execute(bytes32 mode, bytes executionCalldata)",
-]);
-const executionsParameter = parseAbiParameters(
-  "(address target, uint256 value, bytes callData)[]",
-);
+export const SAFE7579_EXECUTION_ABI = [{"name":"execute","type":"function","stateMutability":"nonpayable","inputs":[{"type":"bytes32","name":"mode"},{"type":"bytes","name":"executionCalldata"}],"outputs":[]}] as const;
+const executionsParameter = [{"type":"tuple[]","components":[{"type":"address","name":"target"},{"type":"uint256","name":"value"},{"type":"bytes","name":"callData"}]}] as const;
 export const SAFE7579_SINGLE_MODE = `0x${"00".repeat(32)}` as Hex;
 export const SAFE7579_BATCH_MODE = `0x01${"00".repeat(31)}` as Hex;
 const MAX_EXECUTIONS = 16;

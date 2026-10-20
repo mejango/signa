@@ -4,7 +4,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { beforeAll, describe, expect, it } from "vitest";
 import { operationDescriptors } from "../src/rest/app.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { apiDocsCss, apiDocsPage, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
+import { apiDocsCss, apiDocsPage, apiReferencePages, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
 import { createIndexerReadService } from "../src/rest/indexer/index.js";
 
 const origin = "https://juicebox.center";
@@ -188,10 +188,20 @@ describe("static REST documentation", () => {
     expect(html).toContain('src="/assets/docs.js"');
     expect(html).not.toContain('<script>alert');
     expect(html).toContain('href="/assets/api.css"');
-    expect(html).toContain("Request body");
-    expect(html).toContain("Response 201");
-    expect(html).toContain('<code>planId</code>');
-    expect(html).toContain("Parameters");
+    // Field tables load per endpoint; the page keeps only their names, for the filter.
+    expect(html).not.toContain("schema-fields");
+    expect(html).toMatch(/data-terms="[^"]*\bplanId\b/);
+    const reference = apiReferencePages(unsafe);
+    const pages = [...reference.values()].join("");
+    expect(pages).toContain("Request body");
+    expect(pages).toContain("Response 201");
+    expect(pages).toContain('<code>planId</code>');
+    expect(pages).toContain("Parameters");
+    expect(pages).not.toContain("<img");
+    for (const [operationId, page] of reference) {
+      expect(html).toContain(`href="/api/reference/${encodeURIComponent(operationId)}"`);
+      expect(page).toContain('class="endpoint-fields"');
+    }
     expect(html).toContain('name="viewport"');
     expect(html).toContain('href="/api/v1/openapi.json"');
     expect(html).toContain('href="/api/docs/ai-guide"');

@@ -1,4 +1,4 @@
-import { encodeFunctionData, getAddress, isAddress, parseAbi, zeroAddress, type Address, type Hex } from 'viem';
+import { encodeFunctionData, getAddress, isAddress, zeroAddress, type Address, type Hex } from 'viem';
 import type { WalletRecoveryRotation } from '../wallet/recoveryRotation.js';
 
 export interface WalletRecoveryReviewSelection {
@@ -6,8 +6,8 @@ export interface WalletRecoveryReviewSelection {
   recoveryOwner: Address; priorSigner: Address; replacementSigner: Address;
   rotationContext: { publicKey: { x: Hex; y: Hex }; signerFactory: Address; verifiers: Hex };
 }
-const factoryAbi = parseAbi(['function createSigner(uint256 x,uint256 y,uint176 verifiers) returns(address)']);
-const safeAbi = parseAbi(['function swapOwner(address previousOwner,address oldOwner,address newOwner)']);
+const factoryAbi = [{"name":"createSigner","type":"function","stateMutability":"nonpayable","inputs":[{"type":"uint256","name":"x"},{"type":"uint256","name":"y"},{"type":"uint176","name":"verifiers"}],"outputs":[{"type":"address"}]}] as const;
+const safeAbi = [{"name":"swapOwner","type":"function","stateMutability":"nonpayable","inputs":[{"type":"address","name":"previousOwner"},{"type":"address","name":"oldOwner"},{"type":"address","name":"newOwner"}],"outputs":[]}] as const;
 const types = { SafeTx: [
   { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'data', type: 'bytes' },
   { name: 'operation', type: 'uint8' }, { name: 'safeTxGas', type: 'uint256' }, { name: 'baseGas', type: 'uint256' },
