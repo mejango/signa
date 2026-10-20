@@ -61,7 +61,7 @@ function schemaFields(value: unknown, spec: OpenApiDocument, depth = 0): string 
 }
 function operationSchemas(operation: OpenApiOperation, spec: OpenApiDocument) {
   const parameters = Array.isArray(operation.parameters) ? operation.parameters.map(value => resolveDoc(value, spec)) : [];
-  const request = docObject(docObject(docObject(operation.requestBody).content)["application/json"]).schema;
+  const request = docObject(docObject(resolveDoc(operation.requestBody, spec).content)["application/json"]).schema;
   const success = Object.entries(operation.responses).find(([status]) => /^2\d\d$/.test(status));
   const response = success ? resolveDoc(success[1], spec) : undefined;
   const result = docObject(docObject(response?.content)["application/json"]).schema;

@@ -5,3 +5,6 @@ export const REST_PAGE_HEADERS = {
   "Referrer-Policy": "no-referrer",
   "Cache-Control": "no-store",
 } as const;
+
+/** The same for documentation, which changes only on deploy. */
+export const REST_DOCS_HEADERS = { ...REST_PAGE_HEADERS, "Cache-Control": "public, max-age=300" } as const;

@@ -130,6 +130,8 @@ describe("Signa wallet API documentation", () => {
     expect(await (await app.request("/api")).text()).toContain("Wallet API | Signa");
     const terms = await app.request("/api/terms.json");
     expect(terms.headers.get("content-type")).toContain("application/json");
+    // Documentation changes only on deploy, so /api, its tables and its term index are cached briefly, as on Center.
+    for (const response of [terms, await app.request("/api")]) expect(response.headers.get("cache-control")).toBe("public, max-age=300");
     expect((await terms.json() as Record<string, string>).getUserOperation).toMatch(/\bpaymasterAndData\b/);
     const icon = await app.request("/assets/accounts-icon.svg");
     expect(icon.status).toBe(200); expect(icon.headers.get("content-type")).toContain("image/svg+xml");

@@ -112,11 +112,21 @@ describe("/api endpoint reference", () => {
     // Names nested deeper than the tables render match too (a user operation's paymasterAndData).
     await page.fill("#endpoint-filter", "paymasterAndData");
     await expect.poll(() => locate("getUserOperation").isHidden()).toBe(false);
-    // Loaded tables do not widen the match: descriptions inside them stay out of the filter.
-    await page.fill("#endpoint-filter", "no endpoint has this text");
+    // Loaded tables do not widen the match: a description only their tables carry stays out of the filter.
+    await page.fill("#endpoint-filter", "");
+    const operationId = sample(), endpoint = locate(operationId);
+    await endpoint.evaluate(node => { (node.closest(".group") as HTMLDetailsElement).open = true; });
+    await endpoint.locator(":scope > summary").click();
+    await expect.poll(() => endpoint.locator(".schema-fields").count()).toBeGreaterThan(0);
+    const outside = Object.values(index).join(" ").toLowerCase() + " " + (await page.locator(".endpoint").evaluateAll(nodes => nodes.map(node =>
+      Array.from(node.children, child => child.matches(".endpoint-fields") ? "" : child.textContent).join(" ")))).join(" ").toLowerCase();
+    const description = (await endpoint.locator(".endpoint-fields td").allTextContents())
+      .map(text => text.trim()).find(text => text.length > 12 && !outside.includes(text.toLowerCase()));
+    expect(description).toBeTruthy();
+    await page.fill("#endpoint-filter", description!);
     await expect.poll(() => shown.count()).toBe(0);
     await page.fill("#endpoint-filter", "");
     expect(await shown.count()).toBe(await page.locator(".endpoint").count());
-    expect(fetched).toEqual(["/api/terms.json", "/api/terms.json"]);
+    expect(fetched).toEqual(["/api/terms.json", "/api/terms.json", `/api/reference/${operationId}`]);
   });
 });
