@@ -597,6 +597,45 @@ describe('payment quotes and approval plans', () => {
     ).toBe(metadata);
   });
 
+  it('warns when the router conversion quote fails, and keeps the warning on its metadata sent back', async () => {
+    const registryTerminal = v6Address('JBRouterTerminalRegistry', project.chainId);
+    const warned = (warnings: string[]) =>
+      warnings.some((warning) => warning.startsWith(PAY_QUOTE_FAILED_MESSAGE));
+    // No buyback hook: the SDK quotes the router's conversion, and its reads fail twice.
+    // This fixture does not answer accountingContextsOf, one of those reads.
+    const failing = fixture({ primaryTerminal: registryTerminal });
+    const quoted = await failing.service.quotePay({ ...sdkPayInput, token });
+    expect(warned(quoted.warnings)).toBe(true);
+    const sentBack = await failing.service.preparePay({
+      ...sdkPayInput,
+      token,
+      metadata: quoted.metadata,
+    });
+    expect(sentBack.summary).toMatchObject({ metadata: quoted.metadata });
+    expect(warned(sentBack.warnings)).toBe(true);
+    // Reads that answer carry no notice, quoted or sent back.
+    const reading = fixture({ primaryTerminal: registryTerminal });
+    const original = reading.readContract.getMockImplementation()!;
+    // Two accepted tokens: the SDK keeps the router's own floor, with every read answered.
+    reading.readContract.mockImplementation(async (request) =>
+      request.functionName === 'accountingContextsOf'
+        ? [
+            { token: NATIVE_TOKEN, decimals: 18, currency: 61166 },
+            { token, decimals: 18, currency: 1 },
+          ]
+        : original(request),
+    );
+    expect(warned((await reading.service.quotePay({ ...sdkPayInput, token })).warnings)).toBe(
+      false,
+    );
+    expect(
+      warned(
+        (await reading.service.preparePay({ ...sdkPayInput, token, metadata: quoted.metadata }))
+          .warnings,
+      ),
+    ).toBe(false);
+  });
+
   it('resolves registry -> gateway -> router on an executed chain and approves the outer terminal', async () => {
     const chainId = 84532;
     const registryTerminal = v6Address('JBRouterTerminalRegistry', chainId);

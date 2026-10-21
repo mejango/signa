@@ -879,11 +879,15 @@ export class PaymentService {
       beneficiaryTokenCount = prepared.preview.beneficiaryTokenCount;
       reservedTokenCount = prepared.preview.reservedTokenCount;
     }
-    // Caller metadata whose buyback entry sets no minimum (such as a failed quote's, sent back)
-    // protects the swap only by the hook's floor: ask the SDK whether the pool reads now. A read that
-    // fails here is the same unknown, so the payer is told.
+    // Caller metadata (such as a failed quote's, sent back) skips the SDK. Where the SDK would quote the
+    // route, a buyback entry with no minimum of its own or a router conversion with no buyback hook,
+    // ask it again only to learn whether the market price reads now. A read that fails here is the
+    // same unknown, so the payer is told.
     let quoteFailed = prepared?.quoteFailed === true;
-    if (!prepared && unquotedSkipSplits !== undefined)
+    const requote =
+      unquotedSkipSplits !== undefined ||
+      (terminal.isRouter && quoteBasis !== 'buyback-hook-indicative-output');
+    if (!prepared && requote)
       quoteFailed = await prepareUserPay(client, {
         chainId: input.project.chainId,
         terminal: terminal.address,
@@ -892,7 +896,7 @@ export class PaymentService {
         amount,
         beneficiary: input.beneficiary,
         slippageBps: slippage,
-        skipSplits: unquotedSkipSplits,
+        skipSplits: unquotedSkipSplits ?? true,
       }).then(
         (requoted) => requoted.quoteFailed === true,
         () => true,
