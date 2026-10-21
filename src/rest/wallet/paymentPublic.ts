@@ -34,6 +34,8 @@ export interface WalletPaymentAppPublic extends WalletPaymentReviewPublic {
   approval: { signature: Hex; signedCommitment: Hex } | null;
 }
 export interface WalletPaymentCentralPublic extends WalletPaymentReviewPublic {
+  /** Shown beside approval: the quote could not read the pool price. Center's own page only. */
+  notice: string | null;
   passkey: { rpId: string; credentialId: string; challenge: string; userVerification: 'required' };
   /** The pay metadata as the SDK's review decoder reads it, decoded here so the page does not bundle the SDK; empty for `0x`. */
   metadataSteps: PayMetadataStep[];
@@ -56,7 +58,7 @@ export function publicWalletPaymentAppReview(view: WalletPaymentReviewAppView): 
 }
 export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView): WalletPaymentCentralPublic {
   const d = view.draft;
-  return { ...publicWalletPaymentReview(view), passkey: { rpId: d.authority.credential.rpId,
+  return { ...publicWalletPaymentReview(view), notice: d.notice ?? null, passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId,
     challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' },
     metadataSteps: passkeyPayMetadataSteps(d.payment.metadata) };

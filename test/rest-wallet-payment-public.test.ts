@@ -34,6 +34,11 @@ describe('wallet payment HTTP projection',()=>{
     expect(publicWalletPaymentCentralReview(source).metadataSteps.map(step=>step.title)).toEqual(['Buyback hook swap instructions','721 shop mint instructions']);
     (source.draft.payment as any).metadata='0x1234';expect(()=>publicWalletPaymentCentralReview(source)).toThrow();
   });
+  it('shows the quote notice on the central review only, where the payer approves',()=>{
+    const source=fixture(); expect(publicWalletPaymentCentralReview(source).notice).toBeNull();
+    (source.draft as any).notice='Notice.'; expect(publicWalletPaymentCentralReview(source).notice).toBe('Notice.');
+    expect(publicWalletPaymentReview(source)).not.toHaveProperty('notice');expect(publicWalletPaymentAppReview(source)).not.toHaveProperty('notice');
+  });
   it('does not expose mutable internal draft objects through the projection',()=>{
     const source=fixture(), result=publicWalletPaymentAppReview(source) as any;
     result.operation.callData='changed';result.payment.amount='2';result.stepIndexes.push(9);result.signing.digest='changed';result.approval.signature='changed';

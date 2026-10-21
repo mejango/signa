@@ -11,6 +11,7 @@ export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string
 <p id="payment-status" role="status" aria-live="polite" aria-atomic="true" data-state="loading">Checking this payment…</p>
 <section id="payment-review" aria-label="Payment details" hidden>
 <p id="payment-amount" class="amount"></p>
+<p id="payment-notice" role="note" hidden></p>
 <details class="quiet"><summary>Details</summary><dl>
 <dt>Juicebox project</dt><dd id="payment-project"></dd><dt>Network</dt><dd>Base</dd>
 <dt>Requested by</dt><dd id="payment-app"></dd><dt>From your account</dt><dd id="payment-account"></dd>
@@ -35,6 +36,7 @@ details{margin:1.5rem 0}summary{cursor:pointer;text-decoration:underline;line-he
 details.quiet>summary{list-style:none;display:inline-block;color:#53614f;font-size:.9rem;text-underline-offset:.15em}details.quiet>summary::-webkit-details-marker{display:none}details.quiet>summary:hover{color:#172019}
 details.quiet>summary::after{content:"";display:inline-block;width:.35em;height:.35em;margin:0 0 .1em .55em;border:solid currentColor;border-width:0 1px 1px 0;transform:rotate(-45deg);transition:transform .15s}details.quiet[open]>summary::after{transform:rotate(45deg);margin-bottom:.2em}
 #payment-status:empty{display:none}
+#payment-notice{margin:-.75rem 0 1.25rem;color:#9c3028}
 /* Framed inside the app's page: the app's gutter is 2.7rem and the frame sits 1.6rem into it, so 1.1rem here
  * (less the border) lines this text up with the app's; no brand or page margins. */
 html.framed main{margin:0 auto;padding:1.25rem calc(1.6rem - 1px) 1.5rem}html.framed .brand{display:none}html.framed h1{margin-top:.5rem}html.framed #payment-status{margin:1rem 0}

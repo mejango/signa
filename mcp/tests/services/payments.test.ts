@@ -814,7 +814,7 @@ describe('payment quotes and approval plans', () => {
     }
   });
 
-  it("warns when prepareUserPay could not read the pool's price", async () => {
+  it("warns when prepareUserPay could not read the pool's price, through quote, plan and sent-back metadata, and only while it cannot", async () => {
     const poolKey = {
       currency0: zeroAddress,
       currency1: '0x7777777777777777777777777777777777777777' as Address,
@@ -831,22 +831,35 @@ describe('payment quotes and approval plans', () => {
         poolKey.hooks,
       ]),
     );
-    const swapping = () =>
-      fixture({
-        dataHook: registry,
-        beneficiaryCount: 0n,
-        payHooks: [
-          {
-            hook: buybackHook,
-            noop: false,
-            amount: 100n,
-            metadata: payHookMetadata({ skipSplits: true, poolId }),
-          },
-        ],
-      });
-    // The pool reads fail twice: the SDK's minimum is only the mint rate, and the quote says so.
-    const failed = swapping();
-    const sdk = await prepareUserPay((await failed.snapshot()).client, {
+    // One service whose pool turns readable.
+    let readable = false;
+    const f = fixture({
+      dataHook: registry,
+      beneficiaryCount: 0n,
+      payHooks: [
+        {
+          hook: buybackHook,
+          noop: false,
+          amount: 100n,
+          metadata: payHookMetadata({ skipSplits: true, poolId }),
+        },
+      ],
+    });
+    const original = f.readContract.getMockImplementation()!;
+    f.readContract.mockImplementation(async (request) => {
+      if (request.functionName !== 'poolKeyOf') return original(request);
+      if (!readable) throw new Error('RPC read unavailable');
+      return poolKey;
+    });
+    Object.assign((await f.snapshot()).client, {
+      call: vi.fn(async () => ({
+        data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
+      })),
+    });
+    const warned = (warnings: string[]) =>
+      warnings.some((warning) => warning.startsWith(PAY_QUOTE_FAILED_MESSAGE));
+    // The pool reads fail twice: the SDK's minimum is only the mint rate, and the payer is told.
+    const sdk = await prepareUserPay((await f.snapshot()).client, {
       chainId: project.chainId,
       terminal,
       projectId: BigInt(project.projectId),
@@ -855,23 +868,34 @@ describe('payment quotes and approval plans', () => {
       beneficiary,
     });
     expect(sdk.quoteFailed).toBe(true);
-    expect((await failed.service.quotePay(sdkPayInput)).warnings.join(' ')).toContain(
-      PAY_QUOTE_FAILED_MESSAGE,
-    );
-    // A readable pool quote carries no such warning.
-    const readable = swapping();
-    const original = readable.readContract.getMockImplementation()!;
-    readable.readContract.mockImplementation(async (request) =>
-      request.functionName === 'poolKeyOf' ? poolKey : original(request),
-    );
-    Object.assign((await readable.snapshot()).client, {
-      call: vi.fn(async () => ({
-        data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
-      })),
+    const quoted = await f.service.quotePay(sdkPayInput);
+    expect(warned(quoted.warnings)).toBe(true);
+    expect(warned((await f.service.preparePay(sdkPayInput)).warnings)).toBe(true);
+    // The quote's metadata sent back to prepare keeps its exact bytes and still says so.
+    const sentBack = await f.service.preparePay({ ...sdkPayInput, metadata: quoted.metadata });
+    expect(sentBack.summary).toMatchObject({ metadata: quoted.metadata });
+    expect(warned(sentBack.warnings)).toBe(true);
+    // Caller metadata whose buyback entry carries its own minimum is protected by it: no notice.
+    const withMinimum = fixture({
+      dataHook: registry,
+      beneficiaryCount: 0n,
+      payHooks: [
+        {
+          hook: buybackHook,
+          noop: false,
+          amount: 100n,
+          metadata: payHookMetadata({ skipSplits: true, explicit: true, poolId }),
+        },
+      ],
     });
-    expect((await readable.service.quotePay(sdkPayInput)).warnings.join(' ')).not.toContain(
-      PAY_QUOTE_FAILED_MESSAGE,
-    );
+    expect(warned((await withMinimum.service.preparePay(payInput)).warnings)).toBe(false);
+    // Once the pool reads, the same service quotes and plans with no stale notice.
+    readable = true;
+    expect(warned((await f.service.quotePay(sdkPayInput)).warnings)).toBe(false);
+    expect(warned((await f.service.preparePay(sdkPayInput)).warnings)).toBe(false);
+    expect(
+      warned((await f.service.preparePay({ ...sdkPayInput, metadata: quoted.metadata })).warnings),
+    ).toBe(false);
   });
 
   it('supports the recorded 1.1.1 hook without accepting another generation or a partial buyback', async () => {

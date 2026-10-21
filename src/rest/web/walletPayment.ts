@@ -15,7 +15,7 @@ const element = <T extends HTMLElement>(id: string) => document.getElementById(i
 const status = element('payment-status'), details = element('payment-review');
 const approve = element<HTMLButtonElement>('payment-approve'), cancel = element<HTMLButtonElement>('payment-cancel');
 const cancelPrompt = element<HTMLButtonElement>('payment-prompt-cancel'), retry = element<HTMLButtonElement>('payment-retry');
-const returnToApp = element<HTMLAnchorElement>('payment-return');
+const returnToApp = element<HTMLAnchorElement>('payment-return'), notice = element('payment-notice');
 let id = '', rpId = '';
 let review: WalletPaymentCentralPublic | null = null, immutable = '', busy = false, blocked = false;
 let uncertain = false, canRetry = false, nativePrompt: AbortController | null = null;
@@ -145,6 +145,7 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   if (passkey.rpId !== rpId || passkey.userVerification !== 'required' || decode(passkey.challenge).length !== 32 ||
     `0x${Array.from(decode(passkey.challenge), byte => byte.toString(16).padStart(2, '0')).join('')}` !== signing.digest) fail();
   decode(passkey.credentialId);
+  if (value.notice !== null) text(value.notice, 256);
   // Status may advance, but the displayed terms, exact operation and selected
   // credential cannot change while recovering an interrupted approval.
   const { status: ignoredStatus, approvedAtMs, cancelledAtMs, operationState, ...stable } = value;
@@ -172,6 +173,8 @@ function accept(input: unknown) {
     terminal: payment.terminal, metadata: payment.metadata, operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
     element(`payment-${name}`).textContent = value;
   showSteps(review.metadataSteps);
+  // Beside approval, not in the details: the minimum protects less than usual.
+  notice.textContent = review.notice ?? ''; notice.hidden = review.notice === null;
   returnToApp.href = callback(review);
   if (review.status === 'approved') { pending = null; uncertain = false; setStatus('approved', 'Approved. Check the result in the app.'); }
   else if (review.status === 'cancelled') { pending = null; uncertain = false; setStatus('cancelled', 'Payment declined. No new approval was issued.'); }
