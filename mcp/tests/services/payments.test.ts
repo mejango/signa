@@ -12,6 +12,7 @@ import {
   prepareUserPay,
   v6Address,
   PAY_MAX_SLIPPAGE_BPS,
+  PAY_QUOTE_FAILED_MESSAGE,
 } from '@bananapus/nana-sdk-core/v6';
 import {
   decodeFunctionData,
@@ -811,6 +812,66 @@ describe('payment quotes and approval plans', () => {
       expect(servicePreviews.some(([request]) => request.args?.[4] !== sdk.metadata)).toBe(true);
       expect(servicePreviews.at(-1)?.[0].args?.[4]).toBe(sdk.metadata);
     }
+  });
+
+  it("warns when prepareUserPay could not read the pool's price", async () => {
+    const poolKey = {
+      currency0: zeroAddress,
+      currency1: '0x7777777777777777777777777777777777777777' as Address,
+      fee: 3000,
+      tickSpacing: 60,
+      hooks: zeroAddress,
+    };
+    const poolId = keccak256(
+      encodeAbiParameters(parseAbiParameters('address,address,uint24,int24,address'), [
+        poolKey.currency0,
+        poolKey.currency1,
+        poolKey.fee,
+        poolKey.tickSpacing,
+        poolKey.hooks,
+      ]),
+    );
+    const swapping = () =>
+      fixture({
+        dataHook: registry,
+        beneficiaryCount: 0n,
+        payHooks: [
+          {
+            hook: buybackHook,
+            noop: false,
+            amount: 100n,
+            metadata: payHookMetadata({ skipSplits: true, poolId }),
+          },
+        ],
+      });
+    // The pool reads fail twice: the SDK's minimum is only the mint rate, and the quote says so.
+    const failed = swapping();
+    const sdk = await prepareUserPay((await failed.snapshot()).client, {
+      chainId: project.chainId,
+      terminal,
+      projectId: BigInt(project.projectId),
+      token: NATIVE_TOKEN,
+      amount: 100n,
+      beneficiary,
+    });
+    expect(sdk.quoteFailed).toBe(true);
+    expect((await failed.service.quotePay(sdkPayInput)).warnings.join(' ')).toContain(
+      PAY_QUOTE_FAILED_MESSAGE,
+    );
+    // A readable pool quote carries no such warning.
+    const readable = swapping();
+    const original = readable.readContract.getMockImplementation()!;
+    readable.readContract.mockImplementation(async (request) =>
+      request.functionName === 'poolKeyOf' ? poolKey : original(request),
+    );
+    Object.assign((await readable.snapshot()).client, {
+      call: vi.fn(async () => ({
+        data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
+      })),
+    });
+    expect((await readable.service.quotePay(sdkPayInput)).warnings.join(' ')).not.toContain(
+      PAY_QUOTE_FAILED_MESSAGE,
+    );
   });
 
   it('supports the recorded 1.1.1 hook without accepting another generation or a partial buyback', async () => {
