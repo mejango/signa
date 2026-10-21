@@ -10,6 +10,7 @@ import {
   buildPayTx,
   getCurrentRuleset,
   PAY_MAX_SLIPPAGE_BPS,
+  PAY_QUOTE_FAILED_MESSAGE,
   prepareHookAwareCashOut,
   prepareUserPay,
   previewPay,
@@ -875,6 +876,7 @@ export class PaymentService {
       beneficiaryTokenCount = prepared.preview.beneficiaryTokenCount;
       reservedTokenCount = prepared.preview.reservedTokenCount;
     }
+    if (prepared?.quoteFailed) warnings.push(`${PAY_QUOTE_FAILED_MESSAGE} Quote again for the pool price.`);
     const metadata = prepared?.metadata ?? input.metadata ?? '0x';
     const minimum =
       prepared?.minReturnedTokens ??
