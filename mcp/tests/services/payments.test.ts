@@ -12,6 +12,7 @@ import {
   prepareUserPay,
   v6Address,
   PAY_MAX_SLIPPAGE_BPS,
+  PAY_QUOTE_FAILED_MESSAGE,
 } from '@bananapus/nana-sdk-core/v6';
 import {
   decodeFunctionData,
@@ -596,6 +597,45 @@ describe('payment quotes and approval plans', () => {
     ).toBe(metadata);
   });
 
+  it('warns when the router conversion quote fails, and keeps the warning on its metadata sent back', async () => {
+    const registryTerminal = v6Address('JBRouterTerminalRegistry', project.chainId);
+    const warned = (warnings: string[]) =>
+      warnings.some((warning) => warning.startsWith(PAY_QUOTE_FAILED_MESSAGE));
+    // No buyback hook: the SDK quotes the router's conversion, and its reads fail twice.
+    // This fixture does not answer accountingContextsOf, one of those reads.
+    const failing = fixture({ primaryTerminal: registryTerminal });
+    const quoted = await failing.service.quotePay({ ...sdkPayInput, token });
+    expect(warned(quoted.warnings)).toBe(true);
+    const sentBack = await failing.service.preparePay({
+      ...sdkPayInput,
+      token,
+      metadata: quoted.metadata,
+    });
+    expect(sentBack.summary).toMatchObject({ metadata: quoted.metadata });
+    expect(warned(sentBack.warnings)).toBe(true);
+    // Reads that answer carry no notice, quoted or sent back.
+    const reading = fixture({ primaryTerminal: registryTerminal });
+    const original = reading.readContract.getMockImplementation()!;
+    // Two accepted tokens: the SDK keeps the router's own floor, with every read answered.
+    reading.readContract.mockImplementation(async (request) =>
+      request.functionName === 'accountingContextsOf'
+        ? [
+            { token: NATIVE_TOKEN, decimals: 18, currency: 61166 },
+            { token, decimals: 18, currency: 1 },
+          ]
+        : original(request),
+    );
+    expect(warned((await reading.service.quotePay({ ...sdkPayInput, token })).warnings)).toBe(
+      false,
+    );
+    expect(
+      warned(
+        (await reading.service.preparePay({ ...sdkPayInput, token, metadata: quoted.metadata }))
+          .warnings,
+      ),
+    ).toBe(false);
+  });
+
   it('resolves registry -> gateway -> router on an executed chain and approves the outer terminal', async () => {
     const chainId = 84532;
     const registryTerminal = v6Address('JBRouterTerminalRegistry', chainId);
@@ -811,6 +851,90 @@ describe('payment quotes and approval plans', () => {
       expect(servicePreviews.some(([request]) => request.args?.[4] !== sdk.metadata)).toBe(true);
       expect(servicePreviews.at(-1)?.[0].args?.[4]).toBe(sdk.metadata);
     }
+  });
+
+  it("warns when prepareUserPay could not read the pool's price, through quote, plan and sent-back metadata, and only while it cannot", async () => {
+    const poolKey = {
+      currency0: zeroAddress,
+      currency1: '0x7777777777777777777777777777777777777777' as Address,
+      fee: 3000,
+      tickSpacing: 60,
+      hooks: zeroAddress,
+    };
+    const poolId = keccak256(
+      encodeAbiParameters(parseAbiParameters('address,address,uint24,int24,address'), [
+        poolKey.currency0,
+        poolKey.currency1,
+        poolKey.fee,
+        poolKey.tickSpacing,
+        poolKey.hooks,
+      ]),
+    );
+    // One service whose pool turns readable.
+    let readable = false;
+    const f = fixture({
+      dataHook: registry,
+      beneficiaryCount: 0n,
+      payHooks: [
+        {
+          hook: buybackHook,
+          noop: false,
+          amount: 100n,
+          metadata: payHookMetadata({ skipSplits: true, poolId }),
+        },
+      ],
+    });
+    const original = f.readContract.getMockImplementation()!;
+    f.readContract.mockImplementation(async (request) => {
+      if (request.functionName !== 'poolKeyOf') return original(request);
+      if (!readable) throw new Error('RPC read unavailable');
+      return poolKey;
+    });
+    Object.assign((await f.snapshot()).client, {
+      call: vi.fn(async () => ({
+        data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
+      })),
+    });
+    const warned = (warnings: string[]) =>
+      warnings.some((warning) => warning.startsWith(PAY_QUOTE_FAILED_MESSAGE));
+    // The pool reads fail twice: the SDK's minimum is only the mint rate, and the payer is told.
+    const sdk = await prepareUserPay((await f.snapshot()).client, {
+      chainId: project.chainId,
+      terminal,
+      projectId: BigInt(project.projectId),
+      token: NATIVE_TOKEN,
+      amount: 100n,
+      beneficiary,
+    });
+    expect(sdk.quoteFailed).toBe(true);
+    const quoted = await f.service.quotePay(sdkPayInput);
+    expect(warned(quoted.warnings)).toBe(true);
+    expect(warned((await f.service.preparePay(sdkPayInput)).warnings)).toBe(true);
+    // The quote's metadata sent back to prepare keeps its exact bytes and still says so.
+    const sentBack = await f.service.preparePay({ ...sdkPayInput, metadata: quoted.metadata });
+    expect(sentBack.summary).toMatchObject({ metadata: quoted.metadata });
+    expect(warned(sentBack.warnings)).toBe(true);
+    // Caller metadata whose buyback entry carries its own minimum is protected by it: no notice.
+    const withMinimum = fixture({
+      dataHook: registry,
+      beneficiaryCount: 0n,
+      payHooks: [
+        {
+          hook: buybackHook,
+          noop: false,
+          amount: 100n,
+          metadata: payHookMetadata({ skipSplits: true, explicit: true, poolId }),
+        },
+      ],
+    });
+    expect(warned((await withMinimum.service.preparePay(payInput)).warnings)).toBe(false);
+    // Once the pool reads, the same service quotes and plans with no stale notice.
+    readable = true;
+    expect(warned((await f.service.quotePay(sdkPayInput)).warnings)).toBe(false);
+    expect(warned((await f.service.preparePay(sdkPayInput)).warnings)).toBe(false);
+    expect(
+      warned((await f.service.preparePay({ ...sdkPayInput, metadata: quoted.metadata })).warnings),
+    ).toBe(false);
   });
 
   it('supports the recorded 1.1.1 hook without accepting another generation or a partial buyback', async () => {

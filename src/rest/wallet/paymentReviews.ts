@@ -20,6 +20,7 @@ import { assertWalletCeremonyDraft, type WalletCeremonyDraft } from "./ceremonie
 import { validateWalletRpConfiguration, verifyWalletAssertion, type WalletAssertion } from "./webauthn.js";
 import { validateWalletPolicyOrigin } from "./policy.js";
 import { validateWalletHandoffToken } from "./handoff.js";
+import { PAY_QUOTE_FAILED_MESSAGE } from "@bananapus/nana-sdk-core/v6";
 
 export interface WalletPaymentReviewContext {
   issuer: string;
@@ -61,6 +62,8 @@ export interface WalletPaymentReviewDraft {
   entryPoint: Address;
   safe7579: Address;
   payment: WalletV6UsdcPayment;
+  /** The SDK's notice when the plan's quote could not read the pool price; absent otherwise. */
+  notice?: typeof PAY_QUOTE_FAILED_MESSAGE;
   signing: { digest: Hex; signedData: Hex; validAfter: string; validUntil: string };
   createdAtMs: number;
   expiresAtMs: number;
@@ -169,6 +172,7 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
       const call = p.draft.calls[index]!; return { target: call.to, value: call.value, callData: call.data };
     }));
     const operation = normalizeUserOperation({ ...r.operation, signature: "0x" });
+    const quoteFailed = p.draft.warnings.some(warning => typeof warning === "string" && warning.startsWith(PAY_QUOTE_FAILED_MESSAGE));
     const expiresAtMs = Math.min(Math.floor(r.expiresAt / 1000) * 1000, g.expiresAt * 1000, options.createdAtMs + walletPaymentReviewMaximumLifetimeMs);
     if (expiresAtMs <= options.createdAtMs) invalid();
     // Authority identity commits the full validated lineage. The approval proof keeps
@@ -181,6 +185,7 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
         manifestRevision: c.manifest.revision, signer: address(profile.signer.address) },
       planId: p.id, planCommitment: p.commitment, operationId: r.id, operationCommitment: r.commitment, operationHash: r.operationHash,
       stepIndexes: [...r.stepIndexes], operation, chainId: 8453, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address), payment,
+      ...(quoteFailed ? { notice: PAY_QUOTE_FAILED_MESSAGE } : {}),
       signing: signing({ operation, chainId: 8453, entryPoint: r.entryPoint, safe7579: c.manifest.safe7579.address },
         String(Math.floor(r.createdAt / 1000)), String(Math.floor(r.expiresAt / 1000))), expiresAtMs };
     return validateWalletPaymentReviewDraft({ ...base, ceremony: { id: base.id, accountId: a.accountId, purpose: "payment",
@@ -191,8 +196,9 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
 export function validateWalletPaymentReviewDraft(input: unknown): WalletPaymentReviewDraft {
   try {
     const d = snapshot(input) as WalletPaymentReviewDraft;
-    fields(d, ["version", "id", "state", "issuer", "grant", "authority", "planId", "planCommitment", "operationId", "operationCommitment",
-      "operationHash", "stepIndexes", "operation", "chainId", "entryPoint", "safe7579", "payment", "signing", "createdAtMs", "expiresAtMs", "ceremony"]);
+    walletAppFields(d, ["version", "id", "state", "issuer", "grant", "authority", "planId", "planCommitment", "operationId", "operationCommitment",
+      "operationHash", "stepIndexes", "operation", "chainId", "entryPoint", "safe7579", "payment", "signing", "createdAtMs", "expiresAtMs", "ceremony"], ["notice"]);
+    if ("notice" in d && d.notice !== PAY_QUOTE_FAILED_MESSAGE) invalid();
     if (Buffer.byteLength(JSON.stringify(d)) > 65_536 || d.version !== "center-wallet-payment-review-v1" ||
       ![d.id, d.planId, d.operationId].every(value => typeof value === "string" && uuid.test(value)) || d.chainId !== 8453 ||
       !time(d.createdAtMs) || !time(d.expiresAtMs) || d.expiresAtMs <= d.createdAtMs || d.expiresAtMs > d.createdAtMs + walletPaymentReviewMaximumLifetimeMs) invalid();

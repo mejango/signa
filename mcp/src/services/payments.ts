@@ -10,6 +10,7 @@ import {
   buildPayTx,
   getCurrentRuleset,
   PAY_MAX_SLIPPAGE_BPS,
+  PAY_QUOTE_FAILED_MESSAGE,
   prepareHookAwareCashOut,
   prepareUserPay,
   previewPay,
@@ -804,6 +805,8 @@ export class PaymentService {
         'The registry-selected gateway takes custody before forwarding to its immutable router. Only failed zero-minimum calls with a valid source-project opt-in can be retained; ordinary failed payments revert. A queued fee is pending, not paid or forgiven.',
       );
     let explicitMinimum: bigint | undefined;
+    // The skip word of an active buyback entry that carries no minimum of its own.
+    let unquotedSkipSplits: boolean | undefined;
     for (const spec of hooks) {
       if (spec.noop) continue;
       if (context.tieredHook && same(spec.hook, context.tieredHook)) {
@@ -837,6 +840,7 @@ export class PaymentService {
         unsupported('Partial buyback payments need a dedicated quote adapter.');
       if (quoteBasis === 'buyback-hook-indicative-output')
         unsupported('Multiple active buyback pay specifications are not supported.');
+      if (!decoded[3]) unquotedSkipSplits = skipSplits;
       // An active canonical buyback hook returns weight=0: all fungible output
       // comes through this hook. The router may already have normalized its
       // returned counts (even using raw TWAP diagnostics). Replace those counts
@@ -875,6 +879,29 @@ export class PaymentService {
       beneficiaryTokenCount = prepared.preview.beneficiaryTokenCount;
       reservedTokenCount = prepared.preview.reservedTokenCount;
     }
+    // Caller metadata (such as a failed quote's, sent back) skips the SDK. Where the SDK would quote the
+    // route, a buyback entry with no minimum of its own or a router conversion with no buyback hook,
+    // ask it again only to learn whether the market price reads now. A read that fails here is the
+    // same unknown, so the payer is told.
+    let quoteFailed = prepared?.quoteFailed === true;
+    const requote =
+      unquotedSkipSplits !== undefined ||
+      (terminal.isRouter && quoteBasis !== 'buyback-hook-indicative-output');
+    if (!prepared && requote)
+      quoteFailed = await prepareUserPay(client, {
+        chainId: input.project.chainId,
+        terminal: terminal.address,
+        projectId: BigInt(input.project.projectId),
+        token: input.token,
+        amount,
+        beneficiary: input.beneficiary,
+        slippageBps: slippage,
+        skipSplits: unquotedSkipSplits ?? true,
+      }).then(
+        (requoted) => requoted.quoteFailed === true,
+        () => true,
+      );
+    if (quoteFailed) warnings.push(`${PAY_QUOTE_FAILED_MESSAGE} Quote again for the pool price.`);
     const metadata = prepared?.metadata ?? input.metadata ?? '0x';
     const minimum =
       prepared?.minReturnedTokens ??
