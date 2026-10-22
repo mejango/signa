@@ -1,6 +1,7 @@
 import { validateMnemonic } from '@scure/bip39';
 import { getAddress, isAddress, type Address, type Hex } from 'viem';
 import { signaChains } from '../wallet/chains.js';
+import { walletOwnerChangeSafeTx } from './walletRecoveryReview.js';
 import { wordlist as english } from '@scure/bip39/wordlists/english';
 import { generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 
@@ -91,4 +92,37 @@ export async function readChainSafe(walletAddress: string, chainId: number): Pro
   if (BigInt(`0x${words[0]}`) !== 32n || !count || count > 16 || words.length !== count + 2) invalid();
   return { deployed: true, owners: words.slice(2).map(item => { if (!/^0{24}/.test(item)) invalid(); return getAddress(`0x${item.slice(24)}`); }),
     threshold: word(threshold), nonce: word(nonce) };
+}
+/** Safe's owner calls by selector, with their argument count; the arguments are plain 32-byte words. */
+const ownerCalls: Record<string, ['add' | 'remove' | 'swap', number]> = { '0x0d582f13': ['add', 2], '0xf8dc5dd9': ['remove', 3], '0xe318b52b': ['swap', 3] };
+function ownerCall(data: unknown) {
+  if (typeof data !== 'string' || !/^0x[0-9a-f]+$/.test(data)) invalid();
+  const [kind, count] = ownerCalls[data.slice(0, 10)] ?? invalid();
+  if (data.length !== 10 + 64 * count) invalid();
+  const words = Array.from({ length: count }, (_, i) => data.slice(10 + 64 * i, 74 + 64 * i));
+  const owner = (word: string) => { if (!word.startsWith('0'.repeat(24))) invalid(); return getAddress(`0x${word.slice(24)}`); };
+  return { kind, words, owner };
+}
+/** One network's update to Base's owners, checked as far as the page can: owner calls on this account only, on a
+ * chain the person chose, each a valid step of Safe's owner list from `from` to `owners`, with a threshold of one
+ * and the backup kept as an owner. Then the backup signs each call in order, from the update's Safe nonce. */
+export async function signWalletOwnerUpdate(mnemonic: string, input: unknown, expected: { walletAddress: string; chainIds: number[] }): Promise<Hex[]> {
+  const update = input as { chainId: number; walletAddress: Address; recoveryOwner: Address; from: Address[]; owners: Address[]; safeNonce: string; steps: Hex[] };
+  const owners = (value: unknown) => { if (!Array.isArray(value) || !value.length || value.length > 16) invalid(); for (const item of value) address(item); return (value as Address[]).map(item => getAddress(item)); };
+  if (!update || typeof update !== 'object' || !expected.chainIds.includes(update.chainId) || !Array.isArray(update.steps) || !update.steps.length || update.steps.length > 16) invalid();
+  address(update.walletAddress); address(update.recoveryOwner);
+  if (getAddress(update.walletAddress) !== getAddress(expected.walletAddress) || typeof update.safeNonce !== 'string' || !/^(0|[1-9][0-9]{0,30})$/.test(update.safeNonce)) invalid();
+  const backup = recoveryAccountFromPhrase(mnemonic, update.recoveryOwner), target = owners(update.owners);
+  let list = owners(update.from);
+  const previous = (owner: Address) => { const index = list.indexOf(owner); if (index < 0) invalid(); return index ? list[index - 1]! : '0x0000000000000000000000000000000000000001'; };
+  for (const step of update.steps) {
+    const { kind, words, owner } = ownerCall(step), last = BigInt(`0x${words[words.length - 1]}`);
+    if (kind === 'add') { const added = owner(words[0]!); if (last !== 1n || list.includes(added)) invalid(); list = [added, ...list]; continue; }
+    const [prev, removed] = [owner(words[0]!), owner(words[1]!)];
+    if (removed === backup.address || prev !== getAddress(previous(removed))) invalid();
+    if (kind === 'remove') { if (last !== 1n) invalid(); list = list.filter(item => item !== removed); }
+    else { const next = owner(words[2]!); if (list.includes(next)) invalid(); list = list.map(item => item === removed ? next : item); }
+  }
+  if (list.length !== target.length || target.some(owner => !list.includes(owner)) || !list.includes(backup.address)) invalid();
+  return Promise.all(update.steps.map((step, index) => backup.signTypedData(walletOwnerChangeSafeTx(update.walletAddress, step, String(BigInt(update.safeNonce) + BigInt(index)), update.chainId))));
 }

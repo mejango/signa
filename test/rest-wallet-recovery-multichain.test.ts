@@ -21,6 +21,13 @@ import { RELAYR_PAYMENT_RUNTIME } from "./fixtures/relayr-payment.js";
 import { insertWalletAccount } from "./fixtures/wallet-recovery-account.js";
 import { createRegistration, enrollmentBackupAccount, signBackupProof, signGet } from "./fixtures/wallet-enrollment-crypto.js";
 import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
+import { createWalletDeviceIntent, prepareWalletDeviceAddition, prepareWalletDeviceCandidate, verifyWalletDeviceAddition, walletDeviceAdditionDocument } from "../src/rest/wallet/deviceAddition.js";
+import { createWalletDeviceChains } from "../src/rest/wallet/deviceChains.js";
+import { createWalletOwnerChains } from "../src/rest/wallet/ownerChains.js";
+import { PostgresWalletEnrollmentStore } from "../src/rest/wallet/enrollmentPostgres.js";
+import type { WalletCentralSession } from "../src/rest/wallet/login.js";
+import { walletOwnerChangeSafeTx } from "../src/rest/web/walletRecoveryReview.js";
+import { lastFixturePrimary } from "./fixtures/wallet-authority-context.js";
 
 const connectionString = process.env.TEST_DATABASE_URL;
 const suite = connectionString && anvilAvailable() ? describe : describe.skip;
@@ -35,7 +42,7 @@ const safeAbi = parseAbi([
 const approvesEverything = `0x6000357f${"ffffffff" + "00".repeat(28)}1660005260206000f3` as Hex;
 const developer = getAddress("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
 
-suite("recovery on every chain the account uses (PostgreSQL, Base plus two Anvil chains)", () => {
+suite("owner changes on every chain the account uses (PostgreSQL, Base plus two Anvil chains)", () => {
   const schema = `wallet_recovery_chains_${randomUUID().replaceAll("-", "")}`, nodes = new Map<number, { url: string; child: ChildProcess }>();
   let admin: Pool, pool: Pool;
   const call = async (chainId: number, method: string, params: readonly unknown[] = []) => {
@@ -57,7 +64,7 @@ suite("recovery on every chain the account uses (PostgreSQL, Base plus two Anvil
   const send = async (chainId: number, to: Address, data: Hex) => mined(chainId, await call(chainId, "eth_sendTransaction", [{ from: developer, to, data }]));
 
   /** Relayr, faked: it runs each paid entry on its chain, except on chains told to fail. */
-  function relayr(failing = new Set<number>()) {
+  function relayr(failing = new Set<number>(), creates?: { factory: Address; run: (chainId: number) => Promise<void> }) {
     const bundles = new Map<string, { entries: { chain: number; target: string; data: string; value: string }[]; ids: string[]; ran?: { state: string; hash?: string }[] }>();
     return { bundles, failing, quotes: 0,
       async createIndependent(entries: { chain: number; target: string; data: string; value: string }[]) {
@@ -76,6 +83,7 @@ suite("recovery on every chain the account uses (PostgreSQL, Base plus two Anvil
           for (const entry of bundle.entries) {
             if (failing.has(entry.chain)) { ran.push({ state: "Failed" }); continue; }
             const hash = await call(entry.chain, "eth_sendTransaction", [{ from: developer, to: entry.target, data: entry.data }]) as string;
+            if (creates && entry.target.toLowerCase() === creates.factory.toLowerCase()) await creates.run(entry.chain);
             ran.push({ state: await mined(entry.chain, hash) === "0x1" ? "Included" : "Reverted", hash });
           }
           bundle.ran = ran;
@@ -105,10 +113,10 @@ suite("recovery on every chain the account uses (PostgreSQL, Base plus two Anvil
     for (const node of nodes.values()) node.child.kill("SIGKILL");
     await pool?.end(); if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await admin.end(); }
   });
-  beforeEach(async () => { await pool.query("TRUNCATE rest_accounts,rest_wallet_enrollments,rest_wallet_ceremonies,rest_wallet_network_bundles,rest_wallet_networks CASCADE"); });
+  beforeEach(async () => { await pool.query("TRUNCATE rest_accounts,rest_wallet_enrollments,rest_wallet_ceremonies,rest_wallet_network_bundles,rest_wallet_networks,rest_wallet_owner_chains CASCADE"); });
 
   /** A proved recovery for an account whose Safe sits at the same address on all three chains, with the same owners. */
-  async function account() {
+  async function account(chains = [8453, 10, 42161]) {
     const now = Number((await pool.query("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::text AS now")).rows[0].now);
     const context = await insertWalletAccount(pool, now), recoveries = new PostgresWalletRecoveryStore(pool, policy);
     const begun = await recoveries.begin(context.accountId), intent = begun.record.intent;
@@ -118,16 +126,23 @@ suite("recovery on every chain the account uses (PostgreSQL, Base plus two Anvil
     const candidate = registered.candidate! as WalletRecoveryCandidate, safe = getAddress(intent.accountId.slice(12));
     expect(candidate.intent.recoveryOwner.toLowerCase()).toBe(enrollmentBackupAccount.address.toLowerCase());
     for (const chainId of [8453, 10, 42161]) {
-      await call(chainId, "anvil_setCode", [safe, proxy.deployedBytecode]);
-      await call(chainId, "anvil_setStorageAt", [safe, padHex("0x0", { size: 32 }), padHex(singleton.address, { size: 32 })]);
-      expect(await send(chainId, safe, encodeFunctionData({ abi: safeAbi, functionName: "setup",
-        args: [[candidate.intent.priorSigner, candidate.intent.recoveryOwner], 1n, zeroAddress, "0x", zeroAddress, zeroAddress, 0n, zeroAddress] }))).toBe("0x1");
+      if (chains.includes(chainId)) await deploySafe(chainId, safe, [candidate.intent.priorSigner, candidate.intent.recoveryOwner]);
       // Both passkey signers are stand-ins that approve any check, so only ownership decides who can sign.
       for (const signer of [candidate.intent.priorSigner, candidate.signerAddress]) await call(chainId, "anvil_setCode", [signer, approvesEverything]);
     }
-    await pool.query(`INSERT INTO rest_wallet_networks(account_id,chain_id,state,bundle_id,tx_hash,updated_at_ms) VALUES($1,10,'deployed',NULL,NULL,$2),($1,42161,'deployed',NULL,NULL,$2)`,
-      [intent.accountId, now]);
-    return { candidate, safe, accountId: intent.accountId, id: intent.id };
+    await deployedRows(intent.accountId, chains, now);
+    return { candidate, safe, accountId: intent.accountId, id: intent.id, context, key };
+  }
+  /** The Safe at the account's address on one chain, set up with these owners, as the creation call leaves it. */
+  async function deploySafe(chainId: number, safe: Address, owners: Address[]) {
+    await call(chainId, "anvil_setCode", [safe, proxy.deployedBytecode]);
+    await call(chainId, "anvil_setStorageAt", [safe, padHex("0x0", { size: 32 }), padHex(singleton.address, { size: 32 })]);
+    expect(await send(chainId, safe, encodeFunctionData({ abi: safeAbi, functionName: "setup",
+      args: [owners, 1n, zeroAddress, "0x", zeroAddress, zeroAddress, 0n, zeroAddress] }))).toBe("0x1");
+  }
+  async function deployedRows(accountId: string, chains: number[], now: number) {
+    for (const chainId of chains.filter(chainId => chainId !== 8453))
+      await pool.query("INSERT INTO rest_wallet_networks(account_id,chain_id,state,bundle_id,tx_hash,updated_at_ms) VALUES($1,$2,'deployed',NULL,NULL,$3)", [accountId, chainId, now]);
   }
   function services(provider: ReturnType<typeof relayr>) {
     const payer = privateKeyToAccount(`0x${"88".repeat(32)}`);
@@ -260,5 +275,125 @@ suite("recovery on every chain the account uses (PostgreSQL, Base plus two Anvil
       await expect(call(chainId, "eth_call", [{ from: developer, to: safe, data: encodeFunctionData({ abi: safeAbi, functionName: "execTransaction",
         args: [safe, 0n, review.swapOwner.data, 0, 0n, 0n, 0n, zeroAddress, zeroAddress, signatures[index]!.signature] }) }, "latest"])).rejects.toThrow();
     }
+  }, 60_000);
+  /** An account on all three chains with its original owners, and a new device that proved its passkey. */
+  async function deviceAccount() {
+    const now = Number((await pool.query("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::text AS now")).rows[0].now);
+    const context = await insertWalletAccount(pool, now), primary = lastFixturePrimary!, safe = getAddress(context.accountId.slice(12));
+    const intent = createWalletDeviceIntent(context, { ...policy, nowMs: now, expiresAtMs: now + 120_000 });
+    const device = createRegistration({ ...policy, userHandle: intent.userHandle, challenge: `0x${Buffer.from(intent.registration.challenge, "base64url").toString("hex")}` });
+    const candidate = prepareWalletDeviceCandidate(intent, device.response), owners = [intent.primarySigner, intent.recoveryOwner];
+    for (const chainId of [8453, 10, 42161]) {
+      await deploySafe(chainId, safe, owners);
+      for (const signer of [intent.primarySigner, candidate.signerAddress]) await call(chainId, "anvil_setCode", [signer, approvesEverything]);
+    }
+    await deployedRows(context.accountId, [10, 42161], now);
+    const provider = relayr(), { payer } = services(provider), networks = createWalletNetworks({ enrollments: { get: async () => null },
+      authority: { loadContext: async () => { throw Error("unused"); } }, store: new PostgresWalletNetworksStore(pool), provider, rpc,
+      payer: { address: payer.address, signTransaction: transaction => payer.signTransaction(transaction) } });
+    await call(8453, "anvil_setBalance", [payer.address, toHex(10n ** 18n)]);
+    const passkey = { credentialId: context.credential.credentialId, userHandle: context.credential.userHandle, publicKey: context.credential.publicKey, backupEligible: context.credential.backupEligible };
+    return { primary, safe, intent, candidate, owners, provider, networks, passkey };
+  }
+
+  it("device addition reaches every deployed chain", async () => {
+    const { primary, safe, intent, candidate, owners, provider, networks, passkey } = await deviceAccount();
+    const chains = createWalletDeviceChains({ pool, rpc, networks, checkIntervalMs: 0 });
+    // One review per other chain, each its own SafeTx bound to that chain, all shown with Base's.
+    const reviews = await chains.prepare(candidate);
+    expect(reviews.map(review => review.chainId)).toEqual([10, 42161]);
+    const challenges = reviews.map(review => hashTypedData(walletDeviceAdditionDocument(review)));
+    const base = prepareWalletDeviceAddition(candidate, { owners, threshold: 1, safeNonce: "0" }), baseChallenge = hashTypedData(walletDeviceAdditionDocument(base));
+    expect(new Set([baseChallenge, ...challenges]).size).toBe(3);
+    // The primary passkey signs each chain's addition once; a chain left out refuses the whole approval.
+    const signed = reviews.map((review, index) => ({ chainId: review.chainId!, assertion: signGet({ ...primary, ...policy, challenge: challenges[index]! }) }));
+    await expect(chains.approve(candidate, signed.slice(0, 1), passkey)).rejects.toMatchObject({ code: "WALLET_DEVICE_CHAINS_CHANGED" });
+    await expect(chains.approve(candidate, [{ chainId: 10, assertion: signed[1]!.assertion }, { chainId: 42161, assertion: signed[0]!.assertion }], passkey)).rejects.toMatchObject({ status: 403 });
+    await chains.approve(candidate, signed, passkey);
+    expect(await chains.status(intent.id)).toEqual([{ chainId: 10, name: "Optimism", state: "approved" }, { chainId: 42161, name: "Arbitrum", state: "approved" }]);
+    // Nothing leaves before Base shows the device.
+    await chains.tick();
+    expect(provider.quotes).toBe(0);
+    const calls = verifyWalletDeviceAddition(candidate, base, signGet({ ...primary, ...policy, challenge: baseChallenge }), passkey);
+    expect(await send(8453, safe, calls.addOwner.data)).toBe("0x1");
+    for (let pass = 0; pass < 5 && (await chains.status(intent.id)).some(chain => chain.state !== "updated"); pass++) await chains.tick();
+    expect(await chains.status(intent.id)).toEqual([{ chainId: 10, name: "Optimism", state: "updated" }, { chainId: 42161, name: "Arbitrum", state: "updated" }]);
+    expect(provider.quotes).toBe(1);
+    const states = await observeWalletOwners({ account: safe, chains: [8453, 10, 42161], rpc });
+    expect(states.map(state => state.status)).toEqual(["consistent", "consistent", "consistent"]);
+    for (const chainId of [8453, 10, 42161]) expect(await canSign(chainId, safe, candidate.signerAddress)).toBe(true);
+    // A second read finds nothing left to approve.
+    expect(await chains.prepare(candidate)).toEqual([]);
+  }, 60_000);
+
+  it("an approval whose device never reached Base stops holding the other chains after a day", async () => {
+    const { primary, intent, candidate, provider, networks, passkey } = await deviceAccount();
+    const chains = createWalletDeviceChains({ pool, rpc, networks, checkIntervalMs: 0 });
+    const reviews = await chains.prepare(candidate);
+    await chains.approve(candidate, reviews.map(review => ({ chainId: review.chainId!, assertion: signGet({ ...primary, ...policy,
+      challenge: hashTypedData(walletDeviceAdditionDocument(review)) }) })), passkey);
+    await chains.tick();
+    expect((await chains.status(intent.id)).map(chain => chain.state)).toEqual(["approved", "approved"]);
+    // A day passes with Base never showing the device.
+    await pool.query("UPDATE rest_wallet_owner_chains SET updated_at_ms=updated_at_ms-86400001 WHERE change_id=$1", [intent.id]);
+    await chains.tick();
+    expect((await chains.status(intent.id)).map(chain => chain.state)).toEqual(["failed", "failed"]);
+    expect(provider.quotes).toBe(0);
+  }, 60_000);
+
+  it("a network added after recovery gets the current owners through the recovery EOA, with no extra prompt, before it is usable", async () => {
+    const { candidate, safe, accountId, context, key } = await account([8453]);
+    const enrollment = context.enrollment, manifest = enrollment.intent.manifest, creation = enrollment.creation!;
+    // The creation stack carries the same bytes on Base and Arbitrum; the factory answers with the account's address.
+    const pins = [manifest.singleton.address, manifest.safe7579.address, manifest.launchpad.address, manifest.creationProfile!.multiSend.address,
+      manifest.ownerProfile!.signerFactory.address, manifest.ownerProfile!.signerSingleton.address, manifest.ownerProfile!.p256Verifier.address];
+    for (const pin of pins) {
+      const code = await call(8453, "eth_getCode", [pin, "latest"]) as Hex;
+      for (const chainId of [8453, 42161]) await call(chainId, "anvil_setCode", [pin, code === "0x" ? "0x00" : code]);
+    }
+    for (const chainId of [8453, 42161]) await call(chainId, "anvil_setCode", [creation.transaction.to, `0x73${safe.slice(2).toLowerCase()}60005260206000f3`]);
+    // Base is recovered: the replacement passkey holds it with the recovery owner.
+    const base = await baseReview(candidate, safe), [signature] = await approveAll(candidate, [base]);
+    await rotateBase(candidate, safe, signature!.signature, base);
+    const recovered = { ...context, credential: { ...context.credential, credentialId: candidate.credential.credentialId, userHandle: candidate.credential.userHandle,
+      publicKey: candidate.credential.publicKey, backupEligible: candidate.credential.backupEligible },
+      binding: { ...context.binding, state: { ...context.binding.state, owners: [candidate.signerAddress, candidate.intent.recoveryOwner],
+        ownerProfile: { ...context.binding.state.ownerProfile!, signer: { ...context.binding.state.ownerProfile!.signer, address: candidate.signerAddress, ...candidate.credential.publicKey } } } } };
+    // Relayr's creation call leaves the original owners on the new chain, as the real factory does.
+    const provider = relayr(new Set(), { factory: creation.transaction.to, run: chainId => deploySafe(chainId, safe, creation.owners) });
+    const payer = privateKeyToAccount(`0x${"88".repeat(32)}`);
+    await call(8453, "anvil_setBalance", [payer.address, toHex(10n ** 18n)]);
+    const networks = createWalletNetworks({ enrollments: new PostgresWalletEnrollmentStore(pool), authority: { loadContext: async () => recovered },
+      store: new PostgresWalletNetworksStore(pool), provider, rpc, payer: { address: payer.address, signTransaction: transaction => payer.signTransaction(transaction) } });
+    const owners = createWalletOwnerChains({ pool, rpc, networks, checkIntervalMs: 0 });
+    const session = { id: randomUUID(), accountId, enrollmentId: enrollment.intent.id, rpId: policy.rpId, credentialId: candidate.credential.credentialId } as WalletCentralSession;
+    expect((await networks.list(session)).backup).toBe("needed");
+    // One quote: the deployment, and the owner calls that bring Arbitrum from the original owners to Base's.
+    const quoted = await networks.quote(session, { chainIds: [42161] });
+    expect(quoted.owners!.chains).toHaveLength(1);
+    const update = quoted.owners!.chains[0]!;
+    expect(update).toMatchObject({ chainId: 42161, safeNonce: "0", from: creation.owners.map(owner => getAddress(owner)), owners: [candidate.signerAddress, getAddress(candidate.intent.recoveryOwner)] });
+    expect(update.steps).toHaveLength(1);
+    // The backup key signs in software; the passkey is asked once, for the deployment it already approves.
+    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(index), 42161))));
+    const assertion = signGet({ ...key, ...policy, challenge: quoted.challenge! });
+    await expect(networks.approve(session, { bundleId: quoted.bundle!.id, assertion })).rejects.toMatchObject({ code: "WALLET_NETWORKS_INVALID" });
+    const wrong = await privateKeyToAccount(`0x${"77".repeat(32)}`).signTypedData(walletOwnerChangeSafeTx(safe, update.steps[0]!, "0", 42161));
+    await expect(networks.approve(session, { bundleId: quoted.bundle!.id, assertion, owners: { changeId: quoted.owners!.changeId, signatures: [{ chainId: 42161, signatures: [wrong] }] } }))
+      .rejects.toMatchObject({ code: "WALLET_NETWORKS_BACKUP_INVALID" });
+    const approved = await networks.approve(session, { bundleId: quoted.bundle!.id, assertion, owners: { changeId: quoted.owners!.changeId, signatures: [{ chainId: 42161, signatures }] } });
+    expect(approved.bundle.state).toBe("paid");
+    // Deployed with the original owners: the chain is diverged and blocked until the update lands.
+    const deployed = await networks.status(session);
+    expect(deployed.networks.map(item => `${item.chainId}:${item.state}:${"owners" in item ? item.owners : ""}`)).toEqual(["8453:deployed:consistent", "42161:deployed:updating"]);
+    const before = await observeWalletOwners({ account: safe, chains: [8453, 42161], rpc });
+    expect(() => assertOwnersConsistent(before, 42161)).toThrow(expect.objectContaining({ code: "WALLET_OWNERS_DIVERGED" }));
+    for (let pass = 0; pass < 5 && (await owners.status(quoted.owners!.changeId)).some(chain => chain.state !== "updated"); pass++) await owners.tick();
+    expect(await owners.status(quoted.owners!.changeId)).toEqual([{ chainId: 42161, name: "Arbitrum", state: "updated" }]);
+    const after = await observeWalletOwners({ account: safe, chains: [8453, 42161], rpc });
+    expect(after.map(state => state.status)).toEqual(["consistent", "consistent"]);
+    expect(await canSign(42161, safe, candidate.intent.priorSigner)).toBe(false);
+    expect(await canSign(42161, safe, candidate.signerAddress)).toBe(true);
+    expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "consistent"]);
   }, 60_000);
 });

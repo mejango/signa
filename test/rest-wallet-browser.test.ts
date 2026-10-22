@@ -5,6 +5,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
 import { build } from "esbuild";
+import { encodeFunctionData, getAddress, hashTypedData, parseAbi, recoverAddress, type Hex } from "viem";
+import { english, generateMnemonic, mnemonicToAccount } from "viem/accounts";
+import { walletOwnerChangeSafeTx } from "../src/rest/web/walletRecoveryReview.js";
 import { parseWalletRegistration, type WalletRegistrationCandidate } from "../src/rest/wallet/registration.js";
 import { verifyWalletAssertion, type WalletAssertion } from "../src/rest/wallet/webauthn.js";
 import { walletFundsPageHeaders, walletSigningPageHeaders } from "../src/rest/wallet/http.js";
@@ -142,6 +145,11 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   let landingWays = false;
   // Onramp routes answer only in the funds test; elsewhere they 404 and the link stays hidden.
   let onramp = false;
+  // Owner-update routes answer only in the backup update test.
+  let ownerUpdate: { steps: Hex[] } | null = null, kitScript = "";
+  const backupWords = generateMnemonic(english, 256), backupOwner = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }).address;
+  const ownerAbi = parseAbi(["function swapOwner(address prevOwner,address oldOwner,address newOwner)", "function removeOwner(address prevOwner,address owner,uint256 _threshold)"]);
+  const [oldPasskey, newPasskey] = [getAddress(`0x${"a0".repeat(20)}`), getAddress(`0x${"a1".repeat(20)}`)];
   const csrf = encode(Buffer.alloc(32, 9)), intentId = encode(Buffer.alloc(32, 10));
   const state = encode(Buffer.alloc(32, 11)), code = encode(Buffer.alloc(32, 12));
   const challenge = encode(Buffer.alloc(32, 13)), handle = encode(Buffer.alloc(32, 14));
@@ -165,6 +173,8 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     const built = await build({ entryPoints: [new URL("../src/rest/web/wallet.ts", import.meta.url).pathname],
       bundle: true, platform: "browser", format: "esm", target: "es2022", write: false });
     script = built.outputFiles[0]!.text;
+    kitScript = (await build({ entryPoints: [new URL("../src/rest/web/walletRecoveryKit.ts", import.meta.url).pathname],
+      bundle: true, platform: "browser", format: "esm", target: "es2022", write: false })).outputFiles[0]!.text;
     const productionPage = await import("../src/rest/web/walletPage.js");
     pageHtml = productionPage.walletPage(); css = productionPage.walletCss(); productionWaysHtml = productionPage.walletPage(true, true);
     signupScript = (await build({ entryPoints: [new URL("../src/rest/web/walletSignup.ts", import.meta.url).pathname],
@@ -191,6 +201,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : "text/css" });
         response.end(path.endsWith(".js") ? signupScript : signupCss); return;
       }
+      if (path === "/wallet/assets/wallet-recovery-kit.js") { response.writeHead(200, { "content-type": "text/javascript" }); response.end(kitScript); return; }
       if (path === "/wallet/assets/wallet.js" || path === "/wallet/assets/wallet.css") {
         response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : "text/css" });
         response.end(path.endsWith(".js") ? script : css); return;
@@ -241,6 +252,13 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
       if (onramp && path === "/wallet/onramp") return json({ applePay: true });
+      const updateView = (owners: string) => ({ offered: [], pending: [], backup: "needed", networks: [
+        { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" }, { chainId: 10, name: "Optimism", state: "deployed", txHash: null, owners }] });
+      if (ownerUpdate && path === "/wallet/networks") return json(updateView("diverged"));
+      if (ownerUpdate && path === "/wallet/networks/quote") return json({ bundle: null, challenge: null, view: updateView("diverged"), owners: { changeId: "33333333-3333-4333-8333-333333333333",
+        recoveryOwner: backupOwner, chains: [{ version: "center-wallet-network-owners-v1", chainId: 10, walletAddress, recoveryOwner: backupOwner,
+          from: [oldPasskey, backupOwner], owners: [newPasskey, backupOwner], safeNonce: "3", steps: ownerUpdate.steps, createSigners: [] }] } });
+      if (ownerUpdate && path === "/wallet/networks/owners") return json(updateView("updating"));
       if (onramp && networksDown && path === "/wallet/networks") return json({ error: { code: "WALLET_NETWORKS_UNAVAILABLE", message: "unavailable" } }, 503);
       if (onramp && path === "/wallet/networks") return json({ offered: [], pending: [], networks: [
         { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" },
@@ -268,7 +286,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
 
   beforeEach(async () => {
     walletAddress = `0x${"03".repeat(20)}`; networksDown = false;
-    authenticated = false; landingWays = false; onramp = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
+    authenticated = false; landingWays = false; onramp = false; ownerUpdate = null; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
     redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0;
     requests.length = 0; errors.length = 0;
@@ -458,6 +476,35 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.locator("#wallet-networks").textContent()).toBe("Base: Up to date, Optimism: Needs update, Arbitrum: Couldn't check, "
       + "Base Sepolia (deploying…). Actions on a network that needs an update wait until its owners match Base.");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("updates an out-of-date network with the backup, in this tab, after checking the owner calls it signs", async () => {
+    const sentinel = "0x0000000000000000000000000000000000000001";
+    // An update that would remove the backup is refused before anything is signed or sent.
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "removeOwner", args: [oldPasskey, backupOwner, 1n] })] };
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-networks-update").click();
+    expect(await page.locator("#wallet-networks-backup").isVisible()).toBe(true);
+    expect(await page.locator("#wallet-networks-choices").isHidden()).toBe(true);
+    await page.locator("#wallet-networks-words").fill(backupWords);
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("That backup does not match this account");
+    expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(0);
+    expect(await page.locator("#wallet-networks-words").inputValue()).toBe("");
+    // The real update: one swap of the old passkey for the current one, signed by the backup for Optimism at its nonce.
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
+    await page.locator("#wallet-networks-words").fill(backupWords);
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
+    const sent = requests.filter(item => item.path === "/wallet/networks/owners");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body.changeId).toBe("33333333-3333-4333-8333-333333333333");
+    const [signature] = sent[0]!.body.signatures[0].signatures as Hex[];
+    expect(sent[0]!.body.signatures[0].chainId).toBe(10);
+    expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(walletAddress as Hex, ownerUpdate.steps[0]!, "3", 10)), signature: signature! })).toBe(backupOwner);
+    expect(await page.locator("#wallet-networks-form").isHidden()).toBe(true);
     expect(errors).toEqual([]);
   });
 

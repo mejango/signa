@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from "pg";
 import { recoverTransactionAddress, type Address, type Hex, type TransactionSerialized } from "viem";
 import { RestError } from "../core.js";
 import type { WalletNetworkBundle, WalletNetworkRow, WalletNetworksStore } from "./networks.js";
+import { approveWalletOwnerChains, recordWalletOwnerChain, walletOwnerChainRows, walletOwnerChainsUnderway } from "./ownerChains.js";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function invalid(): never { throw new RestError(400, "WALLET_NETWORKS_INVALID", "Invalid network record."); }
@@ -82,6 +83,10 @@ export class PostgresWalletNetworksStore implements WalletNetworksStore {
     }
     return claimed;
   }
+  recordOwnerChain(input: Parameters<WalletNetworksStore["recordOwnerChain"]>[0]) { return recordWalletOwnerChain(this.sql, input); }
+  ownerChainRows(changeId: string) { return walletOwnerChainRows(this.sql, changeId); }
+  approveOwnerChains(...args: Parameters<WalletNetworksStore["approveOwnerChains"]>) { return approveWalletOwnerChains(this.pool, ...args); }
+  ownerChainsUnderway(accountId: string) { return walletOwnerChainsUnderway(this.sql, accountId); }
   async upsertNetwork(accountId: string, row: Omit<WalletNetworkRow, "updatedAtMs">, now: number): Promise<void> {
     await this.sql.query(`INSERT INTO rest_wallet_networks(account_id,chain_id,state,bundle_id,tx_hash,updated_at_ms) VALUES($1,$2,$3,$4,$5,$6)
       ON CONFLICT(account_id,chain_id) DO UPDATE SET state=EXCLUDED.state,bundle_id=EXCLUDED.bundle_id,tx_hash=EXCLUDED.tx_hash,updated_at_ms=GREATEST(rest_wallet_networks.updated_at_ms,EXCLUDED.updated_at_ms)

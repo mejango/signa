@@ -14,6 +14,8 @@ import type { WalletRegistrationResponse } from './registration.js';
 import type { WalletAssertion } from './webauthn.js';
 import { copyWalletSignupAssertion } from './signupPostgres.js';
 import type { WalletCentralSession } from './login.js';
+import type { createWalletDeviceChains } from './deviceChains.js';
+import type { WalletOwnerChain } from './ownerChains.js';
 
 export type WalletDevicePhase = 'awaiting_registration' | 'awaiting_possession' | 'awaiting_approval' | 'adding' | 'addition_failed' | 'awaiting_activation' | 'ready' | 'expired';
 /** What either page sees. The link is only ever handed to the primary's page once, at begin. */
@@ -24,10 +26,14 @@ export interface WalletDeviceView {
    * manager that already holds one would otherwise replace it with the new device's passkey. */
   registration: { challenge: string; userHandle: string; excludeCredentialIds: string[] } | null;
   possession: { credentialId: string; document: ReturnType<typeof walletDeviceDocument>; challenge: Hex } | null;
+  /** The account's other chains and how far the same addition is on each. */
+  chains: WalletOwnerChain[];
 }
 export interface LocalWalletDeviceDependencies {
   audience: string; devices: PostgresWalletDeviceStore; addition: ReturnType<typeof createWalletDeviceRelay>;
   smart: ReturnType<typeof createSmartAccountService>; authority: PostgresWalletAuthorityStore;
+  /** The same addition on every other chain the account is deployed on. */
+  chains?: ReturnType<typeof createWalletDeviceChains>;
   /** With it, the added device is signed in from its possession proof once the addition is done (see `sessionForLink`). */
   login?: { completeFromDevice(input: { record: WalletDeviceRecord; assertion: WalletAssertion }): Promise<{ session: unknown; sessionToken: string }> };
   onEvent?: (event: { stage: 'addition' | 'activation'; outcome: string; deviceId: string }) => void;
@@ -61,7 +67,8 @@ export function createLocalWalletDevices(options: LocalWalletDeviceDependencies)
     return { id: intent.id, passkeyName: record.passkeyName, rpId: intent.rpId, origin: intent.origin, expiresAtMs: intent.expiresAtMs,
       walletAddress: getAddress(intent.accountId.slice(12)), primarySigner: intent.primarySigner, deviceSigner: candidate?.signerAddress ?? null, phase, transactionHashes,
       registration: phase === 'awaiting_registration' ? { challenge: intent.registration.challenge, userHandle: intent.userHandle, excludeCredentialIds: await accountCredentialIds(intent.accountId) } : null,
-      possession: phase === 'awaiting_possession' ? { credentialId: candidate!.credential.credentialId, document: walletDeviceDocument(candidate!), challenge: hashTypedData(walletDeviceDocument(candidate!)) } : null };
+      possession: phase === 'awaiting_possession' ? { credentialId: candidate!.credential.credentialId, document: walletDeviceDocument(candidate!), challenge: hashTypedData(walletDeviceDocument(candidate!)) } : null,
+      chains: proof ? await options.chains?.status(intent.id) ?? [] : [] };
   }
   const owned = async (id: string, session: WalletCentralSession) => (await devices.get(id, session.accountId)) ?? unauthorized();
   const linked = async (linkToken: string) => (await devices.getByToken(linkToken)) ?? unauthorized();
@@ -101,14 +108,15 @@ export function createLocalWalletDevices(options: LocalWalletDeviceDependencies)
       event({ stage: 'activation', outcome: 'session', deviceId: record.intent.id });
       return result;
     },
-    /** Primary: the exact addition to sign, then the signed approval. */
+    /** Primary: the exact addition to sign on Base and on each other deployed chain, one passkey prompt each, then the signed approvals. */
     async prepareAddition(id: string, session: WalletCentralSession) {
       const record = await owned(id, session);
       if (!record.proof || record.activation || record.sessionId !== session.id) state();
-      const review = await addition.prepare(record.intent.id);
-      return { review, document: walletDeviceAdditionDocument(review), challenge: hashTypedData(walletDeviceAdditionDocument(review)) };
+      const review = await addition.prepare(record.intent.id), chains = await options.chains?.prepare(record.candidate!) ?? [];
+      return { review, document: walletDeviceAdditionDocument(review), challenge: hashTypedData(walletDeviceAdditionDocument(review)),
+        chains: chains.map(item => ({ chainId: item.chainId!, review: item, challenge: hashTypedData(walletDeviceAdditionDocument(item)) })) };
     },
-    async approveAddition(id: string, session: WalletCentralSession, input: { review: WalletDeviceAddition; assertion: WalletAssertion }) {
+    async approveAddition(id: string, session: WalletCentralSession, input: { review: WalletDeviceAddition; assertion: WalletAssertion; chains?: { chainId: number; assertion: WalletAssertion }[] }) {
       const record = await owned(id, session);
       if (!record.proof || record.sessionId !== session.id) state();
       if (record.activation) return view(record);
@@ -116,6 +124,8 @@ export function createLocalWalletDevices(options: LocalWalletDeviceDependencies)
       if (context.credential.credentialId !== session.credentialId) unauthorized();
       const primary = { credentialId: context.credential.credentialId, userHandle: context.credential.userHandle,
         publicKey: context.credential.publicKey, backupEligible: context.credential.backupEligible };
+      // The other chains' approvals are kept first; none is sent before Base shows the device.
+      if (options.chains) await options.chains.approve(record.candidate!, input.chains ?? [], primary);
       await addition.approve(record.intent.id, input.review, { assertion: input.assertion, primary }, session.id);
       event({ stage: 'addition', outcome: 'approved', deviceId: record.intent.id });
       return view(record);
@@ -148,12 +158,14 @@ export function createLocalWalletDevices(options: LocalWalletDeviceDependencies)
     async activateForLink(linkToken: string) { return this.activate(await linked(linkToken)); },
     tick, start, stop, audience, stable,
   };
-  function tick(signal?: AbortSignal) { return addition.tick(signal); }
+  async function tick(signal?: AbortSignal) {
+    try { await addition.tick(signal); } finally { await options.chains?.tick(signal); }
+  }
   /** One bounded relay pass per second while an addition is active, like recovery. */
   function start() {
     if (stopped || timer) return;
     const pass = async () => {
-      try { await (running ??= addition.tick(controller.signal).finally(() => { running = null; })); } catch { /* durable attempts reconcile later */ }
+      try { await (running ??= tick(controller.signal).finally(() => { running = null; })); } catch { /* durable attempts reconcile later */ }
       if (!stopped) timer = setTimeout(() => { void pass(); }, 1000);
     };
     timer = setTimeout(() => { void pass(); }, 0);

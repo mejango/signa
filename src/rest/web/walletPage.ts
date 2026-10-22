@@ -3,7 +3,7 @@ import { BRAND_ICON, BRAND_CSS } from '../../branding.js';
 /** Dedicated credential surface. All behavior and styles are served as same-origin assets. */
 export function walletPage(signup = false, recovery = false, base = '/wallet', framed = false, assets?: AssetNames): string {
   return `<!doctype html>
-<html lang="en"${framed ? ' class="framed"' : ''}><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><meta name="module:wallet-qr" content="${assetHref(base, 'wallet-qr.js', assets)}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"${framed ? ' class="framed"' : ''}><head><meta charset="utf-8"><meta name="wallet-base" content="${base}"><meta name="module:wallet-qr" content="${assetHref(base, 'wallet-qr.js', assets)}"><meta name="module:wallet-recovery-kit" content="${assetHref(base, 'wallet-recovery-kit.js', assets)}"><link rel="icon" type="image/svg+xml" href="${base}/assets/favicon.svg?v=signa"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><title>Your account | Signa</title>
 <link rel="stylesheet" href="${assetHref(base, 'wallet.css', assets)}"><script type="module" src="${assetHref(base, 'wallet.js', assets)}"></script></head>
 <body><main><a class="brand" href="${base || '/'}">${BRAND_ICON} <span class="brand-label">SIGNA</span></a>
@@ -16,10 +16,13 @@ export function walletPage(signup = false, recovery = false, base = '/wallet', f
 <label class="field">Amount in USD<input id="wallet-funds-amount" inputmode="decimal" autocomplete="off" placeholder="25"></label></fieldset>
 <label id="wallet-funds-terms" class="choice" hidden><input id="wallet-funds-agree" type="checkbox"><span>For Apple Pay, I agree to Coinbase's <a href="https://www.coinbase.com/legal/guest-checkout/us" target="_blank" rel="noopener">Guest Checkout Terms</a>, <a href="https://www.coinbase.com/legal/user_agreement" target="_blank" rel="noopener">User Agreement</a> and <a href="https://www.coinbase.com/legal/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
 <div class="actions"><button id="wallet-funds-applepay" type="submit" hidden>Apple Pay</button><button id="wallet-funds-coinbase" class="secondary" type="button">Coinbase account</button></div><p id="wallet-funds-cancel-row"><button id="wallet-funds-cancel" class="link" type="button">Cancel</button></p></form>
-<div id="wallet-funds-pay" hidden></div></dd><dt id="wallet-passkey-label">Passkey</dt><dd id="wallet-passkey"></dd><dt>Networks</dt><dd><span id="wallet-networks">Base</span> <button id="wallet-networks-add" class="link" type="button" hidden>Add more</button></dd></dl>
+<div id="wallet-funds-pay" hidden></div></dd><dt id="wallet-passkey-label">Passkey</dt><dd id="wallet-passkey"></dd><dt>Networks</dt><dd><span id="wallet-networks">Base</span> <button id="wallet-networks-add" class="link" type="button" hidden>Add more</button> <button id="wallet-networks-update" class="link" type="button" hidden>Update</button></dd></dl>
 <form id="wallet-networks-form" hidden><fieldset id="wallet-networks-family"><legend>Add your account to</legend>
 <label class="choice"><input type="radio" name="family" value="mainnet" checked>Mainnets</label><label class="choice"><input type="radio" name="family" value="testnet">Testnets</label></fieldset>
 <fieldset id="wallet-networks-choices"></fieldset>
+<fieldset id="wallet-networks-backup" hidden><legend>Your backup sets the account's current owners there</legend>
+<label class="field">Backup file<input id="wallet-networks-file" type="file" accept="application/json,.json"></label>
+<label class="field">Or backup password<input id="wallet-networks-words" type="password" autocomplete="off" spellcheck="false"></label></fieldset>
 <div class="actions"><button id="wallet-networks-deploy" type="submit">Deploy</button><button id="wallet-networks-cancel" class="link" type="button">Cancel</button></div></form>
 <p id="wallet-devices-row"><button id="wallet-device-add" class="link" type="button">Add a device</button></p>
 <section id="wallet-device" hidden aria-label="Add a device"><h2 id="wallet-device-title">Add a device</h2>

@@ -58,4 +58,18 @@ describe('adding a device', () => {
     expect(() => prepareWalletDeviceAddition(candidate, { owners: [`0x${'ee'.repeat(20)}`, ...owners()], threshold: 1, safeNonce: '4' })).toThrow();
     expect(() => prepareWalletDeviceAddition(candidate, { owners: [owners()[0]!], threshold: 1, safeNonce: '4' })).toThrow();
   });
+  it('each other chain gets its own addition, signed for that chain only', () => {
+    const base = prepareWalletDeviceAddition(candidate, { owners: owners(), threshold: 1, safeNonce: '0' });
+    const optimism = prepareWalletDeviceAddition(candidate, { owners: owners(), threshold: 1, safeNonce: '0' }, 10);
+    expect(base).not.toHaveProperty('chainId'); expect(optimism.chainId).toBe(10);
+    expect(walletDeviceAdditionDocument(optimism).domain.chainId).toBe(10);
+    const challenge = hashTypedData(walletDeviceAdditionDocument(optimism));
+    expect(challenge).not.toBe(hashTypedData(walletDeviceAdditionDocument(base)));
+    const assertion = signGet({ ...primary, challenge, ...rpc() });
+    expect(verifyWalletDeviceAddition(candidate, optimism, assertion, primaryPasskey()).safeTxHash).toBe(challenge);
+    // Base's approval cannot stand for another chain, nor another chain's for Base.
+    expect(() => verifyWalletDeviceAddition(candidate, base, assertion, primaryPasskey())).toThrow();
+    expect(() => verifyWalletDeviceAddition(candidate, { ...optimism, chainId: 42161 }, assertion, primaryPasskey())).toThrow();
+    expect(() => walletDeviceAdditionDocument({ ...base, chainId: 8453 })).toThrow();
+  });
 });

@@ -17,7 +17,7 @@ describe("served device pages", () => {
   const possessionDocument = { domain: { name: "Juicebox Center Wallet Device", version: "1", chainId: 8453, verifyingContract: walletAddress as `0x${string}` },
     types: { WalletDevice: [{ name: "purpose", type: "string" }] }, primaryType: "WalletDevice", message: { purpose: "add-device" } } as const;
   const requests: { path: string; body: any }[] = [];
-  let phase = "awaiting_registration", approvals = 0, activations = 0;
+  let phase = "awaiting_registration", approvals = 0, activations = 0, otherChains = false;
   const view = () => ({ id: "11111111-1111-4111-8111-111111111111", passkeyName: "Test phone", rpId: "localhost", origin, expiresAtMs: Date.now() + 300_000,
     walletAddress, primarySigner: `0x${"04".repeat(20)}`, deviceSigner: phase === "awaiting_registration" ? null : `0x${"05".repeat(20)}`, phase, transactionHashes: [],
     registration: phase === "awaiting_registration" ? { challenge: encode(Buffer.alloc(32, 13)), userHandle: encode(Buffer.alloc(32, 14)), excludeCredentialIds: [encode(Buffer.alloc(16, 7))] } : null,
@@ -46,10 +46,12 @@ describe("served device pages", () => {
       requests.push({ path, body });
       if (path === "/wallet/config") return json({ version: "center-wallet-v1", issuer: origin, audience: `${origin}/v1`, rpId: "localhost" });
       if (path === "/wallet/session") return json({ session: session(), csrfToken: csrf });
-      if (path === "/wallet/networks") return json({ networks: [{ chainId: 8453, name: "Base", state: "deployed", txHash: null }], offered: [], pending: [] });
+      if (path === "/wallet/networks") return json({ networks: [{ chainId: 8453, name: "Base", state: "deployed", txHash: null },
+        ...(otherChains ? [{ chainId: 10, name: "Optimism", state: "deployed", txHash: null }, { chainId: 42161, name: "Arbitrum", state: "deployed", txHash: null }] : [])], offered: [], pending: [] });
       if (path === "/wallet/devices/begin") return json({ view: view(), link: `${origin}/wallet/add#${link}` });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111") return json({ view: view() });
-      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/review") return json({ review: { deviceId: "11111111-1111-4111-8111-111111111111" }, document: {}, challenge: `0x${"16".repeat(32)}` });
+      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/review") return json({ review: { deviceId: "11111111-1111-4111-8111-111111111111" }, document: {}, challenge: `0x${"16".repeat(32)}`,
+        chains: otherChains ? [{ chainId: 10, review: { chainId: 10 }, challenge: `0x${"17".repeat(32)}` }, { chainId: 42161, review: { chainId: 42161 }, challenge: `0x${"18".repeat(32)}` }] : [] });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/approve") { approvals++; phase = "adding"; setTimeout(() => { phase = "awaiting_activation"; }, 200); return json({ view: view() }); }
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/activate") { activations++; phase = "ready"; return json({ view: view() }); }
       if (path === "/wallet/devices/link/state") return body?.linkToken === link ? json({ view: view() }) : json({ error: { message: "no" } }, 403);
@@ -166,5 +168,42 @@ describe("served device pages", () => {
     expect(activations).toBeGreaterThanOrEqual(1);
     expect(errors).toEqual([]);
     await other.close(); await account.close();
+  }, 60_000);
+  it("adds the device on every network the account is on, one confirmation each, keeping those given when a prompt is dropped", async () => {
+    phase = "awaiting_approval"; otherChains = true; approvals = 0; requests.length = 0;
+    const account = await browser.newContext(), accountPage = await account.newPage();
+    await withAuthenticator(account, accountPage, true);
+    const errors: string[] = []; accountPage.on("pageerror", error => errors.push(String(error)));
+    // The second prompt is dropped once, as a browser that wants a fresh tap per prompt does.
+    await accountPage.addInitScript(() => {
+      const original = navigator.credentials.get.bind(navigator.credentials);
+      (window as any).prompts = [];
+      navigator.credentials.get = async (options?: CredentialRequestOptions) => {
+        const raw = options!.publicKey!.challenge, bytes = ArrayBuffer.isView(raw) ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(raw);
+        const challenge = bytes[0]!.toString(16).padStart(2, "0");
+        (window as any).prompts.push(challenge);
+        if ((window as any).prompts.length === 2) throw new DOMException("The operation either timed out or was not allowed.", "NotAllowedError");
+        return original(options);
+      };
+    });
+    await accountPage.goto(`${origin}/wallet`);
+    await expect.poll(() => accountPage.locator("#wallet-device-add").isVisible()).toBe(true);
+    await accountPage.locator("#wallet-device-add").click();
+    // One screen says where the device is added and that this device confirms each.
+    await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toBe(
+      "The other device is ready and shows 050505. Add this device on Base, Optimism and Arbitrum. Your current device confirms each.");
+    await accountPage.locator("#wallet-device-approve").click();
+    await expect.poll(() => accountPage.evaluate(() => (window as any).prompts.length)).toBe(2);
+    await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible()).toBe(true);
+    expect(approvals).toBe(0);
+    // The next tap asks only for what is missing: Optimism again, then Arbitrum. Base's confirmation is kept.
+    await accountPage.locator("#wallet-device-approve").click();
+    await expect.poll(() => approvals, { timeout: 15_000 }).toBe(1);
+    expect(await accountPage.evaluate(() => (window as any).prompts)).toEqual(["16", "17", "17", "18"]);
+    const approval = requests.find(item => item.path.endsWith("/approve"))!;
+    expect(approval.body.chains.map((item: { chainId: number }) => item.chainId)).toEqual([10, 42161]);
+    expect(new Set([approval.body.assertion.signature, ...approval.body.chains.map((item: { assertion: { signature: string } }) => item.assertion.signature)]).size).toBe(3);
+    expect(errors).toEqual([]);
+    otherChains = false; await account.close();
   }, 60_000);
 });

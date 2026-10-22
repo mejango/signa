@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { mnemonicToAccount } from 'viem/accounts';
-import { createWalletRecoverySecret, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit } from '../src/rest/web/walletRecoveryKit.js';
+import { createWalletRecoverySecret, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
+import { encodeFunctionData, getAddress, hashTypedData, parseAbi, recoverAddress, type Address } from 'viem';
+import { walletOwnerSteps } from '../src/rest/wallet/ownerChains.js';
+import { walletOwnerChangeSafeTx } from '../src/rest/web/walletRecoveryReview.js';
 
 // Public BIP39 test entropy; never used for real funds.
 const phrase = 'abandon '.repeat(23) + 'art';
@@ -37,5 +40,29 @@ describe('browser-owned portable recovery kit', () => {
     expect(() => recoveryAccountFromPhrase(phrase, identity.walletAddress)).toThrow();
     expect(() => readWalletRecoveryKit('x'.repeat(8193))).toThrow();
     expect(() => serializeWalletRecoveryKit({ mnemonic: phrase, recoveryOwner: identity.walletAddress }, identity)).toThrow();
+  });
+});
+
+describe('a network owner update signed with the backup', () => {
+  const [p0, p1, d1] = ['a0', 'a1', 'd1'].map(byte => getAddress(`0x${byte.repeat(20)}`)) as [Address, Address, Address];
+  const wallet = identity.walletAddress, abi = parseAbi(['function addOwnerWithThreshold(address owner,uint256 _threshold)', 'function removeOwner(address prevOwner,address owner,uint256 _threshold)']);
+  const update = (steps = walletOwnerSteps([p0, account.address], [d1, p1, account.address]), owners = [d1, p1, account.address]) =>
+    ({ chainId: 10, walletAddress: wallet, recoveryOwner: account.address, from: [p0, account.address], owners, safeNonce: '4', steps });
+  it('signs each owner call for its chain at consecutive nonces once the calls lead to the owners shown', async () => {
+    const value = update(), signatures = await signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10] });
+    expect(signatures).toHaveLength(2);
+    for (const [index, signature] of signatures.entries())
+      expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(wallet, value.steps[index]!, String(4 + index), 10)), signature })).toBe(account.address);
+  });
+  it('refuses calls that differ from what the page can check', async () => {
+    const sign = (value: unknown, chainIds = [10], walletAddress: string = wallet) => signWalletOwnerUpdate(phrase, value, { walletAddress, chainIds });
+    await expect(sign(update(), [42161])).rejects.toThrow();
+    await expect(sign(update(), [10], `0x${'33'.repeat(20)}`)).rejects.toThrow();
+    await expect(sign(update(undefined, [p1, account.address]))).rejects.toThrow();
+    await expect(sign(update([encodeFunctionData({ abi, functionName: 'removeOwner', args: [p0, account.address, 1n] })], [p0]))).rejects.toThrow();
+    await expect(sign(update([encodeFunctionData({ abi, functionName: 'addOwnerWithThreshold', args: [p1, 2n] })], [p1, p0, account.address]))).rejects.toThrow();
+    await expect(sign(update([encodeFunctionData({ abi, functionName: 'removeOwner', args: [p1, p0, 1n] })], [account.address]))).rejects.toThrow();
+    await expect(sign(update([`0x6a761202${'00'.repeat(64)}`], [p0, account.address]))).rejects.toThrow();
+    expect(await sign(update([encodeFunctionData({ abi, functionName: 'removeOwner', args: ['0x0000000000000000000000000000000000000001', p0, 1n] })], [account.address]))).toHaveLength(1);
   });
 });

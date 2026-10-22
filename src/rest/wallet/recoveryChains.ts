@@ -3,9 +3,8 @@ import { getAddress, type Address, type Hex } from "viem";
 import { RestError, type RestRpc } from "../core.js";
 import { SIGNA_HOME_CHAIN_ID, signaChainName } from "./chains.js";
 import type { createWalletNetworks } from "./networks.js";
-import { PostgresWalletNetworksStore } from "./networksPostgres.js";
 import { readWalletSafe } from "./ownerState.js";
-import { approveWalletOwnerChains, createWalletOwnerChains, recordWalletOwnerChain, walletOwnerChainRows, walletOwnerChainView,
+import { approveWalletOwnerChains, createWalletOwnerChains, recordWalletOwnerChain, walletOwnerChainDestinations, walletOwnerChainRows, walletOwnerChainView,
   type WalletOwnerChain, type WalletOwnerChainState } from "./ownerChains.js";
 import type { WalletRecoveryCandidate } from "./recovery.js";
 import { prepareWalletRecoveryRotation, verifyWalletRecoveryRotation, type WalletRecoveryRotation } from "./recoveryRotation.js";
@@ -23,17 +22,14 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
   /** How long a chain waits between checks; each check reads the chain and Relayr. */
   checkIntervalMs?: number; now?: () => number }) {
   const { pool, rpc } = options, now = options.now ?? Date.now;
-  const owners = createWalletOwnerChains(options), networkRows = new PostgresWalletNetworksStore(pool);
+  const owners = createWalletOwnerChains(options);
   const rows = (id: string) => walletOwnerChainRows<WalletRecoveryRotation>(pool, id);
   const safe = (candidate: WalletRecoveryCandidate) => getAddress(candidate.intent.accountId.slice(`eip155:${SIGNA_HOME_CHAIN_ID}:`.length));
   const read = (candidate: WalletRecoveryCandidate, chainId: number) => readWalletSafe({ account: safe(candidate), chainId, rpc, now });
   const rotated = (owners: readonly Address[], candidate: WalletRecoveryCandidate) => same(owners, candidate.signerAddress) && !same(owners, candidate.intent.priorSigner);
-  /** The chains to update. A deployment with a signed payment could already be on chain, so it holds the review until it settles. */
-  async function deployed(candidate: WalletRecoveryCandidate) {
-    const accountId = candidate.intent.accountId, networks = (await networkRows.listNetworks(accountId)).filter(row => row.chainId !== SIGNA_HOME_CHAIN_ID);
-    if (networks.some(row => row.state === "pending") || (await networkRows.listBundles(accountId)).some(bundle => !bundle.purpose && bundle.state === "paying")) throw new RestError(503, "WALLET_RECOVERY_CHAIN_UNAVAILABLE", "A network is still being added to this account. Try again shortly.");
-    return networks.filter(row => row.state === "deployed").map(row => row.chainId);
-  }
+  const deployed = (candidate: WalletRecoveryCandidate) => walletOwnerChainDestinations(pool, candidate.intent.accountId, () => {
+    throw new RestError(503, "WALLET_RECOVERY_CHAIN_UNAVAILABLE", "A network is still being added to this account. Try again shortly.");
+  });
 
   return {
     /** Reads every other deployed chain and returns the swaps the recovery owner signs with Base's. A chain

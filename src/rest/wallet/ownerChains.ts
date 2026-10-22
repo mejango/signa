@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { getAddress, type Address, type Hex } from "viem";
+import { encodeFunctionData, getAddress, parseAbi, type Address, type Hex } from "viem";
 import { RestError, type RestRpc } from "../core.js";
 import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from "./chains.js";
 import type { createWalletNetworks } from "./networks.js";
@@ -15,19 +15,50 @@ export interface WalletOwnerCall { to: Address; value: "0"; data: Hex }
 /** One chain's change in owner terms: the Safe nonce its signatures are for, the owners that must still be there for
  * them to run, and the owners it adds and removes. The chain's owners, never a provider's word, decide it ran. */
 export interface WalletOwnerTarget { safeNonce: string; requires: Address[]; add: Address[]; remove: Address[] }
-export interface WalletOwnerApproval { calls: WalletOwnerCall[]; safeTxHash: Hex }
+/** The exact calls in order; a single owner change also keeps the SafeTx hash its owner signed. */
+export interface WalletOwnerApproval { calls: WalletOwnerCall[]; safeTxHash?: Hex }
 export type WalletOwnerChainRow<Review = unknown> = { chain_id: string; kind: WalletOwnerChainKind; account_id: string; state: WalletOwnerChainState;
-  review: Review | null; target: WalletOwnerTarget | null; approval: WalletOwnerApproval | null; bundle_id: string | null; attempts: number; reason: string | null };
+  review: Review | null; target: WalletOwnerTarget | null; approval: WalletOwnerApproval | null; bundle_id: string | null; attempts: number; reason: string | null; updated_at_ms: string };
 /** Each paid Relayr bundle for a chain is an attempt; a chain that fails this many is reported, not retried. */
 const maximumAttempts = 3;
+/** An approval whose change never reached Base (its ceremony was abandoned) stops holding the chain after a day. */
+const baseWaitMs = 86_400_000;
 const includes = (owners: readonly Address[], owner: Address) => owners.some(item => item.toLowerCase() === owner.toLowerCase());
 /** The chain shows the change: every added owner is there and no removed one is. */
 export const walletOwnerChangeApplied = (owners: readonly Address[], target: WalletOwnerTarget) =>
   target.add.every(owner => includes(owners, owner)) && !target.remove.some(owner => includes(owners, owner));
 function changed(): never { throw new RestError(409, "WALLET_OWNER_CHAINS_CHANGED", "The networks to update changed. Review them again."); }
+const sentinel = "0x0000000000000000000000000000000000000001" as Address;
+const ownerAbi = parseAbi(["function addOwnerWithThreshold(address owner,uint256 _threshold)", "function removeOwner(address prevOwner,address owner,uint256 _threshold)",
+  "function swapOwner(address prevOwner,address oldOwner,address newOwner)"]);
+
+/** The Safe owner calls, in order, that take `owners` (in the Safe's own list order) to exactly `target` with a
+ * threshold of one: a swap for each owner replaced, then additions, then removals. Each call is one SafeTx. */
+export function walletOwnerSteps(owners: readonly Address[], target: readonly Address[]): Hex[] {
+  const list = owners.map(owner => getAddress(owner)), wanted = target.map(owner => getAddress(owner));
+  const remove = list.filter(owner => !includes(wanted, owner)), add = wanted.filter(owner => !includes(list, owner)), steps: Hex[] = [];
+  const previous = (owner: Address) => { const index = list.indexOf(owner); return index === 0 ? sentinel : list[index - 1]!; };
+  const swaps = Math.min(remove.length, add.length);
+  for (let i = 0; i < swaps; i++) {
+    steps.push(encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [previous(remove[i]!), remove[i]!, add[i]!] }));
+    list[list.indexOf(remove[i]!)] = add[i]!;
+  }
+  // Safe adds an owner at the head of its list.
+  for (const owner of add.slice(swaps)) { steps.push(encodeFunctionData({ abi: ownerAbi, functionName: "addOwnerWithThreshold", args: [owner, 1n] })); list.unshift(owner); }
+  for (const owner of remove.slice(swaps)) { steps.push(encodeFunctionData({ abi: ownerAbi, functionName: "removeOwner", args: [previous(owner), owner, 1n] })); list.splice(list.indexOf(owner), 1); }
+  return steps;
+}
+/** The other chains an owner change goes to. A deployment with a signed payment could already be on chain, so it holds the review until it settles. */
+export async function walletOwnerChainDestinations(pool: Pool, accountId: string, unavailable: () => never): Promise<number[]> {
+  const networks = (await pool.query<{ chain_id: string; state: string }>("SELECT chain_id,state FROM rest_wallet_networks WHERE account_id=$1 AND chain_id<>$2 ORDER BY chain_id",
+    [accountId, SIGNA_HOME_CHAIN_ID])).rows;
+  if (networks.some(row => row.state === "pending") || (await pool.query(`SELECT 1 FROM rest_wallet_network_bundles WHERE account_id=$1 AND state='paying'
+    AND document->>'purpose' IS NULL LIMIT 1`, [accountId])).rowCount) unavailable();
+  return networks.filter(row => row.state === "deployed").map(row => Number(row.chain_id));
+}
 
 export async function walletOwnerChainRows<Review = unknown>(sql: Pool | PoolClient, changeId: string) {
-  return (await sql.query<WalletOwnerChainRow<Review>>(`SELECT chain_id,kind,account_id,state,review,target,approval,bundle_id,attempts,reason
+  return (await sql.query<WalletOwnerChainRow<Review>>(`SELECT chain_id,kind,account_id,state,review,target,approval,bundle_id,attempts,reason,updated_at_ms
     FROM rest_wallet_owner_chains WHERE change_id=$1 ORDER BY chain_id`, [changeId])).rows;
 }
 /** Records a chain's change for review, or what it already is there. Only a row still in review or failed is replaced. */
@@ -53,6 +84,11 @@ export async function approveWalletOwnerChains(pool: Pool, changeId: string, app
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
 }
+/** The account's chains with an owner change approved and still on its way. */
+export async function walletOwnerChainsUnderway(sql: Pool | PoolClient, accountId: string): Promise<number[]> {
+  return (await sql.query<{ chain_id: string }>("SELECT DISTINCT chain_id FROM rest_wallet_owner_chains WHERE account_id=$1 AND state IN ('approved','submitted') ORDER BY chain_id",
+    [accountId])).rows.map(row => Number(row.chain_id));
+}
 export const walletOwnerChainView = (row: { chain_id: string | number; state: WalletOwnerChainState }): WalletOwnerChain =>
   ({ chainId: Number(row.chain_id), name: signaChainName(Number(row.chain_id)), state: row.state });
 
@@ -77,12 +113,17 @@ export function createWalletOwnerChains(options: { pool: Pool; rpc: RestRpc;
     const open = (await walletOwnerChainRows(pool, id)).filter(row => row.state === "approved" || row.state === "submitted");
     if (!open.length) return;
     const accountId = open[0]!.account_id;
+    // A network whose deployment failed never gets the update its owners were signed for.
+    const undeployed = new Set((await pool.query<{ chain_id: string }>("SELECT chain_id FROM rest_wallet_networks WHERE account_id=$1 AND state='failed'", [accountId])).rows.map(row => Number(row.chain_id)));
+    for (const row of open.filter(row => row.state === "approved" && undeployed.has(Number(row.chain_id)))) await set(id, Number(row.chain_id), ["approved"], "failed", "deployment-failed");
     // A signed payment is sent or settled before anything else is read, so it never holds the payer's nonce.
     const outcomes = new Map<string, Awaited<ReturnType<NonNullable<typeof options.networks>["ownerCallsStatus"]>> | null>();
     for (const bundleId of new Set(open.flatMap(row => row.state === "submitted" ? [row.bundle_id!] : [])))
       outcomes.set(bundleId, await options.networks?.ownerCallsStatus(accountId, bundleId).catch(() => null) ?? null);
     // Every other chain follows Base: nothing is sent until Base shows the same change.
     const home = await read(accountId, SIGNA_HOME_CHAIN_ID, signal);
+    for (const row of open.filter(row => row.state === "approved" && !walletOwnerChangeApplied(home.owners, row.target!) && now() - Number(row.updated_at_ms) > baseWaitMs))
+      await set(id, Number(row.chain_id), ["approved"], "failed", "base-unchanged");
     const states = await Promise.all(open.map(row => walletOwnerChangeApplied(home.owners, row.target!) ? read(accountId, Number(row.chain_id), signal).catch(() => null) : null));
     // A bundle that failed before any payment was signed for it costs no attempt.
     const resend: typeof open = [], unpaid = new Set<number>();

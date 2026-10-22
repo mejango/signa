@@ -88,7 +88,7 @@ describe('central payment review browser, virtual authenticator', () => {
       safe7579: f.safe7579, payment: f.payment,
       signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
       createdAtMs: f.prepared.createdAt, expiresAtMs: f.prepared.expiresAt, status: 'pending', approvedAtMs: null, cancelledAtMs: null,
-      operationState: 'prepared', notice: null, passkey: { rpId: 'localhost', credentialId: 'pending', challenge: encode(decode('AA')), userVerification: 'required' },
+      operationState: 'prepared', notice: null, passkey: { rpId: 'localhost', credentialId: 'pending', credentialIds: ['pending'], challenge: encode(decode('AA')), userVerification: 'required' },
       metadataSteps: [] };
     // The HTTP fixture supplies trusted derived review fields; executable-byte checks live in domain tests.
     const context = await browser.newContext({ viewport: { width: 360, height: 780 } });
@@ -115,7 +115,7 @@ describe('central payment review browser, virtual authenticator', () => {
     }, { handle, registrationChallenge });
     candidate = parseWalletRegistration({ ...registration, type: 'public-key', rawId: decode(registration.rawId), clientDataJSON: decode(registration.clientDataJSON), attestationObject: decode(registration.attestationObject) },
       { challenge: `0x${decode(registrationChallenge).toString('hex')}`, rpId: 'localhost', origin, userHandle: handle });
-    review.passkey.credentialId = candidate.credentialId; review.passkey.challenge = encode(Buffer.from(review.signing.digest.slice(2), 'hex'));
+    review.passkey.credentialId = candidate.credentialId; review.passkey.credentialIds = [candidate.credentialId, 'added-device']; review.passkey.challenge = encode(Buffer.from(review.signing.digest.slice(2), 'hex'));
   });
   afterEach(async () => { await page?.context().close(); });
   afterAll(async () => { await browser?.close(); if (server?.listening) await new Promise<void>(resolve => server.close(() => resolve())); });
@@ -253,16 +253,23 @@ describe('central payment review browser, virtual authenticator', () => {
     expect(approvals()).toHaveLength(0); expect(await page.locator('#payment-approve').isVisible()).toBe(false);
   });
 
+  it('an added device approves with its own passkey', async () => {
+    // The review names the primary; this device's passkey is one of the account's approvers.
+    review.passkey.credentialIds = ['cHJpbWFyeQ', candidate.credentialId]; review.passkey.credentialId = 'cHJpbWFyeQ';
+    await load();
+    await page.locator('#payment-approve').click(); await status('approved');
+    expect(approvals()).toHaveLength(1); expect(approvals()[0]!.body.assertion.credentialId).toBe(candidate.credentialId);
+  });
   it('lets a different passkey be tried again, and returns to the app from a blocked page', async () => {
     await load();
     // The device offered another passkey than the one the review pins: no approval is sent, the page asks again.
-    const pinned = review.passkey.credentialId; review.passkey.credentialId = 'someone-else';
+    const pinned = review.passkey.credentialId; review.passkey.credentialId = 'someone-else'; review.passkey.credentialIds = ['someone-else', 'added-device'];
     await page.reload(); await status('ready');
     await page.locator('#payment-approve').click();
     await expect.poll(() => page.locator('#payment-status').textContent()).toContain('different passkey');
     await status('ready'); expect(approvals()).toHaveLength(0);
     expect(await page.locator('#payment-approve').isVisible()).toBe(true);
-    review.passkey.credentialId = pinned;
+    review.passkey.credentialId = pinned; review.passkey.credentialIds = [pinned, 'added-device'];
     // A page that cannot go on still offers the way back to the app it came from.
     dropApproval = true; await page.reload(); await status('ready'); await page.locator('#payment-approve').click(); await status('unknown');
     review.payment = { ...review.payment, amount: '2000000' };
