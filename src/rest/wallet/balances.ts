@@ -3,7 +3,7 @@ import { WALLET_HOME_NETWORK, walletNetworkCatalog } from './networks.js';
 
 /** What the account holds: ETH and USDC on every chain its address can exist on (the address is the same
  * everywhere, deployed there or not). The total counts mainnets only, pricing ETH with Chainlink's ETH/USD
- * feed on Base and USDC at $1. A chain or price that does not answer is unknown, never zero. */
+ * feed on Base and USDC at $1. A chain or price that does not answer is unknown, never zero, and leaves the total null. */
 export interface WalletChainBalance { chainId: number; name: string; testnet: boolean; eth: string | null; usdc: string | null }
 export interface WalletBalances { chains: WalletChainBalance[]; ethUsd: string | null; totalUsdCents: string | null; complete: boolean }
 
@@ -44,13 +44,15 @@ export function createWalletBalances(rpc: RestRpc) {
         if (answer > 0n && answer < 2n ** 255n && nowMs / 1000 - updatedAt < maximumPriceAgeSeconds) price = answer;
       } catch { /* Unknown price: no total. */ }
       const mainnets = read.filter(chain => !chain.testnet);
-      // Cents: USDC has 6 decimals; ETH wei × price (8 decimals) / 10^24 (floors, never rounds up).
-      const cents = price === null ? null : mainnets.reduce((sum, chain) =>
-        sum + (chain.usdc ?? 0n) / 10_000n + ((chain.eth ?? 0n) * price) / 10n ** 24n, 0n);
+      const known = mainnets.every(chain => chain.eth !== null && chain.usdc !== null);
+      // Cents: USDC has 6 decimals; ETH wei × price (8 decimals) / 10^24 (floors, never rounds up). Any mainnet
+      // that did not answer leaves the total unknown rather than lower.
+      const cents = price === null || !known ? null : mainnets.reduce((sum, chain) =>
+        sum + chain.usdc! / 10_000n + (chain.eth! * price) / 10n ** 24n, 0n);
       return {
         chains: read.map(chain => ({ ...chain, eth: chain.eth === null ? null : String(chain.eth), usdc: chain.usdc === null ? null : String(chain.usdc) })),
         ethUsd: price === null ? null : String(price), totalUsdCents: cents === null ? null : String(cents),
-        complete: price !== null && mainnets.every(chain => chain.eth !== null),
+        complete: cents !== null,
       };
     },
   };

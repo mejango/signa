@@ -237,7 +237,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
       if (onramp && path === "/wallet/onramp") return json({ applePay: true });
-      if (onramp && path === "/wallet/balances") return json({ ethUsd: "250000000000", totalUsdCents: "251234", complete: false, chains: [
+      if (onramp && path === "/wallet/balances") return json({ ethUsd: "250000000000", totalUsdCents: null, complete: false, chains: [
         { chainId: 8453, name: "Base", testnet: false, eth: "1000000000000000000", usdc: "0" },
         { chainId: 10, name: "Optimism", testnet: false, eth: "0", usdc: "12345678" },
         { chainId: 42161, name: "Arbitrum", testnet: false, eth: null, usdc: null },
@@ -427,7 +427,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   it("shows the balance total and opens the per-network breakdown on click", async () => {
     onramp = true;
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
-    await expect.poll(() => page.locator("#wallet-balance-total").textContent()).toBe("$2,512.34");
+    await expect.poll(() => page.locator("#wallet-balance-total").textContent()).toBe("Unknown");
     expect(await page.locator("#wallet-balance-chains").isVisible()).toBe(false);
     // The total and Add funds share one line, like Networks and Add more.
     const [total, add] = await Promise.all([page.locator("#wallet-balance-total").boundingBox(), page.locator("#wallet-funds-open").boundingBox()]);
