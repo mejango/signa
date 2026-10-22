@@ -1,5 +1,6 @@
 import { assetHref, type AssetNames } from './assets.js';
 import { BRAND_ICON } from '../../branding.js';
+import { SIGNA_HOME_CHAIN_ID, signaChainName } from '../wallet/chains.js';
 /** Dedicated owner approval surface. Values are populated with textContent, never HTML. */
 export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string {
   return `<!doctype html>
@@ -13,7 +14,7 @@ export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string
 <p id="payment-amount" class="amount"></p>
 <p id="payment-notice" role="note" hidden></p>
 <details class="quiet"><summary>Details</summary><dl>
-<dt>Juicebox project</dt><dd id="payment-project"></dd><dt>Network</dt><dd>Base</dd>
+<dt>Juicebox project</dt><dd id="payment-project"></dd><dt>Network</dt><dd>${signaChainName(SIGNA_HOME_CHAIN_ID)}</dd>
 <dt>Requested by</dt><dd id="payment-app"></dd><dt>From your account</dt><dd id="payment-account"></dd>
 <dt>Beneficiary</dt><dd id="payment-beneficiary"></dd><dt>Minimum project tokens (base units)</dt><dd id="payment-minimum"></dd>
 <dt>Memo</dt><dd id="payment-memo" class="exact-text"></dd><dt>Execution fee ceiling</dt><dd id="payment-fee"></dd>

@@ -21,6 +21,7 @@ import { validateWalletRpConfiguration, verifyWalletAssertion, type WalletAssert
 import { validateWalletPolicyOrigin } from "./policy.js";
 import { validateWalletHandoffToken } from "./handoff.js";
 import { PAY_QUOTE_FAILED_MESSAGE } from "@bananapus/nana-sdk-core/v6";
+import { SIGNA_HOME_CHAIN_ID } from "./chains.js";
 
 export interface WalletPaymentReviewContext {
   issuer: string;
@@ -58,7 +59,7 @@ export interface WalletPaymentReviewDraft {
   operationHash: Hex;
   stepIndexes: number[];
   operation: UserOperationV07;
-  chainId: 8453;
+  chainId: typeof SIGNA_HOME_CHAIN_ID;
   entryPoint: Address;
   safe7579: Address;
   payment: WalletV6UsdcPayment;
@@ -152,11 +153,11 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
     // operation and ordinary signed submission retain their canonical execution checks.
     if (!profile || !b.state.moduleConfigurationVerified || r.session ||
       r.actor.accountId !== g.accountId || r.actor.principalId !== walletAppPrincipalId(g) || !same(r.actor, p.actor) ||
-      r.chainId !== 8453 || p.id !== r.planId || p.commitment !== r.planCommitment || r.accountBindingId !== b.id ||
+      r.chainId !== SIGNA_HOME_CHAIN_ID || p.id !== r.planId || p.commitment !== r.planCommitment || r.accountBindingId !== b.id ||
       r.accountStateHash !== b.state.stateHash || address(r.sender) !== address(b.wallet.address) ||
       address(r.operation.sender) !== address(b.wallet.address) || address(r.entryPoint) !== address(c.manifest.entryPoint.address) ||
       r.expiresAt > p.expiresAt || r.createdAt < p.createdAt || !p.smartAccount ||
-      !same(p.smartAccount, { bindingId: b.id, stateHash: b.state.stateHash, chainId: 8453,
+      !same(p.smartAccount, { bindingId: b.id, stateHash: b.state.stateHash, chainId: SIGNA_HOME_CHAIN_ID,
         address: b.wallet.address, manifestRevision: c.manifest.revision })) invalid();
     const { submission: _submission, observation: _observation, ...initial } = r;
     assertNew({ ...initial, revision: 0, state: "prepared" }, r.createdAt, defaultCodec);
@@ -165,7 +166,7 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
       r.commitment !== digest({ planId: r.planId, planCommitment: r.planCommitment, operation: r.operation, operationHash: r.operationHash,
         accountBindingId: r.accountBindingId, accountStateHash: r.accountStateHash, gasPolicyId: r.gasPolicyId,
         providerId: r.providerId, createdAt: r.createdAt, expiresAt: r.expiresAt })) invalid();
-    const payment = recognizeWalletV6UsdcPayment(p, r.stepIndexes, { chainId: 8453, token: c.token, directV6Terminal: c.directV6Terminal });
+    const payment = recognizeWalletV6UsdcPayment(p, r.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, token: c.token, directV6Terminal: c.directV6Terminal });
     if (!payment) invalid();
     passkeyPayMetadataSteps(payment.metadata);
     assertSafe7579Execution(r.operation.callData, r.stepIndexes.map(index => {
@@ -184,9 +185,9 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
         bindingId: b.id, bindingAuthorizationDigest: b.authorization.digest, stateHash: b.state.stateHash,
         manifestRevision: c.manifest.revision, signer: address(profile.signer.address) },
       planId: p.id, planCommitment: p.commitment, operationId: r.id, operationCommitment: r.commitment, operationHash: r.operationHash,
-      stepIndexes: [...r.stepIndexes], operation, chainId: 8453, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address), payment,
+      stepIndexes: [...r.stepIndexes], operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address), payment,
       ...(quoteFailed ? { notice: PAY_QUOTE_FAILED_MESSAGE } : {}),
-      signing: signing({ operation, chainId: 8453, entryPoint: r.entryPoint, safe7579: c.manifest.safe7579.address },
+      signing: signing({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: r.entryPoint, safe7579: c.manifest.safe7579.address },
         String(Math.floor(r.createdAt / 1000)), String(Math.floor(r.expiresAt / 1000))), expiresAtMs };
     return validateWalletPaymentReviewDraft({ ...base, ceremony: { id: base.id, accountId: a.accountId, purpose: "payment",
       contextDigest: contextDigest(base), challenge: Buffer.from(base.signing.digest.slice(2), "hex").toString("base64url"), expiresAt: expiresAtMs } });
@@ -200,7 +201,7 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletPaymentR
       "operationHash", "stepIndexes", "operation", "chainId", "entryPoint", "safe7579", "payment", "signing", "createdAtMs", "expiresAtMs", "ceremony"], ["notice"]);
     if ("notice" in d && d.notice !== PAY_QUOTE_FAILED_MESSAGE) invalid();
     if (Buffer.byteLength(JSON.stringify(d)) > 65_536 || d.version !== "center-wallet-payment-review-v1" ||
-      ![d.id, d.planId, d.operationId].every(value => typeof value === "string" && uuid.test(value)) || d.chainId !== 8453 ||
+      ![d.id, d.planId, d.operationId].every(value => typeof value === "string" && uuid.test(value)) || d.chainId !== SIGNA_HOME_CHAIN_ID ||
       !time(d.createdAtMs) || !time(d.expiresAtMs) || d.expiresAtMs <= d.createdAtMs || d.expiresAtMs > d.createdAtMs + walletPaymentReviewMaximumLifetimeMs) invalid();
     validateWalletHandoffToken(d.state); validateWalletPolicyOrigin(d.issuer); validateWalletAppGrant(d.grant);
     fields(d.authority, ["accountId", "enrollmentId", "credential", "authorityIdentityDigest", "authorityEpoch", "sessionEpoch", "bindingId",
@@ -221,21 +222,21 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletPaymentR
     validateWalletHandoffToken(c.userHandle); validateWalletRpConfiguration({ rpId: c.rpId, origin: d.issuer });
     for (const value of [d.entryPoint, d.safe7579, a.signer]) if (address(value) !== value) invalid();
     if (!same(normalizeUserOperation(d.operation), d.operation) || d.operation.signature !== "0x" ||
-      `eip155:8453:${d.operation.sender}` !== a.accountId || getUserOperationHash(d.operation, d.entryPoint, d.chainId) !== d.operationHash) invalid();
+      `eip155:${SIGNA_HOME_CHAIN_ID}:${d.operation.sender}` !== a.accountId || getUserOperationHash(d.operation, d.entryPoint, d.chainId) !== d.operationHash) invalid();
     fields(d.signing, ["digest", "signedData", "validAfter", "validUntil"]);
     if (!same(signing(d, d.signing.validAfter, d.signing.validUntil), d.signing) ||
       BigInt(d.signing.validAfter) * 1000n > BigInt(d.createdAtMs) || BigInt(d.signing.validUntil) * 1000n < BigInt(d.expiresAtMs)) invalid();
     const payment = d.payment;
     fields(payment, ["kind", "chainId", "account", "token", "terminal", "projectId", "amount", "beneficiary", "minimumReturnedTokens",
       "memo", "metadata", "stepIndexes", "approvalStepIndexes", "paymentStepIndex", "resetAllowance"]);
-    const calls = decodeSafe7579Execution(d.operation.callData).map((call, index) => ({ chainId: 8453, to: call.target, value: call.value,
+    const calls = decodeSafe7579Execution(d.operation.callData).map((call, index) => ({ chainId: SIGNA_HOME_CHAIN_ID, to: call.target, value: call.value,
       data: call.callData, label: "", decoded: {}, dependsOn: index ? [index - 1] : [] }));
-    const project = { chainId: 8453, projectId: payment.projectId, version: 6 as const };
+    const project = { chainId: SIGNA_HOME_CHAIN_ID, projectId: payment.projectId, version: 6 as const };
     const checked = recognizeWalletV6UsdcPayment({ draft: { operation: "pay", account: d.operation.sender, project, calls, evidence: [], warnings: [],
       summary: { operation: "pay", project, account: d.operation.sender, terminal: payment.terminal, terminalPath: [payment.terminal],
         routerGateway: null, route: "multi-terminal", payment: { token: payment.token, amount: payment.amount, unit: "token-base-units" },
         beneficiary: payment.beneficiary, minimumBeneficiaryTokenCount: payment.minimumReturnedTokens, metadata: payment.metadata } } },
-      d.stepIndexes, { chainId: 8453, token: payment.token, directV6Terminal: payment.terminal });
+      d.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, token: payment.token, directV6Terminal: payment.terminal });
     if (!checked || !same(checked, payment)) invalid();
     passkeyPayMetadataSteps(payment.metadata);
     fields(d.ceremony, ["id", "accountId", "purpose", "contextDigest", "challenge", "expiresAt"]); assertWalletCeremonyDraft(d.ceremony);

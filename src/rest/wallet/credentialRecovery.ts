@@ -4,6 +4,7 @@ import { predictPasskeySignerAddress } from '../smartAccounts/passkeyCreation.js
 import { assertVerifiedWalletEnrollment, enrollmentDigest, type WalletEnrollment } from './enrollment.js';
 import type { WalletRegistrationCandidate } from './registration.js';
 import type { WalletAuthorityCredential } from './authority.js';
+import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 
 /** Immutable storage lineage. Shape is not provenance: only the atomic recovery store
  * may insert it after accepted owner proof, fresh setup and canonical observation. */
@@ -61,7 +62,7 @@ export function assertWalletAuthorityCredential(c: WalletAuthorityCredential, e:
     || typeof k.aaguid !== 'string' || !/^0x[0-9a-f]{32}$/.test(k.aaguid)) invalid();
   const a = r.anchor;
   fields(a, ['chainId', 'blockNumber', 'blockHash', 'timestamp', 'source']);
-  if (a.chainId !== 8453 || a.source !== 'onchain' || !quantity(a.blockNumber) || !word(a.blockHash) || !quantity(a.timestamp)
+  if (a.chainId !== SIGNA_HOME_CHAIN_ID || a.source !== 'onchain' || !quantity(a.blockNumber) || !word(a.blockHash) || !quantity(a.timestamp)
     || BigInt(a.timestamp) * 1000n > BigInt(r.acceptedAtMs) + 30000n
     || BigInt(a.timestamp) * 1000n + 300000n <= BigInt(r.acceptedAtMs)) invalid();
 }

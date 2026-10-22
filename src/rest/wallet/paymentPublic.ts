@@ -3,6 +3,7 @@ import type { Address, Hex } from 'viem';
 import type { UserOperationV07 } from '../userOperations/types.js';
 import type { WalletV6UsdcPayment } from '../userOperations/semantics.js';
 import { passkeyPayMetadataSteps, type PayMetadataStep } from '../userOperations/userPayMetadata.js';
+import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 
 export interface WalletPaymentReviewPublic {
   version: 'center-wallet-payment-review-v1';
@@ -18,7 +19,7 @@ export interface WalletPaymentReviewPublic {
   operationHash: Hex;
   stepIndexes: number[];
   operation: UserOperationV07;
-  chainId: 8453;
+  chainId: typeof SIGNA_HOME_CHAIN_ID;
   entryPoint: Address;
   safe7579: Address;
   payment: WalletV6UsdcPayment;

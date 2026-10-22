@@ -13,6 +13,7 @@ import { validateWalletRpConfiguration, verifyWalletAssertion, type WalletAssert
 import { copyWalletEnrollmentRegistration } from './enrollmentPostgres.js';
 import { copyWalletSignupAssertion } from './signupPostgres.js';
 import { walletOwnerChangeSafeTx } from '../web/walletRecoveryReview.js';
+import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 
 /** Adding a device: a second device registers its own passkey for an existing account, proves it
  * holds it, and the account's primary passkey approves adding the device's signer as a Safe owner.
@@ -59,7 +60,7 @@ function bytes(value: unknown, maximum: number, minimum = maximum) {
   const decoded = Buffer.from(value, 'base64url');
   if (decoded.length < minimum || decoded.length > maximum || decoded.toString('base64url') !== value) invalid();
 }
-const account = (value: unknown): value is string => typeof value === 'string' && /^eip155:8453:0x[0-9a-f]{40}$/.test(value) && BigInt(value.slice(12)) > 1n;
+const account = (value: unknown): value is string => typeof value === 'string' && new RegExp(`^eip155:${SIGNA_HOME_CHAIN_ID}:0x[0-9a-f]{40}$`).test(value) && BigInt(value.slice(12)) > 1n;
 const owner = (value: unknown): value is Address => typeof value === 'string' && isAddress(value) && BigInt(value) > 1n && value === value.toLowerCase();
 function nonce(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,77})$/.test(value) || BigInt(value) >= 1n << 256n) invalid();
@@ -116,7 +117,7 @@ const types = { WalletDevice: [
 ] } as const;
 function document(value: Pick<WalletDeviceCandidate, 'intent' | 'credential' | 'nonce' | 'signerAddress'>) {
   const intent = value.intent;
-  return { domain: { name: 'Juicebox Center Wallet Device', version: '1', chainId: 8453, verifyingContract: getAddress(intent.accountId.slice(12)) },
+  return { domain: { name: 'Juicebox Center Wallet Device', version: '1', chainId: SIGNA_HOME_CHAIN_ID, verifyingContract: getAddress(intent.accountId.slice(12)) },
     types, primaryType: 'WalletDevice' as const,
     message: { purpose: 'add-device', deviceId: intent.id, accountId: intent.accountId, enrollmentId: intent.enrollmentId,
       enrollmentDigest: `0x${intent.enrollmentDigest}` as Hex, primaryCredentialDigest: `0x${intent.primaryCredentialDigest}` as Hex,

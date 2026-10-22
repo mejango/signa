@@ -12,6 +12,7 @@ import type { UserOperationObservation } from '../userOperations/types.js';
 import type { WalletAppGrant } from '../wallet/appGrants.js';
 import type { WalletPaymentReviewPublic, WalletPaymentAppPublic } from '../wallet/paymentPublic.js';
 import { validateWalletHandoffToken } from '../wallet/sharedHandoff.js';
+import { SIGNA_HOME_CHAIN_ID } from '../wallet/chains.js';
 
 export type CenterWalletExpectedPayment = Omit<WalletV6UsdcPayment,
   'stepIndexes' | 'approvalStepIndexes' | 'paymentStepIndex' | 'resetAllowance'> & {
@@ -29,7 +30,7 @@ export type CenterWalletPaymentState = 'reviewing' | 'approved' | 'submitting' |
 export interface CenterWalletPaymentStatus {
   status: CenterWalletPaymentState;
   accountId: string;
-  chainId: 8453;
+  chainId: typeof SIGNA_HOME_CHAIN_ID;
   operationId: string;
   operationHash: Hex;
   reviewId: string | null;
@@ -122,15 +123,15 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
     try {
       const operation = input.operation, expected = input.expectedPayment;
       assertReviewedOperation(operation, input.plan, at);
-      if (operation.chainId !== 8453 || grant.accountId !== 'eip155:8453:' + operation.operation.sender.toLowerCase() ||
+      if (operation.chainId !== SIGNA_HOME_CHAIN_ID || grant.accountId !== `eip155:${SIGNA_HOME_CHAIN_ID}:` + operation.operation.sender.toLowerCase() ||
         operation.session || operation.submission || operation.observation || input.plan.expiresAt <= at ||
         !hex32(operation.commitment) || !integer(at) || !('ownerProfile' in operation.signing) || operation.signing.ownerProfile !== 'center-passkey-v1') mismatch();
       const signing = operation.signing;
-      const derived = safe7579PasskeyOwnerSigningPayload({ operation: operation.operation, chainId: 8453, entryPoint: operation.entryPoint,
+      const derived = safe7579PasskeyOwnerSigningPayload({ operation: operation.operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: operation.entryPoint,
         safe7579: signing.typedData.domain.verifyingContract as `0x${string}`, validAfter: signing.validAfter, validUntil: signing.validUntil });
       if (!equal(signing, { ...derived, ownerProfile: 'center-passkey-v1' })) mismatch();
       const payment = recognizeWalletV6UsdcPayment(input.plan, operation.stepIndexes,
-        { chainId: 8453, token: expected.token, directV6Terminal: expected.terminal });
+        { chainId: SIGNA_HOME_CHAIN_ID, token: expected.token, directV6Terminal: expected.terminal });
       if (!payment || paymentFields.some(field => {
         const actual = payment[field], wanted = expected[field];
         return ['account', 'token', 'terminal', 'beneficiary', 'metadata'].includes(field) ? !same(actual, wanted) : actual !== wanted;
@@ -156,7 +157,7 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
     const entries = decodeSafe7579PasskeyOwnerSignature({ signature: approval.signature as Hex,
       validAfter: signing.validAfter, validUntil: signing.validUntil, threshold: 1 });
     if (entries.length !== 1 || entries[0]?.kind !== 'contract' || !same(approval.signedCommitment,
-      userOperationCommitment({ ...saved.operation.operation, signature: approval.signature as Hex }, saved.operation.entryPoint, 8453))) mismatch();
+      userOperationCommitment({ ...saved.operation.operation, signature: approval.signature as Hex }, saved.operation.entryPoint, SIGNA_HOME_CHAIN_ID))) mismatch();
     return { signature: approval.signature as Hex, signedCommitment: approval.signedCommitment };
   }
   function checkView(input: unknown, saved: Journal, appView: boolean): WalletPaymentAppPublic | WalletPaymentReviewPublic {
@@ -176,7 +177,7 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
         v.planId !== saved.plan.id || !same(v.planCommitment, saved.plan.commitment) || v.operationId !== saved.operation.id ||
         !same(v.operationCommitment, saved.operation.commitment) || !same(v.operationHash, saved.operation.operationHash) ||
         !equal(v.stepIndexes, saved.operation.stepIndexes) || !equal(normalizeUserOperation(v.operation), normalizeUserOperation(saved.operation.operation)) ||
-        v.chainId !== 8453 || !same(v.entryPoint, saved.operation.entryPoint) || !same(v.safe7579, signing.typedData.domain.verifyingContract) ||
+        v.chainId !== SIGNA_HOME_CHAIN_ID || !same(v.entryPoint, saved.operation.entryPoint) || !same(v.safe7579, signing.typedData.domain.verifyingContract) ||
         !equal(v.signing, expectedSigning) || !equal(comparablePayment(v.payment as Record<string, unknown>), comparablePayment(payment as unknown as Record<string, unknown>)) ||
         !integer(v.createdAtMs) || v.createdAtMs < saved.startedAtMs - 30_000 || v.createdAtMs > now() + 30_000 ||
         !integer(v.expiresAtMs) || v.expiresAtMs <= v.createdAtMs || v.expiresAtMs > saved.operation.expiresAt ||
@@ -228,7 +229,7 @@ export function createCenterWalletPaymentClient(options: CenterWalletPaymentClie
     const { payFailure: _served, ...observed } = value.observation ?? {};
     const observation = value.observation && { ...observed, ...(payFailure ? { payFailure: served } : {}) } as UserOperationObservation;
     // The decoded reason carries bigints, so it joins after the JSON copy.
-    const copy = snapshot<CenterWalletPaymentStatus>({ status: value.status, accountId: value.grant.accountId, chainId: 8453, operationId: value.operation.id,
+    const copy = snapshot<CenterWalletPaymentStatus>({ status: value.status, accountId: value.grant.accountId, chainId: SIGNA_HOME_CHAIN_ID, operationId: value.operation.id,
       operationHash: value.operation.operationHash, reviewId: value.review?.id ?? null,
       approvalUrl: value.review ? issuer + '/wallet/payment?review=' + value.review.id : null,
       expiresAtMs: value.review?.expiresAtMs ?? value.operation.expiresAt, expectedPayment: value.expectedPayment,

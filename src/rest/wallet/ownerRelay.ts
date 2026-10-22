@@ -17,6 +17,7 @@ import { loadWalletAuthorityContextInTransaction, PostgresWalletAuthorityStore }
 import type { WalletDeploymentEnvironment } from './deploymentSettlement.js';
 import type { WalletDeploymentRpcScope } from './deploymentTransport.js';
 import type { WalletAuthorityContext } from './authority.js';
+import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 
 export interface LocalWalletOwnerStatus {
   id: string; state: 'review' | 'unknown' | 'failed' | 'ready';
@@ -83,7 +84,7 @@ function quantity(value: unknown): bigint {
 }
 function head(value: unknown): RestBlockEvidence {
   if (!object(value) || typeof value.hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(value.hash) || BigInt(value.hash) === 0n) unavailable();
-  return { chainId: 8453, blockNumber: String(quantity(value.number)), blockHash: value.hash.toLowerCase() as Hex,
+  return { chainId: SIGNA_HOME_CHAIN_ID, blockNumber: String(quantity(value.number)), blockHash: value.hash.toLowerCase() as Hex,
     timestamp: String(quantity(value.timestamp)), source: 'onchain' };
 }
 const tag = (value: RestBlockEvidence) => ({ blockHash: value.blockHash, requireCanonical: true as const });
@@ -201,7 +202,7 @@ export function createWalletOwnerRelay<Record, Review extends { safeNonce: strin
   const creationTopic = keccak256(stringToHex('ProxyCreation(address,address)'));
   async function inspect(record: Record, rpc: Scope, latest: RestBlockEvidence, replacement: boolean, context?: WalletAuthorityContext) {
     const intent = source.candidate(record).intent;
-    const scoped: RestRpc = { request(chain, method, params) { if (chain !== 8453) unavailable(); return rpc.request(method, params); } };
+    const scoped: RestRpc = { request(chain, method, params) { if (chain !== SIGNA_HOME_CHAIN_ID) unavailable(); return rpc.request(method, params); } };
     // Hosted providers cap eth_getLogs windows (Dwellir: 500 blocks, error -32005), so creation is
     // proven from the receipt of the creation transaction the account's bound state names, history
     // is paged at 500 blocks from the shared checkpoints, and no genesis-to-head scan is ever tried.
@@ -212,7 +213,7 @@ export function createWalletOwnerRelay<Record, Review extends { safeNonce: strin
     const provenance = bound && object(bound.modules?.details) && object(bound.modules.details.provenance) ? bound.modules.details.provenance : null;
     const creationTransaction = provenance && typeof provenance.creationTransaction === 'string' && /^0x[0-9a-fA-F]{64}$/.test(provenance.creationTransaction) ? provenance.creationTransaction as Hex : null;
     const creationLogs = async (chainId: number, factory: Address, account: Address, end: bigint): Promise<globalThis.Record<string, unknown>[]> => {
-      if (chainId !== 8453 || !creationTransaction) return [];
+      if (chainId !== SIGNA_HOME_CHAIN_ID || !creationTransaction) return [];
       const receipt = await rpc.request('eth_getTransactionReceipt', [creationTransaction]);
       if (!object(receipt) || !Array.isArray(receipt.logs) || receipt.logs.length > 512) return [];
       return receipt.logs.filter((log: unknown): log is globalThis.Record<string, unknown> => object(log) && typeof log.address === 'string' &&
@@ -393,7 +394,7 @@ export function createWalletOwnerRelay<Record, Review extends { safeNonce: strin
         if (confirmed + 2n > BigInt(Number.MAX_SAFE_INTEGER)) unavailable();
         const quote = await adapter.quote(rpc, latest);
         if (quote.gas <= 0n || quote.maxFeePerGas <= 0n || quote.maxPriorityFeePerGas > quote.maxFeePerGas) unavailable();
-        const raw = await Promise.all([approved.createSigner, approved.ownerChange].map((call, step) => sign({ type: 'eip1559', chainId: 8453,
+        const raw = await Promise.all([approved.createSigner, approved.ownerChange].map((call, step) => sign({ type: 'eip1559', chainId: SIGNA_HOME_CHAIN_ID,
           to: call.to, data: call.data, value: 0n, nonce: Number(confirmed) + step, gas: quote.gas, maxFeePerGas: quote.maxFeePerGas,
           maxPriorityFeePerGas: quote.maxPriorityFeePerGas, accessList: [] })));
         let reservation = 0n;
@@ -403,7 +404,7 @@ export function createWalletOwnerRelay<Record, Review extends { safeNonce: strin
           const serializedTransaction = bytes as `0x02${string}`, tx = parseTransaction(serializedTransaction);
           const call = step === 0 ? approved.createSigner : approved.ownerChange;
           if (!addressSame(await recoverTransactionAddress({ serializedTransaction }), sender) || tx.type !== 'eip1559'
-            || tx.chainId !== 8453 || tx.nonce !== Number(confirmed) + step || !addressSame(tx.to, call.to) || tx.data !== call.data
+            || tx.chainId !== SIGNA_HOME_CHAIN_ID || tx.nonce !== Number(confirmed) + step || !addressSame(tx.to, call.to) || tx.data !== call.data
             || (tx.value ?? 0n) !== 0n || tx.gas !== quote.gas || tx.maxFeePerGas !== quote.maxFeePerGas || tx.maxPriorityFeePerGas !== quote.maxPriorityFeePerGas
             || (tx.accessList?.length ?? 0) !== 0) invalid();
           // Execution maximum plus twice the current L1/operator estimate; local chains have execution only.
