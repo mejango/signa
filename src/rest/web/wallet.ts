@@ -486,7 +486,7 @@ function renderBalance() {
   const lines = balances.chains.filter(chain => chain.eth !== null && (BigInt(chain.eth) || BigInt(chain.usdc!)))
     .map(chain => `${chain.name}${chain.testnet ? " (testnet)" : ""}: ${tokens(BigInt(chain.eth!), BigInt(chain.usdc!))}`);
   const unknown = balances.chains.filter(chain => chain.eth === null).map(chain => chain.name);
-  if (!lines.length) lines.push("Nothing on any network yet.");
+  if (!lines.length && !unknown.length) lines.push("Nothing on any network yet.");
   if (unknown.length) lines.push(`Couldn't check ${unknown.join(", ")}.`);
   element("wallet-balance-chains").replaceChildren(...lines.map(line => Object.assign(document.createElement("li"), { textContent: line })));
 }
