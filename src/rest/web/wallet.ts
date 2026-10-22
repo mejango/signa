@@ -360,6 +360,7 @@ async function logout() {
   const result = await request(`${base}/logout`, {}, csrf);
   if (result.loggedOut !== true) throw new InvalidResponse();
   session = null; csrf = ""; pending = null; completionAttempted = false; sessionKnown = true;
+  if (fundsPage) { location.replace(base || "/"); return; }
   setStatus("ready", "You are signed out. You can sign in again with your passkey.");
 }
 function networkView(value: Json): NetworksView {

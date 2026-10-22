@@ -429,7 +429,7 @@ describe('sign-in framed by an admitted app',()=>{
     const signing=(response:Response)=>{
       const csp=response.headers.get('content-security-policy')!;
       expect(response.status).toBe(200);expect(csp).not.toContain('frame-src');expect(csp).not.toContain('coinbase');
-      expect(response.headers.get('permissions-policy')).toBe('publickey-credentials-get=(self), publickey-credentials-create=(self)');
+      expect(response.headers.get('permissions-policy')).toBe('publickey-credentials-get=(self), publickey-credentials-create=(self), payment=()');
       return csp;
     };
     for(const path of ['/wallet','/wallet/payment','/wallet/create','/wallet/recover','/wallet/add'])

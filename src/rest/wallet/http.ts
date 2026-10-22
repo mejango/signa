@@ -17,7 +17,7 @@ export type WalletCookieName = typeof walletSessionCookie | typeof walletFlowCoo
 export const walletSigningPageHeaders = {
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY', 'Permissions-Policy': 'publickey-credentials-get=(self), publickey-credentials-create=(self)',
+  'X-Frame-Options': 'DENY', 'Permissions-Policy': 'publickey-credentials-get=(self), publickey-credentials-create=(self), payment=()',
 };
 /** The funds page embeds Coinbase's Apple Pay button, which needs the Payment Request API; no passkey can be used there. */
 export const walletFundsPageHeaders = { ...walletSigningPageHeaders,

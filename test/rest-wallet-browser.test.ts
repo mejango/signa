@@ -487,6 +487,8 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     const [hosted] = await Promise.all([page.waitForEvent("popup"), page.locator("#wallet-funds-coinbase").click()]);
     await expect.poll(() => hosted.url()).toBe("https://pay.coinbase.com/buy?sessionToken=t");
     expect(requests.find(item => item.path === "/wallet/onramp/session")!.body).toEqual({ asset: "ETH", amount: "10" });
+    // Signing out leaves the funds page for the account page, where sign-in is.
+    await page.locator("#wallet-logout").click(); await page.waitForURL(`${origin}/wallet`); await status("ready");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   });
