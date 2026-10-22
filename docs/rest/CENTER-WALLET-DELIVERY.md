@@ -6,8 +6,8 @@ project; the [implementation record](CENTER-WALLET-IMPLEMENTATION.md) preserves
 the detailed chronology. For continuation, start with the [handoff](CENTER-WALLET-HANDOFF.md).
 
 Current production boundary: [RISKS.md](../../RISKS.md). This report is a
-2026-09-15 checkpoint of the Center wallet project; Signa now serves the wallet
-at signa.center on the hosted Base path only.
+2026-09-15 checkpoint of the Center wallet project; Signa runs the wallet
+at signa.center on the hosted Base path.
 
 Current scope update: Center has retired its Para integration, preserving passkey
 accounts and external-wallet support. The checkpoint below predates that decision;

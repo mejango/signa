@@ -12,7 +12,8 @@ create a recovery kit without connecting an existing wallet. The browser generat
 a 256-bit BIP39 phrase and derives its independent EOA at `m/44'/60'/0'/0/0`, with
 no additional BIP39 passphrase. Users with a wallet can select the existing-wallet
 option. The independent EOA separately signs the exact enrollment. The threshold-one Safe
-has two full owners: the passkey signer and that EOA. Neither an email address nor
+starts with two full owners: the passkey signer and that EOA. Added devices become
+further full owners. Neither an email address nor
 a browser API key substitutes for either owner.
 
 The kit contains the words, recovery-owner address, original Safe address,
@@ -38,12 +39,13 @@ A kit for any other network is rejected.
    preserves signed bytes, sender nonce, accounting reservation and settlement
    evidence across retries. Polling never creates a replacement transaction.
 4. Once the latest canonical observation proves creation and wallet readiness,
-   the user approves initial browser setup. Treasury settlement can finalize
-   later; its sender lane remains held meanwhile. The separate browser key proves
-   possession and receives only read, plan and relay access for one hour. It
-   cannot approve spending.
-5. A separate fresh W6 login establishes the central session. Enrollment, signup
-   continuation and setup completion never act as login credentials.
+   the account is bound from the consent the passkey already gave at enrollment,
+   with no further prompt and no browser grant. Treasury settlement can finalize
+   later; its sender lane remains held meanwhile.
+5. The session comes from the deployment approval's passkey assertion, which the
+   server holds for at most 15 minutes in one process. After that, a resumed
+   signup or a restart, the user gets the ordinary sign-in prompt. Enrollment and
+   signup continuation never act as login credentials.
 
 The browser retries the same pending completion after an uncertain response.
 Reloading reads durable state. Losing the signup cookie requires a fresh
@@ -60,15 +62,15 @@ owner signature tied to the original Safe, enrollment, current credential and
 binding. Intake is bounded, continuation secrets are hashed, accepted records are
 immutable, and concurrent/lost-response retries return the original receipt.
 The recovery host composes this store behind dedicated HTTP boundaries.
-After an actual owner rotation and new-key browser setup,
-the internal activation store verifies that new setup assertion and calls the
+After an actual owner rotation, the account is bound under the
+replacement passkey from the recovery's own proof, with no further prompt and no
+browser grant. The internal activation store then calls the
 configured canonical observer. It atomically supersedes the previous credential,
 inserts immutable replacement lineage, revokes old bot/app grants, and advances
-authority and session epochs. The new setup grant is retained. Canonical readiness
-must refresh before a separate fresh login. Exact retries read the original result;
+authority and session epochs. Canonical readiness must refresh before a fresh login. Exact retries read the original result;
 expiry during SQL rolls all mapping, grant and epoch changes back. Genesis remains unchanged.
 
-The canonical observer rechecks the replacement setup's original block anchor on
+The canonical observer rechecks the replacement account's original block anchor on
 every observation. A chain rollback makes the account unready and cannot undo
 credential supersession or revive previous sessions. Payment approval retains its
 existing proof format; the authority identity commits replacement lineage, and
@@ -95,8 +97,8 @@ Cookie loss resumes the original recovery reference using a fresh replacement-ke
 assertion and independent recovery-owner signature. Only the hash of the browser
 continuation is stored. Atomic token rotation fences the old cookie, and stale
 resume receipts cannot restore an older continuation. The original proof record
-stays immutable. Setup approval and credential activation still precede a separate
-fresh login; resuming never issues spending authority or a session.
+stays immutable. Credential activation precedes a fresh login; resuming never
+issues spending authority or a session.
 
 An expired attempt without an accepted proof has an explicit Start again action.
 The server checks expiry using database time while holding the recovery and flow

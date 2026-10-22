@@ -22,7 +22,7 @@ The server drains for `SHUTDOWN_GRACE_MS` (25 seconds by default) on SIGTERM. `r
 
 No backup schedule, retention or recovery point has been recorded or verified for Signa's PostgreSQL database. Do not rely on Center's earlier snapshots or schedules; they cover Center's database.
 
-During an actual recovery, pause application writes and execution workers, record the recovery point, preserve the current volume, and reconcile all potentially submitted transactions on Base before resuming execution. An older database can contain stale request nonces, bot revocations and transaction states; never assume a restored row proves a transaction was not sent.
+During an actual recovery, pause application writes and execution workers, record the recovery point, preserve the current volume, and reconcile all potentially submitted transactions on Base, and on any additional network the account was deployed to, before resuming execution. An older database can contain stale request nonces, bot revocations and transaction states; never assume a restored row proves a transaction was not sent.
 
 ## Restore verification
 
