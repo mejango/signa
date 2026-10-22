@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mnemonicToAccount } from 'viem/accounts';
 import { createWalletRecoverySecret, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
 import { encodeFunctionData, getAddress, hashTypedData, parseAbi, recoverAddress, type Address } from 'viem';
-import { walletOwnerSteps } from '../src/rest/wallet/ownerChains.js';
-import { walletOwnerChangeSafeTx } from '../src/rest/web/walletRecoveryReview.js';
+import { walletOwnerChangeSafeTx, walletOwnerPlan } from '../src/rest/web/walletRecoveryReview.js';
 
 // Public BIP39 test entropy; never used for real funds.
 const phrase = 'abandon '.repeat(23) + 'art';
@@ -46,7 +45,7 @@ describe('browser-owned portable recovery kit', () => {
 describe('a network owner update signed with the backup', () => {
   const [p0, p1, d1] = ['a0', 'a1', 'd1'].map(byte => getAddress(`0x${byte.repeat(20)}`)) as [Address, Address, Address];
   const wallet = identity.walletAddress, abi = parseAbi(['function addOwnerWithThreshold(address owner,uint256 _threshold)', 'function removeOwner(address prevOwner,address owner,uint256 _threshold)']);
-  const update = (steps = walletOwnerSteps([p0, account.address], [d1, p1, account.address]), owners = [d1, p1, account.address]) =>
+  const update = (steps = walletOwnerPlan([p0, account.address], [d1, p1, account.address]).steps, owners = [d1, p1, account.address]) =>
     ({ chainId: 10, walletAddress: wallet, recoveryOwner: account.address, from: [p0, account.address], owners, safeNonce: '4', steps });
   it('signs each owner call for its chain at consecutive nonces once the calls lead to the owners shown', async () => {
     const value = update(), signatures = await signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10] });

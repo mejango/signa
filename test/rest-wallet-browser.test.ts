@@ -258,7 +258,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       if (ownerUpdate && path === "/wallet/networks/quote") return json({ bundle: null, challenge: null, view: updateView("diverged"), owners: { changeId: "33333333-3333-4333-8333-333333333333",
         recoveryOwner: backupOwner, chains: [{ version: "center-wallet-network-owners-v1", chainId: 10, walletAddress, recoveryOwner: backupOwner,
           from: [oldPasskey, backupOwner], owners: [newPasskey, backupOwner], safeNonce: "3", steps: ownerUpdate.steps, createSigners: [] }] } });
-      if (ownerUpdate && path === "/wallet/networks/owners") return json(updateView("updating"));
+      if (ownerUpdate && path === "/wallet/networks/owners") return json({ view: updateView("updating") });
       if (onramp && networksDown && path === "/wallet/networks") return json({ error: { code: "WALLET_NETWORKS_UNAVAILABLE", message: "unavailable" } }, 503);
       if (onramp && path === "/wallet/networks") return json({ offered: [], pending: [], networks: [
         { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" },

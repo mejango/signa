@@ -24,4 +24,6 @@ ALTER TABLE rest_wallet_owner_chains ADD CONSTRAINT rest_wallet_owner_chains_rev
 ALTER TABLE rest_wallet_owner_chains ADD CONSTRAINT rest_wallet_owner_chains_approval CHECK (approval IS NULL OR (jsonb_typeof(approval) = 'object'
   AND jsonb_typeof(approval->'calls') = 'array' AND octet_length(approval::text) <= 32768));
 ALTER TABLE rest_wallet_owner_chains ADD CONSTRAINT rest_wallet_owner_chains_target_open CHECK (state NOT IN ('review','approved','submitted') OR target IS NOT NULL);
+-- A network's update sends its Safe transactions one per bundle; attempts count for the one last sent.
+ALTER TABLE rest_wallet_owner_chains ADD COLUMN sent_step integer NOT NULL DEFAULT 0 CHECK (sent_step BETWEEN 0 AND 64);
 CREATE INDEX rest_wallet_owner_chains_account ON rest_wallet_owner_chains(account_id) WHERE state IN ('review','approved','submitted');

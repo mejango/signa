@@ -9,14 +9,14 @@ import type { preparePasskeySafe7579Creation } from "../smartAccounts/creation.j
 import type { SmartAccountManifest } from "../smartAccounts/types.js";
 import { predictPasskeySignerAddress } from "../smartAccounts/passkeyCreation.js";
 import { canonicalEoaSignature } from "../smartAccounts/accountExecution.js";
-import { walletOwnerChangeSafeTx } from "../web/walletRecoveryReview.js";
+import { walletOwnerChangeSafeTx, walletOwnerPlan } from "../web/walletRecoveryReview.js";
 import type { WalletEnrollment } from "./enrollment.js";
 import type { WalletCentralSession } from "./login.js";
 import type { WalletAuthorityContext } from "./authority.js";
 import { verifyWalletAssertion, WalletAssertionError, type WalletAssertion } from "./webauthn.js";
 import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from "./chains.js";
 import { observeWalletOwners, readWalletSafe, type WalletOwnerStateStore } from "./ownerState.js";
-import { walletOwnerSteps, type WalletOwnerApproval, type WalletOwnerCall, type WalletOwnerChainRow, type WalletOwnerTarget } from "./ownerChains.js";
+import { type WalletOwnerApproval, type WalletOwnerCall, type WalletOwnerChainRow, type WalletOwnerTarget } from "./ownerChains.js";
 
 /** The account on more chains. The Base creation call carries no chain id, so replaying the exact
  * factory call reaches the same CREATE2 address wherever the stack sits at the same addresses;
@@ -252,14 +252,15 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     if (home.owners.some(owner => !same(owner, recoveryOwner) && !passkeys.some(passkey => same(passkey.signer, owner)))) ownersChanged();
     const changeId = randomUUID(), current = now(), chains: WalletNetworkOwners[] = [];
     for (const source of differ) {
+      const plan = walletOwnerPlan(source.owners, home.owners);
       const review: WalletNetworkOwners = { version: "center-wallet-network-owners-v1", chainId: source.chainId, walletAddress: account, recoveryOwner,
-        from: source.owners, owners: home.owners, safeNonce: source.nonce.toString(), steps: walletOwnerSteps(source.owners, home.owners),
+        from: source.owners, owners: home.owners, safeNonce: source.nonce.toString(), steps: plan.steps,
         createSigners: passkeys.filter(passkey => !includes(source.owners, passkey.signer) && includes(home.owners, passkey.signer)).map(passkey => ({
           to: getAddress(profile.signerFactory.address), value: "0" as const, data: encodeFunctionData({ abi: factoryAbi, functionName: "createSigner",
             args: [BigInt(passkey.publicKey.x), BigInt(passkey.publicKey.y), BigInt(profile.p256Verifier.address)] }) })) };
       await store.recordOwnerChain({ changeId, kind: "network", accountId: session.accountId, chainId: source.chainId, state: "review", review, reason: null, now: current,
         target: { safeNonce: review.safeNonce, requires: source.owners, add: home.owners.filter(owner => !includes(source.owners, owner)),
-          remove: source.owners.filter(owner => !includes(home.owners, owner)) } });
+          remove: source.owners.filter(owner => !includes(home.owners, owner)), path: plan.path } });
       chains.push(review);
     }
     return { changeId, recoveryOwner, chains };
@@ -271,7 +272,8 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     if (!value || typeof value !== "object" || Object.keys(value).sort().join(",") !== "changeId,signatures" || typeof value.changeId !== "string"
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.changeId) || !Array.isArray(value.signatures)) invalid("Sign the owner update with your backup.");
     const rows = (await store.ownerChainRows(value.changeId)) as WalletOwnerChainRow<WalletNetworkOwners>[];
-    if (!rows.length || rows.some(row => row.kind !== "network" || row.account_id !== session.accountId)) state();
+    // An update that failed anywhere is never treated as approved: the quote that carries it is taken again.
+    if (!rows.length || rows.some(row => row.kind !== "network" || row.account_id !== session.accountId || row.state === "failed")) state();
     const open = rows.filter(row => row.state === "review");
     if (!open.length) return;
     const recoveryOwner = getAddress(enrollment.intent.recoveryOwner), signatures = value.signatures as unknown[];
@@ -289,7 +291,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
         calls.push({ to: review.walletAddress, value: "0", data: encodeFunctionData({ abi: execAbi, functionName: "execTransaction",
           args: [review.walletAddress, 0n, step, 0, 0n, 0n, 0n, zeroAddress, zeroAddress, signature] }) });
       }
-      return { chainId: review.chainId, review, approval: { calls } };
+      return { chainId: review.chainId, review, approval: { calls, setup: review.createSigners.length } };
     }));
     await store.approveOwnerChains(value.changeId, approvals, now());
   }

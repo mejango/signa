@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page } from "playwright";
 import { hashTypedData } from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { walletDeviceAdditionChallenge } from "../src/rest/web/walletRecoveryKit.js";
 
 /** Both pages of adding a device, in Chromium, against a modeled Center: the account page begins
  * and shows the link as a code, the other device's page registers and proves its passkey, the
@@ -17,7 +18,9 @@ describe("served device pages", () => {
   const possessionDocument = { domain: { name: "Juicebox Center Wallet Device", version: "1", chainId: 8453, verifyingContract: walletAddress as `0x${string}` },
     types: { WalletDevice: [{ name: "purpose", type: "string" }] }, primaryType: "WalletDevice", message: { purpose: "add-device" } } as const;
   const requests: { path: string; body: any }[] = [];
-  let phase = "awaiting_registration", approvals = 0, activations = 0, otherChains = false;
+  let phase = "awaiting_registration", approvals = 0, activations = 0, otherChains = false, tampered = false, kitScript = "";
+  // The account page rebuilds each addition it signs from the account and the device signer it shows.
+  const deviceSigner = `0x${"05".repeat(20)}`, challengeOn = (chainId: number) => walletDeviceAdditionChallenge(walletAddress, deviceSigner, "0", chainId);
   const view = () => ({ id: "11111111-1111-4111-8111-111111111111", passkeyName: "Test phone", rpId: "localhost", origin, expiresAtMs: Date.now() + 300_000,
     walletAddress, primarySigner: `0x${"04".repeat(20)}`, deviceSigner: phase === "awaiting_registration" ? null : `0x${"05".repeat(20)}`, phase, transactionHashes: [],
     registration: phase === "awaiting_registration" ? { challenge: encode(Buffer.alloc(32, 13)), userHandle: encode(Buffer.alloc(32, 14)), excludeCredentialIds: [encode(Buffer.alloc(16, 7))] } : null,
@@ -26,7 +29,7 @@ describe("served device pages", () => {
 
   beforeAll(async () => {
     const bundle = async (entry: string) => (await build({ entryPoints: [new URL(entry, import.meta.url).pathname], bundle: true, platform: "browser", format: "esm", target: "es2022", write: false })).outputFiles[0]!.text;
-    accountScript = await bundle("../src/rest/web/wallet.ts"); deviceScript = await bundle("../src/rest/web/walletDevice.ts");
+    accountScript = await bundle("../src/rest/web/wallet.ts"); kitScript = await bundle("../src/rest/web/walletRecoveryKit.ts"); deviceScript = await bundle("../src/rest/web/walletDevice.ts");
     // The account page draws the device link's QR code with its own bundle, from the URL the page names.
     qrScript = await bundle("../src/rest/web/qr.ts");
     const pages = await import("../src/rest/web/walletPage.js"), devicePage = await import("../src/rest/web/walletDevicePage.js");
@@ -39,6 +42,7 @@ describe("served device pages", () => {
       if (path === "/wallet/add") return html(deviceHtml);
       if (path === "/wallet/assets/wallet.js") { response.writeHead(200, { "content-type": "text/javascript" }); return response.end(accountScript); }
       if (path === "/wallet/assets/wallet-qr.js") { qrRequests++; response.writeHead(200, { "content-type": "text/javascript" }); return response.end(qrScript); }
+      if (path === "/wallet/assets/wallet-recovery-kit.js") { response.writeHead(200, { "content-type": "text/javascript" }); return response.end(kitScript); }
       if (path === "/wallet/assets/wallet-device.js") { response.writeHead(200, { "content-type": "text/javascript" }); return response.end(deviceScript); }
       if (path.endsWith(".css")) { response.writeHead(200, { "content-type": "text/css" }); return response.end(css); }
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -50,8 +54,9 @@ describe("served device pages", () => {
         ...(otherChains ? [{ chainId: 10, name: "Optimism", state: "deployed", txHash: null }, { chainId: 42161, name: "Arbitrum", state: "deployed", txHash: null }] : [])], offered: [], pending: [] });
       if (path === "/wallet/devices/begin") return json({ view: view(), link: `${origin}/wallet/add#${link}` });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111") return json({ view: view() });
-      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/review") return json({ review: { deviceId: "11111111-1111-4111-8111-111111111111" }, document: {}, challenge: `0x${"16".repeat(32)}`,
-        chains: otherChains ? [{ chainId: 10, review: { chainId: 10 }, challenge: `0x${"17".repeat(32)}` }, { chainId: 42161, review: { chainId: 42161 }, challenge: `0x${"18".repeat(32)}` }] : [] });
+      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/review") return json({ review: { deviceId: "11111111-1111-4111-8111-111111111111", safeNonce: "0" }, document: {}, challenge: challengeOn(8453),
+        chains: otherChains ? [{ chainId: 10, review: { chainId: 10, safeNonce: "0" }, challenge: tampered ? `0x${"17".repeat(32)}` : challengeOn(10) },
+          { chainId: 42161, review: { chainId: 42161, safeNonce: "0" }, challenge: challengeOn(42161) }] : [] });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/approve") { approvals++; phase = "adding"; setTimeout(() => { phase = "awaiting_activation"; }, 200); return json({ view: view() }); }
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/activate") { activations++; phase = "ready"; return json({ view: view() }); }
       if (path === "/wallet/devices/link/state") return body?.linkToken === link ? json({ view: view() }) : json({ error: { message: "no" } }, 403);
@@ -192,6 +197,13 @@ describe("served device pages", () => {
     // One screen says where the device is added and that this device confirms each.
     await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toBe(
       "The other device is ready and shows 050505. Add this device on Base, Optimism and Arbitrum. Your current device confirms each.");
+    // A review whose hash is not the addition this page shows is refused before any prompt.
+    tampered = true;
+    await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible()).toBe(true);
+    await accountPage.locator("#wallet-device-approve").click();
+    await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toContain("could not be verified");
+    expect(await accountPage.evaluate(() => (window as any).prompts)).toEqual([]);
+    tampered = false;
     await accountPage.locator("#wallet-device-approve").click();
     await expect.poll(() => accountPage.evaluate(() => (window as any).prompts.length)).toBe(2);
     await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible()).toBe(true);
@@ -199,7 +211,8 @@ describe("served device pages", () => {
     // The next tap asks only for what is missing: Optimism again, then Arbitrum. Base's confirmation is kept.
     await accountPage.locator("#wallet-device-approve").click();
     await expect.poll(() => approvals, { timeout: 15_000 }).toBe(1);
-    expect(await accountPage.evaluate(() => (window as any).prompts)).toEqual(["16", "17", "17", "18"]);
+    const first = (chainId: number) => challengeOn(chainId).slice(2, 4);
+    expect(await accountPage.evaluate(() => (window as any).prompts)).toEqual([first(8453), first(10), first(10), first(42161)]);
     const approval = requests.find(item => item.path.endsWith("/approve"))!;
     expect(approval.body.chains.map((item: { chainId: number }) => item.chainId)).toEqual([10, 42161]);
     expect(new Set([approval.body.assertion.signature, ...approval.body.chains.map((item: { assertion: { signature: string } }) => item.assertion.signature)]).size).toBe(3);

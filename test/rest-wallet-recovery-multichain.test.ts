@@ -341,7 +341,8 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(provider.quotes).toBe(0);
   }, 60_000);
 
-  it("a network added after recovery gets the current owners through the recovery EOA, with no extra prompt, before it is usable", async () => {
+  /** An account recovered on Base only, with the creation stack on Base and Arbitrum, and the networks service as the recovered account sees it. */
+  async function recoveredOnBase(creates = true) {
     const { candidate, safe, accountId, context, key } = await account([8453]);
     const enrollment = context.enrollment, manifest = enrollment.intent.manifest, creation = enrollment.creation!;
     // The creation stack carries the same bytes on Base and Arbitrum; the factory answers with the account's address.
@@ -360,13 +361,18 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
       binding: { ...context.binding, state: { ...context.binding.state, owners: [candidate.signerAddress, candidate.intent.recoveryOwner],
         ownerProfile: { ...context.binding.state.ownerProfile!, signer: { ...context.binding.state.ownerProfile!.signer, address: candidate.signerAddress, ...candidate.credential.publicKey } } } } };
     // Relayr's creation call leaves the original owners on the new chain, as the real factory does.
-    const provider = relayr(new Set(), { factory: creation.transaction.to, run: chainId => deploySafe(chainId, safe, creation.owners) });
+    const provider = relayr(new Set(), creates ? { factory: creation.transaction.to, run: chainId => deploySafe(chainId, safe, creation.owners) } : undefined);
     const payer = privateKeyToAccount(`0x${"88".repeat(32)}`);
     await call(8453, "anvil_setBalance", [payer.address, toHex(10n ** 18n)]);
     const networks = createWalletNetworks({ enrollments: new PostgresWalletEnrollmentStore(pool), authority: { loadContext: async () => recovered },
       store: new PostgresWalletNetworksStore(pool), provider, rpc, payer: { address: payer.address, signTransaction: transaction => payer.signTransaction(transaction) } });
     const owners = createWalletOwnerChains({ pool, rpc, networks, checkIntervalMs: 0 });
     const session = { id: randomUUID(), accountId, enrollmentId: enrollment.intent.id, rpId: policy.rpId, credentialId: candidate.credential.credentialId } as WalletCentralSession;
+    return { candidate, safe, accountId, key, enrollment, creation, provider, networks, owners, session };
+  }
+
+  it("a network added after recovery gets the current owners through the recovery EOA, with no extra prompt, before it is usable", async () => {
+    const { candidate, safe, key, creation, networks, owners, session } = await recoveredOnBase();
     expect((await networks.list(session)).backup).toBe("needed");
     // One quote: the deployment, and the owner calls that bring Arbitrum from the original owners to Base's.
     const quoted = await networks.quote(session, { chainIds: [42161] });
@@ -395,5 +401,33 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(await canSign(42161, safe, candidate.intent.priorSigner)).toBe(false);
     expect(await canSign(42161, safe, candidate.signerAddress)).toBe(true);
     expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "consistent"]);
+  }, 60_000);
+
+  it("a network repaired to Base's owners runs its Safe transactions in nonce order, one bundle each", async () => {
+    const { candidate, safe, accountId, provider, networks, owners, session } = await recoveredOnBase(false);
+    // Optimism holds the old passkey and an owner the account never recorded: two Safe transactions bring it to Base's owners.
+    const stray = getAddress(`0x${"5a".repeat(20)}`);
+    await deploySafe(10, safe, [candidate.intent.priorSigner, stray, candidate.intent.recoveryOwner]);
+    await deployedRows(accountId, [10], Date.now());
+    expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "diverged"]);
+    // An update that failed is never taken as approved; a new quote replaces it.
+    const failed = await networks.quote(session, { chainIds: [10] });
+    await pool.query("UPDATE rest_wallet_owner_chains SET state='failed' WHERE change_id=$1", [failed.owners!.changeId]);
+    await expect(networks.approveOwners(session, { changeId: failed.owners!.changeId, signatures: [] })).rejects.toMatchObject({ code: "WALLET_NETWORKS_STATE" });
+    const quoted = await networks.quote(session, { chainIds: [10] });
+    expect(quoted.bundle).toBeNull();
+    const update = quoted.owners!.chains[0]!;
+    expect(update.steps).toHaveLength(2);
+    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(BigInt(update.safeNonce) + BigInt(index)), 10))));
+    const view = await networks.approveOwners(session, { changeId: quoted.owners!.changeId, signatures: [{ chainId: 10, signatures }] });
+    expect(view.networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "updating"]);
+    await expect(networks.quote(session, { chainIds: [10] })).rejects.toMatchObject({ code: "WALLET_NETWORKS_UPDATING" });
+    for (let pass = 0; pass < 8 && (await owners.status(quoted.owners!.changeId)).some(chain => chain.state !== "updated"); pass++) await owners.tick();
+    expect(await owners.status(quoted.owners!.changeId)).toEqual([{ chainId: 10, name: "Optimism", state: "updated" }]);
+    // Each bundle carried the next Safe transaction only, so their nonces never raced.
+    const bundles = [...provider.bundles.values()].map(bundle => bundle.entries.filter(entry => entry.target.toLowerCase() === safe.toLowerCase()).length);
+    expect(bundles).toEqual([1, 1]);
+    expect((await observeWalletOwners({ account: safe, chains: [8453, 10], rpc })).map(state => state.status)).toEqual(["consistent", "consistent"]);
+    expect(await canSign(10, safe, stray)).toBe(false);
   }, 60_000);
 });

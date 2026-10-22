@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { decodeFunctionData, hashTypedData, keccak256, parseAbi, type Address } from "viem";
-import { walletOwnerSteps } from "../src/rest/wallet/ownerChains.js";
+import { walletOwnerPlan } from "../src/rest/web/walletRecoveryReview.js";
 import { createWalletAuthorityContextFixture } from "./fixtures/wallet-authority-context.js";
 import { walletNetworkCatalog, walletNetworkEntries, walletNetworksDocument, walletNetworkFamily } from "../src/rest/wallet/networks.js";
 import type { WalletAuthorityContext } from "../src/rest/wallet/authority.js";
@@ -64,7 +64,7 @@ describe("wallet networks", () => {
     }, owners);
     const cases: [Address[], Address[], number][] = [[[p0, r], [p1, r], 1], [[p0, r], [p1, d1, r], 2], [[p0, d1, r], [p1, r], 2], [[d1, p0, r], [d2, p1, r], 2], [[p0, r], [p0, r], 0], [[r, p0], [r], 1]];
     for (const [from, to, count] of cases) {
-      const steps = walletOwnerSteps(from, to);
+      const steps = walletOwnerPlan(from, to).steps;
       expect(steps).toHaveLength(count);
       expect(apply(from, steps).sort()).toEqual([...to].sort());
     }

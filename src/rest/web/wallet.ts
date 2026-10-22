@@ -384,7 +384,8 @@ const networksMessages: Record<string, string> = {
 };
 function networkView(value: Json): NetworksView {
   const v = record(value);
-  const list = (items: unknown, keys: string[]) => (Array.isArray(items) ? items : []).map(item => { const r = record(item); for (const key of keys) if (!(key in r)) throw new InvalidResponse(); return r; });
+  const list = (items: unknown, keys: string[]) => { if (!Array.isArray(items)) throw new InvalidResponse();
+    return items.map(item => { const r = record(item); for (const key of keys) if (!(key in r)) throw new InvalidResponse(); return r; }); };
   return { networks: list(v.networks, ["chainId", "name", "state"]).map(r => ({ chainId: Number(r.chainId), name: string(r.name, 40), state: string(r.state, 20), txHash: typeof r.txHash === "string" ? r.txHash : null,
       // A view read without owners (an approval's) keeps the last ones read.
       owners: typeof r.owners === "string" ? string(r.owners, 20) : networksView?.networks.find(n => n.chainId === Number(r.chainId))?.owners })),
@@ -411,11 +412,12 @@ function renderNetworks() {
   element("wallet-networks-backup").hidden = !networksUpdating && !networksBackupNeeded && view?.backup !== "needed";
   const deploy = element<HTMLButtonElement>("wallet-networks-deploy"); deploy.disabled = busy; deploy.textContent = networksUpdating ? "Update" : "Deploy";
   // Polling runs beside the busy gate so a click is never dropped; it stops after ten minutes or when nothing is pending.
-  if (view && view.pending.length && !networksTimer) networksTimer = setInterval(() => {
+  const waiting = !!view && (view.pending.length > 0 || view.networks.some(item => item.owners === "updating"));
+  if (waiting && !networksTimer) networksTimer = setInterval(() => {
     if (busy || document.hidden || !navigator.onLine || networksPolls++ > 200) return;
     networksStatus().catch(() => { /* The next poll reads again. */ });
   }, 3000);
-  if (view && !view.pending.length && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
+  if (view && !waiting && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
 }
 function chosenFamily(): string {
   return (networksForm?.querySelector<HTMLInputElement>("input[name=family]:checked")?.value) ?? "mainnet";
@@ -492,7 +494,7 @@ async function networksDeploy() {
   if (quoted.bundle === null) {
     if (!owners) { closeNetworks(); setStatus("ready", "Your account is already on those networks."); return; }
     setStatus("checking", "Updating the owners…");
-    networksView = networkView(await request(`${base}/networks/owners`, owners, csrf, 60_000)); closeNetworks();
+    networksView = networkView(record(record(await request(`${base}/networks/owners`, owners, csrf, 60_000)).view)); closeNetworks();
     setStatus("checking", "Updating the owners. Actions there wait until it lands."); return;
   }
   const bundle = record(quoted.bundle);
@@ -521,6 +523,7 @@ async function networksStatus() {
   networksView = networkView(await request(`${base}/networks/status`, {}, csrf, 60_000));
   render();
   if (networksView.pending.length) setStatus("checking", deployingText());
+  else if (networksView.networks.some(item => item.owners === "updating")) setStatus("checking", "Updating the owners. Actions there wait until it lands.");
   else setStatus("ready", `Your account is on ${networksView.networks.filter(item => item.state === "deployed").length} networks.`);
 }
 if (networksAdd && networksForm) {
@@ -789,8 +792,14 @@ async function deviceApproveNow() {
   if (chains.length > 8) throw new InvalidResponse();
   const steps = [{ name: "Base", challenge: string(prepared.challenge, 66) }, ...chains.map(chain => ({ chainId: Number(chain.chainId),
     name: signaChains.find(item => item.chainId === Number(chain.chainId))?.name ?? `Chain ${Number(chain.chainId)}`, challenge: string(chain.challenge, 66) }))];
+  // Each prompt signs the addition this page rebuilds from the account and the device it shows, never a hash as given.
+  const kit = await loadRecoveryKit(), signer = device.view.deviceSigner ?? "", reviews = [record(prepared.review), ...chains.map(chain => record(chain.review))];
   for (const [index, step] of steps.entries()) {
-    if (!/^0x[0-9a-fA-F]{64}$/.test(step.challenge)) throw new InvalidResponse();
+    const chainId = "chainId" in step ? step.chainId : 8453;
+    if ((index && reviews[index]!.chainId !== chainId) || step.challenge.toLowerCase() !== kit.walletDeviceAdditionChallenge(session!.walletAddress, signer, reviews[index]!.safeNonce, chainId))
+      throw new InvalidResponse();
+  }
+  for (const [index, step] of steps.entries()) {
     if (deviceConfirmed.has(step.challenge)) continue;
     nativePrompt = new AbortController();
     setStatus("authenticating", steps.length > 1 ? `Confirm on ${step.name} (${index + 1} of ${steps.length}).` : "Approve the new device with your passkey."); render();
