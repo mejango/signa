@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
 import type { Store } from '../src/store.js';
@@ -39,7 +40,7 @@ afterEach(async () => {
   for (const close of cleanup.splice(0)) await close();
   vi.useRealTimers(); vi.restoreAllMocks();
 });
-async function fixture(wallet?: RestWalletConfiguration, startMaintenance = false, smartAccountManifests?: readonly SmartAccountManifest[], walletSignup?: Parameters<typeof createRestRuntime>[0]['walletSignup'], walletRecovery?: Parameters<typeof createRestRuntime>[0]['walletRecovery'], upstreams: Parameters<typeof createRestRuntime>[0]['upstreams'] = new Map()) {
+async function fixture(wallet?: RestWalletConfiguration, startMaintenance = false, smartAccountManifests?: readonly SmartAccountManifest[], walletSignup?: Parameters<typeof createRestRuntime>[0]['walletSignup'], walletRecovery?: Parameters<typeof createRestRuntime>[0]['walletRecovery'], upstreams: Parameters<typeof createRestRuntime>[0]['upstreams'] = new Map(), walletNetworksPayer?: Parameters<typeof createRestRuntime>[0]['walletNetworksPayer']) {
   const pool = new Pool({ connectionString: 'postgresql://fixture@127.0.0.1:1/unused' });
   cleanup.push(() => pool.end());
   const query = vi.spyOn(pool, 'query').mockImplementation(() => { throw new Error('Unexpected database request during startup'); });
@@ -50,7 +51,7 @@ async function fixture(wallet?: RestWalletConfiguration, startMaintenance = fals
   } });
   const runtime = await createRestRuntime({ pool, store, services: mcp.services, config: mcp.config,
     upstreams, rpc: { request }, executionConfiguration: await readRestExecutionConfiguration({}),
-    startMaintenance, ...(wallet ? { wallet } : {}), ...(smartAccountManifests ? { smartAccountManifests } : {}), ...(walletSignup ? { walletSignup } : {}), ...(walletRecovery ? { walletRecovery } : {}) });
+    startMaintenance, ...(wallet ? { wallet } : {}), ...(smartAccountManifests ? { smartAccountManifests } : {}), ...(walletSignup ? { walletSignup } : {}), ...(walletRecovery ? { walletRecovery } : {}), ...(walletNetworksPayer ? { walletNetworksPayer } : {}) });
   cleanup.unshift(() => runtime.stop());
   return { runtime, pool, query, request };
 }
@@ -84,6 +85,14 @@ describe('explicit wallet runtime composition', () => {
     expect(f.query).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
     site.mockClear(); await fixture(await walletConfiguration());
     expect(site.mock.calls[0]![0]).not.toHaveProperty('onramp');
+  });
+  it('composes the networks feature only from an explicit payer signer, so the configuration still clones', async () => {
+    const payer = privateKeyToAccount(`0x${'33'.repeat(32)}`);
+    const f = await fixture(await walletConfiguration(), false, undefined, undefined, undefined, new Map(),
+      { address: payer.address, signTransaction: transaction => payer.signTransaction(transaction) });
+    expect(f.runtime.wallet!.networks).toBeDefined();
+    expect(f.query).not.toHaveBeenCalled(); expect(f.request).not.toHaveBeenCalled();
+    expect((await fixture(await walletConfiguration())).runtime.wallet).not.toHaveProperty('networks');
   });
   it('installs signup only from an explicit local capability and stops its worker with the runtime', async () => {
     const site = vi.spyOn(walletSite, 'createWalletSite');

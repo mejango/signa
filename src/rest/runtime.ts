@@ -100,8 +100,6 @@ export interface RestWalletConfiguration {
   manifest: SmartAccountManifest;
   utility: ContractPin;
   payments?: Omit<WalletV6UsdcPaymentConfig, 'chainId'>;
-  /** The account that funds Relayr bundles for the account-on-more-chains feature. */
-  networksPayer?: ServerSigner;
   /** Coinbase Onramp to the account's own address (plain settings; the runtime builds the client). */
   onramp?: Omit<WalletOnrampConfig, 'origin' | 'fetch'>;
   applePayDomainFile?: string;
@@ -142,6 +140,8 @@ export async function createRestRuntime(options: {
     smart: ReturnType<typeof createSmartAccountService> }) => ReturnType<typeof createLocalWalletRecovery> | Promise<ReturnType<typeof createLocalWalletRecovery>>;
   walletDevices?: (context: { pool: Pool; rpc: RestRpc; wallet: RestWalletRuntime; audience: string;
     smart: ReturnType<typeof createSmartAccountService> }) => ReturnType<typeof createLocalWalletDevices> | Promise<ReturnType<typeof createLocalWalletDevices>>;
+  /** The account that funds Relayr bundles for the account-on-more-chains feature. Kept outside `wallet`, whose plain settings are cloned. */
+  walletNetworksPayer?: ServerSigner;
   rpcSiteLimitPerMinute?: number;
   smartAccountManifests?: readonly SmartAccountManifest[];
   smartAccountModuleInspectors?: readonly SmartModuleInspector[];
@@ -233,8 +233,8 @@ export async function createRestRuntime(options: {
       service: createWalletAuthorityService({ store: authority, chain }), attemptTimeoutMs: 100_000,
       onEvent: event => console.info(JSON.stringify({ service: "wallet", action: "authority_refresh", outcome: event })),
     });
-    const networks = walletConfiguration.networksPayer ? createWalletNetworks({ enrollments: new PostgresWalletEnrollmentStore(options.pool), authority,
-      store: new PostgresWalletNetworksStore(options.pool), provider: new RelayrProvider(), rpc, payer: walletConfiguration.networksPayer }) : undefined;
+    const networks = options.walletNetworksPayer ? createWalletNetworks({ enrollments: new PostgresWalletEnrollmentStore(options.pool), authority,
+      store: new PostgresWalletNetworksStore(options.pool), provider: new RelayrProvider(), rpc, payer: options.walletNetworksPayer }) : undefined;
     return { origin, login, policy, handoff, appGrants, authority, refresh, refreshQueue, manifestId: walletConfiguration.manifest.id,
       activatePolicy: policy.activate.bind(policy), ...(networks ? { networks } : {}) };
   })() : undefined;

@@ -74,13 +74,14 @@ async function activate(): Promise<void> {
   const stack = await createBaseWalletProductionStack();
   const wallet: RestWalletConfiguration = { origin, frameableAppOrigins,
     manifest: stack.manifest, utility: stack.utility, basePath: "", payments: stack.payments,
-    ...(networksPayer ? { networksPayer } : {}), ...(onramp ? { onramp } : {}),
+    ...(onramp ? { onramp } : {}),
     ...(process.env.CDP_APPLE_PAY_DOMAIN_FILE ? { applePayDomainFile: process.env.CDP_APPLE_PAY_DOMAIN_FILE } : {}) };
   const rpcUrl = `https://${DWELLIR_RPC_HOSTS[8453]}/${process.env.DWELLIR_API_KEY}`;
   accountRuntime = await createRestRuntime({
     surface: "wallet",
     pool, store, services: protocol.services, config: protocol.config, upstreams, audience, wallet,
     rpcSiteLimitPerMinute, metrics: new Metrics(), executionConfiguration: await readRestExecutionConfiguration(process.env),
+    ...(networksPayer ? { walletNetworksPayer: networksPayer } : {}),
     ...(creation ? { walletSignup: (context: Parameters<typeof createBaseWalletSignupHost>[0]) => createBaseWalletSignupHost(context, {
       url: rpcUrl, signer: creationSigner!, poolId: process.env.WALLET_CREATION_POOL_ID!,
       allocationWei: process.env.WALLET_CREATION_ALLOCATION_WEI!, initialNonce: process.env.WALLET_CREATION_INITIAL_NONCE!,
