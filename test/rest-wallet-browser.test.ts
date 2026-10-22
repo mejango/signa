@@ -159,7 +159,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       const body = route.request().postData() ?? "[]";
       if (body.includes("eth_chainId")) reads.push(body);
       const result = (request: { method: string; params: unknown[] }) => request.method === "eth_chainId" ? `0x${chainId.toString(16)}`
-        : request.method === "eth_blockNumber" ? "0x10" : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
+        : request.method === "eth_getBlockByNumber" ? { hash: `0x${"ab".repeat(32)}` } : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
       await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
         body: JSON.stringify((JSON.parse(body) as { id: number; method: string; params: unknown[] }[]).map(request => ({ jsonrpc: "2.0", id: request.id, result: result(request) }))) });
     });
@@ -580,7 +580,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         if (modes[name] === "abort") return route.abort("connectionrefused");
         if (modes[name] === "html") return route.fulfill({ status: 200, contentType: "text/html", headers: { "access-control-allow-origin": "*" }, body: "<html>busy</html>" });
         const result = (request: { method: string; params: unknown[] }) => request.method === "eth_chainId" ? `0x${chainId.toString(16)}`
-          : request.method === "eth_blockNumber" ? "0x10" : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
+          : request.method === "eth_getBlockByNumber" ? { hash: `0x${"ab".repeat(32)}` } : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
         await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
           body: JSON.stringify((JSON.parse(route.request().postData() ?? "[]") as { id: number; method: string; params: unknown[] }[]).map(request => ({ jsonrpc: "2.0", id: request.id, result: result(request) }))) });
       });

@@ -127,14 +127,15 @@ describe('a network owner update signed with the backup', () => {
 
 describe("the account's Safe read from each chain's public RPC", () => {
   const wallet = identity.walletAddress, owners = [getAddress(`0x${'a1'.repeat(20)}`), account.address];
-  const word = (value: bigint | string) => BigInt(value).toString(16).padStart(64, '0');
-  // Answers by what is asked: 0 chain, 1 code, 2 owners, 3 threshold, 4 nonce; every state read must name block 0x10.
+  const word = (value: bigint | string) => BigInt(value).toString(16).padStart(64, '0'), head = `0x${'ab'.repeat(32)}`;
+  // Answers by what is asked: 0 chain, 1 code, 2 owners, 3 threshold, 4 nonce; every state read must name the head block by its hash, as canonical.
   const answer = (overrides: Record<number, unknown> = {}) => vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
     const results = ['0x2105', '0x6080', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`, `0x${word(7n)}`];
     const which = (request: { method: string; params: unknown[] }) => request.method === 'eth_chainId' ? 0 : request.method === 'eth_getCode' ? 1
       : ({ '0xa0e67e2b': 2, '0xe75235b8': 3, '0xaffed0e0': 4 } as Record<string, number>)[(request.params[0] as { data: string }).data]!;
     return new Response(JSON.stringify((JSON.parse(init.body) as { id: number; method: string; params: unknown[] }[]).reverse().map(request => ({ jsonrpc: '2.0', id: request.id,
-      result: request.method === 'eth_blockNumber' ? '0x10' : request.method !== 'eth_chainId' && request.params.at(-1) !== '0x10' ? null
+      result: request.method === 'eth_getBlockByNumber' ? { hash: head } : request.method !== 'eth_chainId'
+        && JSON.stringify(request.params.at(-1)) !== JSON.stringify({ blockHash: head, requireCanonical: true }) ? null
         : which(request) in overrides ? overrides[which(request)] : results[which(request)] }))));
   }));
   afterEach(() => { vi.unstubAllGlobals(); });
