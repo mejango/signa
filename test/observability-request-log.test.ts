@@ -29,6 +29,8 @@ describe("request log", () => {
     vi.spyOn(console, "log").mockImplementation((line: string) => { lines.push(JSON.parse(line) as Record<string, unknown>); });
     const app = new Hono<JbcenterEnv>().use(new Metrics().middleware());
     app.get("/ok", (c) => c.text("ok"));
+    vi.stubEnv("SIGNA_REPLICA_ID", "");
+    vi.stubEnv("SIGNA_REPLICA_REGION", "");
     vi.stubEnv("RAILWAY_REPLICA_ID", "railway-1");
     vi.stubEnv("RAILWAY_REPLICA_REGION", "railway-region");
     await app.request("/ok");

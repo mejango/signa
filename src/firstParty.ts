@@ -47,6 +47,10 @@ export function hostingSetting(
 }
 
 export function environmentName(env: Record<string, string | undefined> = process.env): string | undefined {
+  const neutral = env[HOSTING_NAMES.environment[0]];
+  if (neutral && neutral !== "dev" && neutral !== "production") {
+    throw new Error("SIGNA_ENVIRONMENT must be dev or production");
+  }
   return hostingSetting("environment", env);
 }
 

@@ -37,8 +37,10 @@ describe("one first-party configuration", () => {
     expect(environmentName({ SIGNA_ENVIRONMENT: "dev" })).toBe("dev");
     expect(environmentName({ RAILWAY_ENVIRONMENT_NAME: "dev" })).toBe("dev");
     expect(environmentName({})).toBeUndefined();
+    expect(() => environmentName({ SIGNA_ENVIRONMENT: "dev ", RAILWAY_ENVIRONMENT_NAME: "dev" })).toThrow(/dev or production/u);
   });
   it("retains the existing environment default and enables no return handlers", () => {
+    vi.stubEnv("SIGNA_ENVIRONMENT", "");
     vi.stubEnv("RAILWAY_ENVIRONMENT_NAME", "dev");
     expect(originsForEnvironment()).toEqual(originsForEnvironment("dev"));
     for (const environment of ["production", "dev"]) {
