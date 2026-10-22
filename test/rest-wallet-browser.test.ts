@@ -153,11 +153,15 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   /** One chain's public RPC as the page reads it: the account's Safe deployed there with these owners, threshold one, at this nonce. Returns the request bodies. */
   async function chainRpc(target: Page, url: string, chainId: number, owners: string[], nonce: bigint) {
     const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0"), reads: string[] = [];
-    const results = [`0x${chainId.toString(16)}`, "0x6080", `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join("")}`, `0x${word(1n)}`, `0x${word(nonce)}`];
+    const calls: Record<string, string> = { "0xa0e67e2b": `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join("")}`,
+      "0xe75235b8": `0x${word(1n)}`, "0xaffed0e0": `0x${word(nonce)}` };
     await target.route(`${url}/**`, async route => {
-      reads.push(route.request().postData() ?? "");
+      const body = route.request().postData() ?? "[]";
+      if (body.includes("eth_chainId")) reads.push(body);
+      const result = (request: { method: string; params: unknown[] }) => request.method === "eth_chainId" ? `0x${chainId.toString(16)}`
+        : request.method === "eth_blockNumber" ? "0x10" : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
       await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
-        body: JSON.stringify(results.map((result, id) => ({ jsonrpc: "2.0", id, result }))) });
+        body: JSON.stringify((JSON.parse(body) as { id: number; method: string; params: unknown[] }[]).map(request => ({ jsonrpc: "2.0", id: request.id, result: result(request) }))) });
     });
     return reads;
   }

@@ -98,8 +98,15 @@ describe('a network owner update signed with the backup', () => {
 describe("the account's Safe read from each chain's public RPC", () => {
   const wallet = identity.walletAddress, owners = [getAddress(`0x${'a1'.repeat(20)}`), account.address];
   const word = (value: bigint | string) => BigInt(value).toString(16).padStart(64, '0');
-  const answer = (overrides: Record<number, unknown> = {}) => vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([2, 0, 4, 1, 3].map(id => ({ jsonrpc: '2.0', id,
-    result: id in overrides ? overrides[id] : ['0x2105', '0x6080', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`, `0x${word(7n)}`][id] }))))));
+  // Answers by what is asked: 0 chain, 1 code, 2 owners, 3 threshold, 4 nonce; every state read must name block 0x10.
+  const answer = (overrides: Record<number, unknown> = {}) => vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
+    const results = ['0x2105', '0x6080', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`, `0x${word(7n)}`];
+    const which = (request: { method: string; params: unknown[] }) => request.method === 'eth_chainId' ? 0 : request.method === 'eth_getCode' ? 1
+      : ({ '0xa0e67e2b': 2, '0xe75235b8': 3, '0xaffed0e0': 4 } as Record<string, number>)[(request.params[0] as { data: string }).data]!;
+    return new Response(JSON.stringify((JSON.parse(init.body) as { id: number; method: string; params: unknown[] }[]).reverse().map(request => ({ jsonrpc: '2.0', id: request.id,
+      result: request.method === 'eth_blockNumber' ? '0x10' : request.method !== 'eth_chainId' && request.params.at(-1) !== '0x10' ? null
+        : which(request) in overrides ? overrides[which(request)] : results[which(request)] }))));
+  }));
   afterEach(() => { vi.unstubAllGlobals(); });
   it('reads the owners, threshold and nonce a chain holds, and refuses another chain or a malformed answer', async () => {
     answer(); expect(await readHomeOwners(wallet)).toEqual(owners);
