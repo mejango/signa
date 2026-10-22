@@ -46,7 +46,8 @@ export function createWalletDeploymentAnvilRpc(endpoint: string): RestRpc {
 }
 
 /** `setup` runs before the baseline snapshot so `reset()` restores its state too. */
-export async function startWalletDeploymentAnvil(setup?: (rpc: <T = unknown>(method: string, params?: readonly unknown[]) => Promise<T>) => Promise<void>) {
+export async function startWalletDeploymentAnvil(setup?: (rpc: <T = unknown>(method: string, params?: readonly unknown[]) => Promise<T>) => Promise<void>,
+  options: { passkeyAtProductionAddresses?: boolean } = {}) {
   const server = createServer();
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const port = (server.address() as { port: number }).port;
@@ -96,17 +97,21 @@ export async function startWalletDeploymentAnvil(setup?: (rpc: <T = unknown>(met
       if (keccak256(code) !== a.runtimeCodeHash) throw new Error("Fixture artifact runtime mismatch");
       await rpc("anvil_setCode", [a.canonicalAddress ?? a.address, code]);
     }
-    // The passkey signer contracts go where production has them, through the deterministic deployer, so a
-    // browser's built-in profile derives the same signers here as on Base.
-    const passkey = await preparePasskeyDependencyDeployment();
-    await rpc("anvil_setCode", [passkey.deployer.address, passkey.deployer.runtime]);
-    for (const item of passkey.deployments) {
-      const hash = await rpc<Hex>("eth_sendTransaction", [{ from: sender, to: item.transaction.to, data: item.transaction.data, gas: "0xf42400" }]);
-      let receipt: { status: Hex } | null = null;
+    async function send(transaction: { to?: Address; data: Hex }) {
+      const hash = await rpc<Hex>("eth_sendTransaction", [{ from: sender, ...transaction, gas: "0xf42400" }]);
+      let receipt: { status: Hex; contractAddress: Address } | null = null;
       for (let i = 0; i < 100 && !receipt; i++) { receipt = await rpc("eth_getTransactionReceipt", [hash]); if (!receipt) await new Promise(resolve => setTimeout(resolve, 10)); }
-      if (receipt?.status !== "0x1") throw new Error("Local passkey contract failed to deploy");
+      if (receipt?.status !== "0x1") throw new Error("Local fixture contract failed to deploy");
+      return receipt.contractAddress;
     }
-    const fclAddress = passkey.profile.p256Verifier.address, signerFactoryAddress = passkey.profile.signerFactory.address;
+    let fclAddress: Address, signerFactoryAddress: Address;
+    if (options.passkeyAtProductionAddresses) {
+      // Where production has them, through the deterministic deployer, so a browser's built-in profile derives the same signers here.
+      const passkey = await preparePasskeyDependencyDeployment();
+      await rpc("anvil_setCode", [passkey.deployer.address, passkey.deployer.runtime]);
+      for (const item of passkey.deployments) await send(item.transaction);
+      fclAddress = passkey.profile.p256Verifier.address; signerFactoryAddress = passkey.profile.signerFactory.address;
+    } else { fclAddress = await send({ data: fcl.value.bytecode }); signerFactoryAddress = await send({ data: signerFactory.value.bytecode }); }
     const singletonAddress = decodeFunctionResult({ abi: signerFactory.value.abi, functionName: "SINGLETON", data: await rpc<Hex>("eth_call",
       [{ to: signerFactoryAddress, data: encodeFunctionData({ abi: signerFactory.value.abi, functionName: "SINGLETON" }) }, "latest"]) }) as Address;
     async function deployedPin(a: ReturnType<typeof artifact>, address: Address): Promise<ContractPin> {

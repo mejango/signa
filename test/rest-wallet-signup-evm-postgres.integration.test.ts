@@ -45,7 +45,8 @@ suite("joined wallet signup against real PostgreSQL and unforked EVM", () => {
       "018_rest_wallet_deployment_observations.sql", "021_rest_wallet_deployment_dispatch.sql", "026_wallet_deployment_settlement.sql", "034_wallet_deployment_base.sql", "054_wallet_deployment_inclusion_release.sql", "056_wallet_deployment_release_after_settled_dispatch.sql", "027_wallet_signup.sql",
       "028_wallet_recovery.sql", "029_wallet_recovery_mapping.sql", "033_wallet_unproved_recovery_expiry.sql", "030_wallet_recovery_flow.sql", "031_wallet_recovery_dispatch.sql", "035_wallet_recovery_base.sql", "045_wallet_device_addition.sql"])].sort())
       await pool.query(await readFile(new URL(`../src/db/migrations/${name}`, import.meta.url), "utf8"));
-    fixture = await startWalletDeploymentAnvil();
+    // The recovery page derives signers from the passkey contracts built into it, so they sit at production's addresses here.
+    fixture = await startWalletDeploymentAnvil(undefined, { passkeyAtProductionAddresses: true });
   }, 30_000);
   afterAll(async () => {
     await fixture?.close(); await pool?.end();
