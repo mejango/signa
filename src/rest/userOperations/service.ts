@@ -1063,10 +1063,9 @@ export class UserOperationService {
       this.owners(plan, signal),
     ]);
     stage("checksMs");
-    // All finished; the first failure in this order is the one reported, except that an owner
-    // divergence is named before a simulation it would explain.
+    // All finished; an owner divergence is named first, as at preparation, then the account and the simulation.
     const [accountCheck, preflightCheck, ownersCheck] = checks;
-    for (const check of [accountCheck, ownersCheck, preflightCheck]) if (check.status === "rejected") throw check.reason;
+    for (const check of [ownersCheck, accountCheck, preflightCheck]) if (check.status === "rejected") throw check.reason;
     const { binding, manifest } = (accountCheck as PromiseFulfilledResult<Awaited<ReturnType<typeof this.account>>>).value;
     const preflight = (preflightCheck as PromiseFulfilledResult<Awaited<ReturnType<UserOperationChain["preflight"]>>>).value;
     return { head, binding, manifest, preflight };

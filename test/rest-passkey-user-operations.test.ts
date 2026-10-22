@@ -337,7 +337,8 @@ describe("app UserOperation owner boundary", () => {
     await expect(unread.prepare()).rejects.toMatchObject({ status: 503, code: "WALLET_OWNERS_UNKNOWN" });
     // A change between the review and the approval refuses the approval: nothing is claimed or sent.
     const f = await fixture({ app: true }), view = await f.prepare();
-    f.state.safeThreshold = 2n;
+    // The changed owners also fail the account check; the divergence is the reason given.
+    f.state.safeThreshold = 2n; f.state.bindingFailure = true;
     const signature = encodeSafe7579PasskeyOwnerSignature({ validAfter: String(view.createdAt / 1000), validUntil: String(view.expiresAt / 1000),
       signatures: [{ kind: "ecdsa", owner: ownerKey.address, signature: await ownerKey.sign({ hash: view.signing.digest }) }] });
     await expect(f.service.submit(f.principal, view.id, signature, "submit")).rejects.toMatchObject({ code: "WALLET_OWNERS_DIVERGED" });

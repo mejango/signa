@@ -152,6 +152,8 @@ function acceptSession(value: Json, required = false) {
     || string(current.accountId).toLowerCase() !== `eip155:8453:${walletAddress.toLowerCase()}`) throw new InvalidResponse();
   const nextCsrf = token(value.csrfToken), expiresAtMs = future(current.expiresAtMs);
   const passkeyName = current.passkeyName === null || current.passkeyName === undefined ? null : string(current.passkeyName, 120);
+  // Another account's networks and owner labels never carry over, even when its first read fails.
+  if (session?.accountId !== current.accountId) networksView = null;
   session = { accountId: current.accountId as string, loginId: string(current.loginId, 36), walletAddress, chainId: 8453, expiresAtMs, passkeyName };
   csrf = nextCsrf; sessionKnown = true;
   // A page about to leave for an app or a payment review does not need the networks list.
