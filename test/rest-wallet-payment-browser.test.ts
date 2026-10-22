@@ -2,6 +2,8 @@ import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { build } from 'esbuild';
+// @ts-expect-error The build script is plain ESM without declarations.
+import { webBuildOptions } from '../scripts/rest/build-web.mjs';
 import { chromium, type Browser, type Page, type CDPSession } from 'playwright';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
@@ -34,7 +36,7 @@ describe('central payment review browser, virtual authenticator', () => {
 
   beforeAll(async () => {
     const built = await build({ entryPoints: [new URL('../src/rest/web/walletPayment.ts', import.meta.url).pathname],
-      bundle: true, platform: 'browser', format: 'esm', target: 'es2022', write: false });
+      bundle: true, platform: 'browser', format: 'esm', target: 'es2022', write: false, define: webBuildOptions.define });
     script = built.outputFiles[0]!.text;
     const paymentPage = await import('../src/rest/web/walletPaymentPage.js');
     const walletPage = await import('../src/rest/web/walletPage.js');
@@ -303,6 +305,21 @@ describe('central payment review browser, virtual authenticator', () => {
     await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
     expect(approvals()).toHaveLength(0); expect(await page.locator('#payment-approve').isVisible()).toBe(false);
     expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0);
+  });
+
+  it("refuses a review whose token or terminal differs from the bundle's pin", async () => {
+    const pin = { token: review.payment.token, directV6Terminal: review.payment.terminal }, other = '0x1111111111111111111111111111111111111111' as const;
+    for (const served of [{ ...pin, token: other }, { ...pin, directV6Terminal: other }]) {
+      // Internally consistent: the calls, SafeOp digest, passkey challenge and summary all name the served pair.
+      const f = createWalletPaymentClientFixture(Date.now(), '0x', served);
+      if (!('signedData' in f.prepared.signing)) throw new Error('Fixture must use a passkey owner');
+      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment,
+        signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
+        passkey: { ...review.passkey, challenge: encode(Buffer.from(f.prepared.signing.digest.slice(2), 'hex')) } };
+      await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+      expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+      expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0); expect(approvals()).toHaveLength(0);
+    }
   });
 
   it('does not prompt for an already expired or approved review', async () => {

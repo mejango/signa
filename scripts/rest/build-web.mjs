@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import { basePaymentConfiguration } from "../../src/rest/wallet/productionStack.ts";
 
 /** The browser bundles Center serves; test/rest-web-bundle-budget.test.ts holds their size budgets. */
 export const webBuildOptions = {
@@ -25,6 +26,8 @@ export const webBuildOptions = {
   minify: true,
   sourcemap: false,
   legalComments: "eof",
+  // The approval page checks every payment against the server's own token and terminal pin.
+  define: { __SIGNA_PAYMENT_PIN__: JSON.stringify(basePaymentConfiguration()) },
 };
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) await build(webBuildOptions);

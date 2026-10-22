@@ -1,4 +1,4 @@
-import { encodeFunctionData, erc20Abi, getAddress, parseAbi, type Address, type Hex } from "viem";
+import { encodeFunctionData, erc20Abi, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { PreparedUserOperation } from "../../src/rest/client/smartAccounts.js";
 import { encodeSafe7579Execution } from "../../src/rest/smartAccounts/accountExecution.js";
@@ -9,6 +9,7 @@ import { getUserOperationHash, normalizeUserOperation, userOperationCommitment, 
 import type { WalletV6UsdcPayment } from "../../src/rest/userOperations/semantics.js";
 import type { UserOperationObservation } from "../../src/rest/userOperations/types.js";
 import type { WalletAppGrant } from "../../src/rest/wallet/appGrants.js";
+import { basePaymentConfiguration } from "../../src/rest/wallet/productionStack.js";
 import { verifyWalletAssertion } from "../../src/rest/wallet/webauthn.js";
 import { createRegistration, signGet } from "./wallet-enrollment-crypto.js";
 
@@ -19,12 +20,11 @@ const payAbi = parseAbi([
 /** Real calldata, commitments and P256 proof; synthetic service records and chain observations.
  * No contract deployment, RPC, passkey device, database admission or payment is proved here.
  */
-export function createWalletPaymentClientFixture(nowMs = 1_900_000_000_000, metadata: Hex = "0x") {
+export function createWalletPaymentClientFixture(nowMs = 1_900_000_000_000, metadata: Hex = "0x",
+  { token, directV6Terminal: terminal } = basePaymentConfiguration()) {
   const issuer = "https://wallet.juicebox.center", audience = "https://juicebox.center";
   const origin = "https://beep.biz", callbackUri = `${origin}/center/callback`, rpId = "wallet.juicebox.center";
   const safe = "0x3333333333333333333333333333333333333333" as Address;
-  const token = getAddress("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
-  const terminal = "0x4444444444444444444444444444444444444444" as Address;
   const entryPoint = "0x0000000071727de22e5e9d8baf0edac6f37da032" as Address;
   const safe7579 = "0x7579f2ad53b01c3d8779fe17928e0d48885b0003" as Address;
   const passkeyOwner = "0x9000000000000000000000000000000000000001" as Address;
