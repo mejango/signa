@@ -19,13 +19,16 @@ export interface WalletOwnerStateStore {
   put(account: Address, observation: WalletOwnerObservation): Promise<void>;
 }
 
-async function observe(account: Address, chainId: number, rpc: RestRpc, store?: WalletOwnerStateStore, signal?: AbortSignal): Promise<WalletOwnerObservation> {
+async function observe(account: Address, chainId: number, rpc: RestRpc, now: () => number, store?: WalletOwnerStateStore, signal?: AbortSignal): Promise<WalletOwnerObservation> {
   const reads = operationRpc(rpc, walletPreflightRpcBounds, signal, false, chainId);
   try {
     const [chain, block, stored] = await Promise.all([reads.request("eth_chainId", []), reads.request("eth_getBlockByNumber", ["latest", false]), store?.get(account, chainId)]);
     if (uoQuantity(chain, "RPC chain") !== BigInt(chainId) || !uoObject(block)) throw new Error("The RPC did not establish the expected chain.");
     const evidence: RestBlockEvidence = { chainId, blockNumber: uoQuantity(block.number, "block number").toString(),
       blockHash: uoHash(block.hash, "block hash"), timestamp: uoQuantity(block.timestamp, "block timestamp").toString(), source: "onchain" };
+    // A node stuck behind the chain would keep answering with owners from before a change: its head must be current.
+    const seconds = BigInt(Math.floor(now() / 1000)), timestamp = BigInt(evidence.timestamp);
+    if (timestamp > seconds + 30n || timestamp + 300n < seconds) throw new Error("The chain head is stale.");
     if (stored && stored.block.blockHash === evidence.blockHash) return stored;
     const at = { blockHash: evidence.blockHash, requireCanonical: true };
     const read = async (functionName: "getOwners" | "getThreshold") => decodeFunctionResult({ abi: safeAbi, functionName,
@@ -42,10 +45,11 @@ const sameOwners = (a: readonly Address[], b: readonly Address[]) =>
 /** Reads the account's owners and threshold on Base and on each chain at one head per chain, all at
  * once. A chain is `consistent` only with Base's exact owner set and threshold one; any failed read
  * is `unknown`, never consistent. */
-export async function observeWalletOwners(input: { account: Address; chains: number[]; rpc: RestRpc; store?: WalletOwnerStateStore; signal?: AbortSignal }): Promise<WalletOwnerState[]> {
+export async function observeWalletOwners(input: { account: Address; chains: number[]; rpc: RestRpc; store?: WalletOwnerStateStore; signal?: AbortSignal; now?: () => number }): Promise<WalletOwnerState[]> {
   const chains = [...new Set(input.chains)];
-  const read = (chainId: number) => observe(input.account, chainId, input.rpc, input.store, input.signal);
+  const read = (chainId: number) => observe(input.account, chainId, input.rpc, input.now ?? Date.now, input.store, input.signal);
   const home = read(HOME_CHAIN_ID);
+  home.catch(() => undefined);
   const results = await Promise.allSettled(chains.map(chainId => chainId === HOME_CHAIN_ID ? home : read(chainId)));
   const expected = await home.catch(() => undefined);
   return chains.map((chainId, index): WalletOwnerState => {

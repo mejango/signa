@@ -98,6 +98,10 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       if (address === networksWalletAddress) return networksPaid ? '0x6001' : '0x';
       return options.fixture.rpc(method, params);
     }
+    // Its head and the deployed account's owner reads mirror the same anvil Safe, so its owners match Base's.
+    if (method === 'eth_chainId') return toHex(chainId);
+    if (method === 'eth_getBlockByNumber') return options.fixture.rpc(method, params);
+    if (method === 'eth_call' && String((params[0] as { to?: string }).to).toLowerCase() === networksWalletAddress) return options.fixture.rpc(method, params);
     if (method === 'eth_call') return `0x${'00'.repeat(12)}${networksWalletAddress.slice(2)}`;
     throw new Error(`Unexpected ${method} on chain ${chainId}`); } };
   const networks = createWalletNetworks({ enrollments: options.enrollments, authority: new PostgresWalletAuthorityStore(options.pool),
@@ -309,7 +313,7 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
       await page.getByLabel('Optimism', { exact: true }).check();
       await page.screenshot({ path: new URL('networks-picker.png', out).pathname, fullPage: true });
       await page.getByRole('button', { name: 'Deploy', exact: true }).click();
-      await expect.poll(() => page.locator('#wallet-networks').textContent(), { timeout: 30000 }).toBe('Base, Optimism');
+      await expect.poll(() => page.locator('#wallet-networks').textContent(), { timeout: 30000 }).toBe('Base: Up to date, Optimism: Up to date');
       expect(networksProvider.entries).toHaveLength(1);
       expect(networksProvider.entries[0]).toMatchObject({ chain: 10, target: options.fixture.manifest.factory.address, value: '0' });
       expect(networksProvider.entries[0]!.data.startsWith('0x1688f0b9')).toBe(true); // createProxyWithNonce, the same call that created it on Base

@@ -287,7 +287,7 @@ export class UserOperationService {
   private async owners(plan: StoredPlan, signal?: AbortSignal): Promise<void> {
     if (!this.options.manifestForPlan(plan).ownerProfile) return;
     const chainId = plan.smartAccount!.chainId;
-    assertOwnersConsistent(await observeWalletOwners({ account: plan.draft.account, chains: [chainId], rpc: this.options.rpc,
+    assertOwnersConsistent(await observeWalletOwners({ account: plan.draft.account, chains: [chainId], rpc: this.options.rpc, now: this.now,
       ...(this.options.ownerStates ? { store: this.options.ownerStates } : {}), ...(signal ? { signal } : {}) }), chainId);
   }
   private async account(plan: StoredPlan, signal?: AbortSignal, at?: RestBlockEvidence) {
@@ -977,6 +977,8 @@ export class UserOperationService {
       // verification path: the exact signed operation is checked before claim. This is
       // point-in-time provider evidence; later fee changes remain possible.
       const admission = await Promise.allSettled([
+        // Carried from a speculation: the owners are read again now, beside the signature checks.
+        carried ? this.owners(plan, signal) : undefined,
         // Carried from a speculation: the EntryPoint's validation of the exact signed bytes, the
         // one head-bound check that needs the signature, runs now at that same head.
         carried ? this.chain(signal).validateSigned(this.execution(record, operation, plan, planManifest), carried.head, carried.preflight.validationOrigin ?? "0x000000000000000000000000000000000000dEaD") : undefined,

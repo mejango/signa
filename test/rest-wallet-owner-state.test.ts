@@ -12,6 +12,8 @@ const account = "0x1111111111111111111111111111111111111111" as Address;
 const passkey = "0x2222222222222222222222222222222222222222" as Address, recovery = "0x3333333333333333333333333333333333333333" as Address;
 const rotated = "0x4444444444444444444444444444444444444444" as Address;
 const hash = (n: number) => padHex(toHex(n), { size: 32 });
+let clock = (1_800_000_000 + 100) * 1000;
+const now = () => clock;
 
 /** One synthetic node per chain: a head and the Safe's owners and threshold at it. */
 function chains(initial: Record<number, { owners: Address[]; threshold?: bigint; head?: number; down?: boolean }>) {
@@ -45,7 +47,7 @@ describe("wallet owner state", () => {
   it("reports consistent when every chain's owners equal Base's", async () => {
     // Order does not matter; the set and threshold one do.
     const { rpc } = chains({ 8453: { owners: [passkey, recovery] }, 10: { owners: [recovery, passkey] }, 42161: { owners: [passkey, recovery] } });
-    const states = await observeWalletOwners({ account, chains: [8453, 10, 42161], rpc });
+    const states = await observeWalletOwners({ account, chains: [8453, 10, 42161], rpc, now });
     expect(states.map(state => [state.chainId, state.status])).toEqual([[8453, "consistent"], [10, "consistent"], [42161, "consistent"]]);
     expect(states[1]).toMatchObject({ owners: [recovery, passkey], threshold: 1n, block: { chainId: 10, blockNumber: "100", blockHash: hash(10_100), source: "onchain" } });
     for (const chainId of [8453, 10, 42161]) expect(() => assertOwnersConsistent(states, chainId)).not.toThrow();
@@ -53,7 +55,7 @@ describe("wallet owner state", () => {
 
   it("marks a chain diverged when its owners or threshold differ from Base", async () => {
     const { rpc } = chains({ 8453: { owners: [rotated, recovery] }, 10: { owners: [passkey, recovery] }, 42161: { owners: [rotated, recovery], threshold: 2n } });
-    const states = await observeWalletOwners({ account, chains: [10, 42161], rpc });
+    const states = await observeWalletOwners({ account, chains: [10, 42161], rpc, now });
     expect(states).toMatchObject([{ chainId: 10, status: "diverged", owners: [passkey, recovery], expected: [rotated, recovery] },
       { chainId: 42161, status: "diverged", threshold: 2n }]);
     expect(() => assertOwnersConsistent(states, 10)).toThrow(expect.objectContaining({ status: 409, code: "WALLET_OWNERS_DIVERGED" }));
@@ -63,30 +65,50 @@ describe("wallet owner state", () => {
 
   it("an RPC failure refuses, never admits", async () => {
     const world = chains({ 8453: { owners: [passkey, recovery] }, 10: { owners: [passkey, recovery], down: true } });
-    let states = await observeWalletOwners({ account, chains: [8453, 10], rpc: world.rpc });
+    let states = await observeWalletOwners({ account, chains: [8453, 10], rpc: world.rpc, now });
     expect(states).toMatchObject([{ chainId: 8453, status: "consistent" }, { chainId: 10, status: "unknown" }]);
     expect(() => assertOwnersConsistent(states, 10)).toThrow(expect.objectContaining({ status: 503, code: "WALLET_OWNERS_UNKNOWN" }));
     // Without Base there is nothing to compare against: every chain is unknown.
     world.state[8453]!.down = true; world.state[10]!.down = false;
-    states = await observeWalletOwners({ account, chains: [10], rpc: world.rpc });
+    states = await observeWalletOwners({ account, chains: [10], rpc: world.rpc, now });
     expect(states).toEqual([{ chainId: 10, status: "unknown", reason: "The owners on Base could not be read." }]);
     expect(() => assertOwnersConsistent(states, 10)).toThrow(expect.objectContaining({ status: 503 }));
     // An account with no code there decodes nothing: unknown, not consistent.
     world.state[8453]!.down = false;
     const empty: RestRpc = { request: (chainId, method, params, signal) => method === "eth_call" && chainId === 10 ? Promise.resolve("0x") : world.rpc.request(chainId, method, params, signal) };
-    expect(await observeWalletOwners({ account, chains: [10], rpc: empty })).toMatchObject([{ chainId: 10, status: "unknown" }]);
+    expect(await observeWalletOwners({ account, chains: [10], rpc: empty, now })).toMatchObject([{ chainId: 10, status: "unknown" }]);
+  });
+
+  it("treats a stale head as unknown, so a node stuck before an owner change never answers for it", async () => {
+    const world = chains({ 8453: { owners: [passkey, recovery] }, 10: { owners: [passkey, recovery] } }), store = memoryStore();
+    expect(await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store, now })).toMatchObject([{ status: "consistent" }]);
+    // Base stops advancing: its stored observation is never reused once its head is five minutes old.
+    clock += 301_000;
+    try {
+      world.state[10]!.head = 400;
+      expect(await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store, now })).toEqual([{ chainId: 10, status: "unknown", reason: "The owners on Base could not be read." }]);
+    } finally { clock -= 301_000; }
+  });
+
+  it("settles every read when Base fails before the other chains answer", async () => {
+    const world = chains({ 8453: { owners: [passkey, recovery], down: true }, 10: { owners: [passkey, recovery] } });
+    const slow: RestRpc = { request: async (chainId, method, params, signal) => {
+      if (chainId === 10) await new Promise(done => setTimeout(done, 50));
+      return world.rpc.request(chainId, method, params, signal);
+    } };
+    expect(await observeWalletOwners({ account, chains: [10], rpc: slow, now })).toMatchObject([{ chainId: 10, status: "unknown" }]);
   });
 
   it("owner reads run beside the prepare reads and Base state is re-read only on a new block or owner event", async () => {
     const world = chains({ 8453: { owners: [passkey, recovery] }, 10: { owners: [passkey, recovery] } }), store = memoryStore();
-    await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store });
+    await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store, now });
     expect([world.ownerReads(8453), world.ownerReads(10)]).toEqual([1, 1]);
     // Same heads: the stored observations are the answer.
-    await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store });
+    await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store, now });
     expect([world.ownerReads(8453), world.ownerReads(10)]).toEqual([1, 1]);
     // An owner change on Base lands in a new Base block: Base is read again, the other chain is not.
     world.state[8453] = { owners: [rotated, recovery], head: 101 };
-    const states = await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store });
+    const states = await observeWalletOwners({ account, chains: [10], rpc: world.rpc, store, now });
     expect([world.ownerReads(8453), world.ownerReads(10)]).toEqual([2, 1]);
     expect(states).toMatchObject([{ chainId: 10, status: "diverged", expected: [rotated, recovery] }]);
     expect(store.rows.get(`${account}:8453`)).toMatchObject({ owners: [rotated, recovery], block: { blockHash: hash(8_453_101) } });

@@ -343,6 +343,14 @@ describe("app UserOperation owner boundary", () => {
     await expect(f.service.submit(f.principal, view.id, signature, "submit")).rejects.toMatchObject({ code: "WALLET_OWNERS_DIVERGED" });
     expect((await f.store.get(f.actor, view.id))!.submission).toBeUndefined();
     expect(f.state.sends).toBe(0);
+    // A speculation made while the owners matched is not enough: the approval reads them again.
+    const g = await fixture({ app: true }), speculated = await g.prepare();
+    await g.service.speculate(g.actor, speculated.id);
+    g.state.ownersFailure = true;
+    const approval = encodeSafe7579PasskeyOwnerSignature({ validAfter: String(speculated.createdAt / 1000), validUntil: String(speculated.expiresAt / 1000),
+      signatures: [{ kind: "ecdsa", owner: ownerKey.address, signature: await ownerKey.sign({ hash: speculated.signing.digest }) }] });
+    await expect(g.service.submit(g.principal, speculated.id, approval, "submit")).rejects.toMatchObject({ status: 503, code: "WALLET_OWNERS_UNKNOWN" });
+    expect(g.state.sends).toBe(0);
   });
 
   it("refuses an operation on another chain whose owners diverge from Base, naming the divergence", async () => {

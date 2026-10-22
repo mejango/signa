@@ -11,6 +11,7 @@ import { PostgresWalletOwnerStateStore } from "../src/rest/wallet/ownerStatePost
 const connectionString = process.env.TEST_DATABASE_URL;
 const describeIf = connectionString ? describe : describe.skip;
 const account = "0x1111111111111111111111111111111111111111" as Address;
+const now = () => 0x6553f100 * 1000;
 const owners = ["0x2222222222222222222222222222222222222222", "0x3333333333333333333333333333333333333333"] as Address[];
 
 describeIf("wallet owner state against real PostgreSQL", () => {
@@ -37,17 +38,17 @@ describeIf("wallet owner state against real PostgreSQL", () => {
     } };
     // Two stores over one table stand for two replicas.
     const first = new PostgresWalletOwnerStateStore(pool), second = new PostgresWalletOwnerStateStore(pool);
-    expect(await observeWalletOwners({ account, chains: [10], rpc, store: first })).toMatchObject([{ chainId: 10, status: "consistent", owners, threshold: 1n }]);
+    expect(await observeWalletOwners({ account, chains: [10], rpc, store: first, now })).toMatchObject([{ chainId: 10, status: "consistent", owners, threshold: 1n }]);
     const row = (await pool.query("SELECT chain_id,block_number,block_hash,owners,threshold FROM rest_wallet_owner_states WHERE account=$1 AND chain_id=10", [account.toLowerCase()])).rows[0];
     expect(row).toMatchObject({ chain_id: "10", block_number: "100", block_hash: hashOf("op-a"), owners, threshold: "1" });
     expect(await second.get(account, 10)).toEqual({ owners, threshold: 1n,
       block: { chainId: 10, blockNumber: "100", blockHash: hashOf("op-a"), timestamp: String(0x6553f100), source: "onchain" } });
     // The same heads on another replica: nothing is read again.
-    await observeWalletOwners({ account, chains: [10], rpc, store: second });
+    await observeWalletOwners({ account, chains: [10], rpc, store: second, now });
     expect(reads).toEqual([8453, 10]);
     // A reorg replaces Optimism's head at the same height: that chain alone is read again and stored at the new hash.
     head[10] = "op-b";
-    await observeWalletOwners({ account, chains: [10], rpc, store: second });
+    await observeWalletOwners({ account, chains: [10], rpc, store: second, now });
     expect(reads).toEqual([8453, 10, 10]);
     expect((await first.get(account, 10))!.block.blockHash).toBe(hashOf("op-b"));
   });

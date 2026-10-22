@@ -137,7 +137,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     const listed = [{ chainId: WALLET_HOME_NETWORK.chainId, name: WALLET_HOME_NETWORK.name, state: "deployed" as WalletNetworkState, txHash: null as Hex | null },
       ...rows.sort((a, b) => a.chainId - b.chainId).map(row => ({ chainId: row.chainId, name: name(row.chainId), state: row.state, txHash: row.txHash }))];
     const deployed = listed.filter(network => network.state === "deployed").map(network => network.chainId);
-    const states = owners ? await observeWalletOwners({ account: getAddress(accountId.slice("eip155:8453:".length)), chains: deployed, rpc,
+    const states = owners ? await observeWalletOwners({ account: getAddress(accountId.slice("eip155:8453:".length)), chains: deployed, rpc, now,
       ...(options.ownerStates ? { store: options.ownerStates } : {}) }) : [];
     const networks = listed.map(network => {
       const state = states.find(item => item.chainId === network.chainId);
