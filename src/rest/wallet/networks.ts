@@ -12,7 +12,7 @@ import type { WalletCentralSession } from "./login.js";
 import type { WalletAuthorityContext } from "./authority.js";
 import { verifyWalletAssertion, WalletAssertionError, type WalletAssertion } from "./webauthn.js";
 import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from "./chains.js";
-import { observeWalletOwners, type WalletOwnerStateStore } from "./ownerState.js";
+import { observeWalletOwners, readWalletSafe, type WalletOwnerStateStore } from "./ownerState.js";
 
 /** The account on more chains. The Base creation call carries no chain id, so replaying the exact
  * factory call reaches the same CREATE2 address wherever the stack sits at the same addresses;
@@ -195,6 +195,14 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     catch { throw new RestError(409, "WALLET_NETWORKS_DESTINATION", `The account cannot be created on ${name(chainId)} right now.`); }
     if (!same(hexBytes(predicted).slice(-40), creation.address.slice(2))) throw new RestError(409, "WALLET_NETWORKS_DESTINATION", `${name(chainId)} would create a different account.`);
   }
+  /** A new network replays the creation call, so it starts with the original owners. That is only the account
+   * while Base still holds exactly those owners; after recovery or a device change it would revive old ones. */
+  async function assertOriginalOwners(creation: NonNullable<WalletEnrollment["creation"]>) {
+    const base = await readWalletSafe({ account: creation.address, chainId: SIGNA_HOME_CHAIN_ID, rpc, now })
+      .catch(() => { throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Base could not be read. Try again shortly."); });
+    if (base.threshold !== BigInt(creation.threshold) || base.owners.length !== creation.owners.length || creation.owners.some(owner => !base.owners.some(item => same(item, owner))))
+      throw new RestError(409, "WALLET_NETWORKS_OWNERS_CHANGED", "This account's owners changed, so a new network would start with the old ones. Adding networks is paused for this account.");
+  }
   return {
     async list(session: WalletCentralSession) { await expireQuotes(session.accountId); return view(session.accountId); },
     /** Quotes one Relayr bundle for the chosen chains of one family; chains already holding the account are recorded, not quoted. */
@@ -222,6 +230,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
         else remaining.push(chainId);
       }
       if (!remaining.length) return { bundle: null, challenge: null, view: await view(session.accountId) };
+      await assertOriginalOwners(creation);
       const entries = walletNetworkEntries(creation, remaining);
       const { quote, payment } = await relayQuote(entries, networks[0]!.paymentChainId, family);
       const issuedAtMs = now(), expiresAtMs = Math.min(issuedAtMs + approvalWindowMs, Number(payment.deadline) * 1000 - 60_000);
@@ -257,6 +266,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
         throw error;
       }
       if (!options.payer) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network deployment funding is not configured.");
+      await assertOriginalOwners((await enrollmentOf(session)).creation!);
       return store.withPayer(bundle.payment.chainId, options.payer.address, async funding => {
         // A previous request may have completed while this one verified the passkey.
         const bundle = await funding.getBundle(session.accountId, bundleId);
