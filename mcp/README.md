@@ -25,7 +25,7 @@ In the integrated server, `/mcp/healthz` reports MCP liveness and `/mcp/readyz` 
 
 ## Run the package separately
 
-Node **22.16 or newer** is required; CI and the container use Node 22.23.1.
+Node **22.16 or newer** is required; CI and the container use Node 22.23.4.
 
 ```sh
 npm ci --ignore-scripts
