@@ -104,6 +104,8 @@ function accept(result: { view: WalletRecoveryView | null; csrfToken?: string })
   if (!value || value.phase !== view?.phase) { rotation = null; pollCount = 0; }
   view = value; known = true;
   const left = unfinished(value);
+  // A repair review for a network that no longer needs one is stale; the next click reviews again.
+  if (rotation && !rotation.review && rotation.chains.some(item => !left.some(chain => chain.chainId === item.review.chainId))) rotation = null;
   if (value?.phase === 'ready_to_sign_in' && !left.length) {
     secret = null; kit = null; words().value = ''; el<HTMLInputElement>('recovery-file').value = ''; sessionStorage.removeItem('center:recovery:browser:' + value.id);
   }
@@ -154,6 +156,8 @@ async function send(path: string, body: unknown, proof = csrf) {
     words().value = ''; el<HTMLInputElement>('recovery-file').value = '';
   }
   accept(result); pending = null;
+  // An approval, first sent or replayed after a lost reply, starts a fresh round of status checks.
+  if (path === 'rotation/approve') { rotation = null; pollCount = 0; }
   if (path === 'restart') message('Expired recovery closed. Start again to create a new replacement passkey.');
 }
 async function observe() {
@@ -271,7 +275,7 @@ async function advance() {
       const checked = documents(rotation), backupSignature = checked.base ? await signBackup(checked.base, view.recoveryOwner) : null;
       const chainSignatures = [];
       for (const item of checked.chains) chainSignatures.push({ chainId: item.chainId!, signature: await signBackup(item.document, view.recoveryOwner) });
-      await send('rotation/approve', backupSignature ? { backupSignature, chainSignatures } : { chainSignatures }); rotation = null; pollCount = 0;
+      await send('rotation/approve', backupSignature ? { backupSignature, chainSignatures } : { chainSignatures });
     }
   } else if (view.phase === 'awaiting_activation') {
     // The replacement passkey and the recovery owner already signed this recovery; Center binds
