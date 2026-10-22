@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mnemonicToAccount } from 'viem/accounts';
 import { createWalletRecoverySecret, readChainSafe, readHomeOwners, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
-import { encodeFunctionData, getAddress, hashTypedData, parseAbi, recoverAddress, type Address } from 'viem';
-import { walletOwnerChangeSafeTx, walletOwnerPlan } from '../src/rest/web/walletRecoveryReview.js';
+import { concatHex, encodeAbiParameters, encodeFunctionData, getAddress, getContractAddress, hashTypedData, keccak256, parseAbi, recoverAddress, zeroAddress, type Address, type Hex } from 'viem';
+import { SAFE_CREATION_ABI, SAFE_SETUP_ABI } from '../src/rest/smartAccounts/creation.js';
+import { SAFE_141_MULTI_SEND, SAFE_141_PROXY_CREATION_CODE } from '../src/rest/smartAccounts/safeCode.js';
+import { walletOwnerUpdateSafeTx } from '../src/rest/web/walletOwnerUpdate.js';
+import { walletOwnerPlan } from '../src/rest/web/walletRecoveryReview.js';
 
 // Public BIP39 test entropy; never used for real funds.
 const phrase = 'abandon '.repeat(23) + 'art';
@@ -49,11 +52,17 @@ describe('a network owner update signed with the backup', () => {
     ({ chainId: 10, walletAddress: wallet, recoveryOwner: account.address, from: [p0, account.address], owners, safeNonce: '4', steps });
   // Optimism as its public RPC reports it: the original owners, at nonce 4.
   const destination = { deployed: true, owners: [p0, account.address], threshold: 1n, nonce: 4n };
-  it('signs each owner call for its chain at consecutive nonces once the calls lead to the owners shown', async () => {
+  it('signs one Safe transaction at the network nonce that runs every owner call in order', async () => {
     const value = update(), signatures = await signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10], homeOwners: [d1, p1, account.address], destination });
-    expect(signatures).toHaveLength(2);
-    for (const [index, signature] of signatures.entries())
-      expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(wallet, value.steps[index]!, String(4 + index), 10)), signature })).toBe(account.address);
+    // Two calls go as one MultiSend delegatecall at nonce 4; nothing is signed for nonce 5.
+    expect(value.steps).toHaveLength(2);
+    expect(signatures).toHaveLength(1);
+    const document = walletOwnerUpdateSafeTx(wallet, value.steps, '4', 10);
+    expect(document.message).toMatchObject({ to: SAFE_141_MULTI_SEND, operation: 1, nonce: 4n });
+    expect(await recoverAddress({ hash: hashTypedData(document), signature: signatures[0]! })).toBe(account.address);
+    // One call needs no MultiSend: it is the Safe calling itself.
+    const single = walletOwnerUpdateSafeTx(wallet, [value.steps[0]!], '4', 10);
+    expect(single.message).toMatchObject({ to: wallet, operation: 0, data: value.steps[0] });
   });
   it('refuses calls that differ from what the page can check', async () => {
     const sign = (value: unknown, chainIds = [10], walletAddress: string = wallet) => signWalletOwnerUpdate(phrase, value, { walletAddress, chainIds,
@@ -73,11 +82,11 @@ describe('a network owner update signed with the backup', () => {
     await expect(sign([d1, p1, attacker, account.address])).rejects.toThrow();
     await expect(sign([attacker, p1, account.address])).rejects.toThrow();
     await expect(sign([p1, account.address])).rejects.toThrow();
-    expect(await sign([p1, account.address, d1])).toHaveLength(2);
+    expect(await sign([p1, account.address, d1])).toHaveLength(1);
   });
-  it('refuses a starting point the network does not hold, so no signature waits for a later nonce', async () => {
-    const owners = [p0, account.address], sign = (value: ReturnType<typeof update>, there: typeof destination = destination) =>
-      signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10], homeOwners: owners, destination: there });
+  it('refuses a starting point a deployed network does not hold, so no signature waits for a later nonce', async () => {
+    const owners = [p0, account.address], sign = (value: ReturnType<typeof update>) =>
+      signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10], homeOwners: owners, destination });
     // The server claims only the backup is there, at a nonce ahead of the network's: signing would let it restore p0 later.
     const ahead = { ...update(walletOwnerPlan([account.address], owners).steps, owners), from: [account.address], safeNonce: '5' };
     await expect(sign(ahead)).rejects.toThrow();
@@ -88,10 +97,31 @@ describe('a network owner update signed with the backup', () => {
     await expect(signReal({ ...destination, nonce: 5n })).rejects.toThrow();
     await expect(signReal({ ...destination, owners: [account.address, p0] })).rejects.toThrow();
     await expect(signReal({ ...destination, threshold: 2n })).rejects.toThrow();
-    // A network not deployed yet starts from its creation, at nonce 0.
-    const fresh = { deployed: false, owners: [], threshold: 0n, nonce: 0n };
-    await expect(signReal(fresh)).rejects.toThrow();
-    expect(await signWalletOwnerUpdate(phrase, { ...real, safeNonce: '0' }, { walletAddress: wallet, chainIds: [10], homeOwners: [d1, account.address], destination: fresh })).toHaveLength(1);
+  });
+  it('starts a network not deployed yet from the owners its own creation sets, proved by the account address', async () => {
+    // The account's real creation: the original passkey and the backup, threshold one, behind this exact address.
+    const singleton = getAddress(`0x${'41'.repeat(20)}`), factory = getAddress(`0x${'4f'.repeat(20)}`), saltNonce = 7n;
+    const initializer = encodeFunctionData({ abi: SAFE_SETUP_ABI, functionName: 'setup', args: [[p0, account.address], 1n, zeroAddress, '0x', zeroAddress, zeroAddress, 0n, zeroAddress] });
+    const creation = { to: factory, data: encodeFunctionData({ abi: SAFE_CREATION_ABI, functionName: 'createProxyWithNonce', args: [singleton, initializer, saltNonce] }) };
+    const safe = getContractAddress({ from: factory, opcode: 'CREATE2', salt: keccak256(concatHex([keccak256(initializer), encodeAbiParameters([{ type: 'uint256' }], [saltNonce])])),
+      bytecode: concatHex([SAFE_141_PROXY_CREATION_CODE, encodeAbiParameters([{ type: 'address' }], [singleton])]) });
+    const fresh = { deployed: false, owners: [], threshold: 0n, nonce: 0n }, target = [d1, account.address];
+    const value = (from: Address[], extra: object = {}) => ({ chainId: 10, walletAddress: safe, recoveryOwner: account.address, from, owners: target, safeNonce: '0',
+      steps: walletOwnerPlan(from, target).steps, creation, ...extra });
+    const sign = (input: unknown, initializerHash?: Hex) => signWalletOwnerUpdate(phrase, input, { walletAddress: safe, chainIds: [10], homeOwners: target, destination: fresh,
+      ...(initializerHash ? { initializerHash } : {}) });
+    expect(await sign(value([p0, account.address]))).toHaveLength(1);
+    expect(await sign(value([p0, account.address]), keccak256(initializer))).toHaveLength(1);
+    // The server says the network starts with the backup alone: the revoked passkey would stay an owner there.
+    await expect(sign(value([account.address]))).rejects.toThrow();
+    await expect(sign(value([account.address, p0]))).rejects.toThrow();
+    await expect(sign(value([p0, account.address], { safeNonce: '1' }))).rejects.toThrow();
+    await expect(sign(value([p0, account.address], { creation: undefined }))).rejects.toThrow();
+    await expect(sign(value([p0, account.address]), `0x${'22'.repeat(32)}`)).rejects.toThrow();
+    // A creation that leads to another address proves nothing about this account.
+    const other = encodeFunctionData({ abi: SAFE_CREATION_ABI, functionName: 'createProxyWithNonce', args: [singleton,
+      encodeFunctionData({ abi: SAFE_SETUP_ABI, functionName: 'setup', args: [[account.address], 1n, zeroAddress, '0x', zeroAddress, zeroAddress, 0n, zeroAddress] }), saltNonce] });
+    await expect(sign(value([account.address], { creation: { to: factory, data: other } }))).rejects.toThrow();
   });
 });
 

@@ -23,7 +23,7 @@ type NetworksView = { networks: { chainId: number; name: string; state: string; 
 const networksList = element("wallet-networks"), networksAdd = element<HTMLButtonElement>("wallet-networks-add"), networksForm = element<HTMLFormElement>("wallet-networks-form");
 let networksView: NetworksView | null = null, networksQuote: { bundleId: string; challenge: string } | null = null, networksTimer: ReturnType<typeof setInterval> | null = null, networksOpen = false, networksPolls = 0;
 /** The open form updates out-of-date networks instead of adding new ones. The backup file is held only while the form is open. */
-let networksUpdating = false, networksBackupWords: string | null = null, networksBackupNeeded = false;
+let networksUpdating = false, networksBackupWords: string | null = null, networksBackupNeeded = false, networksBackupInitializer: `0x${string}` | null = null;
 const networksUpdate = element<HTMLButtonElement>("wallet-networks-update");
 const destination = element("wallet-destination");
 // Adding a device: begin here, show the other device its link, approve with this passkey once it has proved its own.
@@ -439,7 +439,7 @@ function openNetworks(updating = false) {
   networksQuote = null; networksOpen = true; networksUpdating = updating; render();
 }
 function closeNetworks() {
-  networksOpen = networksUpdating = networksBackupNeeded = false; networksQuote = null; networksBackupWords = null;
+  networksOpen = networksUpdating = networksBackupNeeded = false; networksQuote = null; networksBackupWords = networksBackupInitializer = null;
   element<HTMLInputElement>("wallet-networks-words").value = ""; element<HTMLInputElement>("wallet-networks-file").value = "";
 }
 /** The backup's words, from the file loaded in this tab or the password field, read when needed and not kept in the field. */
@@ -468,7 +468,8 @@ async function signNetworkOwners(plan: Json, words: string | null, chainIds: num
     // The network's own owners and nonce, read here too: a signature never waits for a nonce the network has not reached.
     try { destination = await kit.readChainSafe(session!.walletAddress, chainId); }
     catch { setStatus("ready", `Couldn't read this account's owners on ${name}. Try again.`); return null; }
-    const expected = { walletAddress: session!.walletAddress, chainIds, homeOwners, destination }, hexChain = `0x${chainId.toString(16)}`;
+    const expected = { walletAddress: session!.walletAddress, chainIds, homeOwners, destination,
+      ...(words && words === networksBackupWords && networksBackupInitializer ? { initializerHash: networksBackupInitializer } : {}) }, hexChain = `0x${chainId.toString(16)}`;
     if (wallet) {
       let checked: ReturnType<typeof kit.walletOwnerUpdateDocuments>;
       try { checked = kit.walletOwnerUpdateDocuments(chain, expected); } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); return null; }
@@ -569,13 +570,13 @@ if (networksAdd && networksForm) {
     try {
       const kit = (await loadRecoveryKit()).readWalletRecoveryKit(await file.text());
       if (kit.walletAddress.toLowerCase() !== session?.walletAddress.toLowerCase()) throw new Error();
-      networksBackupWords = kit.mnemonic; setStatus("ready", "Backup file loaded in this tab.");
+      networksBackupWords = kit.mnemonic; networksBackupInitializer = kit.initializerHash; setStatus("ready", "Backup file loaded in this tab.");
     } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); }
   }); });
   networksForm.addEventListener("submit", event => { event.preventDefault(); void run(networksDeploy); });
   for (const radio of networksForm.querySelectorAll<HTMLInputElement>("input[name=family]")) radio.addEventListener("change", () => { networksQuote = null; renderChoices(); render(); });
   element("wallet-networks-cancel").addEventListener("click", () => { closeNetworks(); render(); });
-  window.addEventListener("pagehide", () => { networksBackupWords = null; });
+  window.addEventListener("pagehide", () => { networksBackupWords = networksBackupInitializer = null; });
 }
 // The balance: ETH and USDC on every network the address can hold them, a mainnet dollar total that opens to
 // the per-network breakdown. A network that didn't answer is named, never counted as zero.

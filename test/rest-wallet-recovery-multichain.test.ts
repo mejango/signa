@@ -26,7 +26,9 @@ import { createWalletDeviceChains } from "../src/rest/wallet/deviceChains.js";
 import { approveWalletOwnerChains, createWalletOwnerChains, recordWalletOwnerChain } from "../src/rest/wallet/ownerChains.js";
 import { PostgresWalletEnrollmentStore } from "../src/rest/wallet/enrollmentPostgres.js";
 import type { WalletCentralSession } from "../src/rest/wallet/login.js";
-import { walletOwnerChangeSafeTx } from "../src/rest/web/walletRecoveryReview.js";
+import { walletOwnerUpdateSafeTx } from "../src/rest/web/walletOwnerUpdate.js";
+import { SAFE_141_MULTI_SEND } from "../src/rest/smartAccounts/safeCode.js";
+import { SAFE_141_MULTI_SEND_RUNTIME } from "./fixtures/safe-multi-send.js";
 import { lastFixturePrimary } from "./fixtures/wallet-authority-context.js";
 
 const connectionString = process.env.TEST_DATABASE_URL;
@@ -107,6 +109,7 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
       nodes.set(chainId, { url: `http://127.0.0.1:${port}`, child: spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", String(chainId), "--silent"]) });
       for (let i = 0; i < 200; i++) { try { await call(chainId, "eth_chainId"); break; } catch { await new Promise(done => setTimeout(done, 30)); } }
       await call(chainId, "anvil_setCode", [singleton.address, singleton.deployedBytecode]);
+      await call(chainId, "anvil_setCode", [SAFE_141_MULTI_SEND, SAFE_141_MULTI_SEND_RUNTIME]);
     }
     await call(8453, "anvil_setCode", [RELAYR_PAYMENT_ADDRESS, RELAYR_PAYMENT_RUNTIME]);
   }, 60_000);
@@ -423,10 +426,10 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(update).toMatchObject({ chainId: 42161, safeNonce: "0", from: creation.owners.map(owner => getAddress(owner)), owners: [candidate.signerAddress, getAddress(candidate.intent.recoveryOwner)] });
     expect(update.steps).toHaveLength(1);
     // The backup key signs in software; the passkey is asked once, for the deployment it already approves.
-    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(index), 42161))));
+    const signatures = [await enrollmentBackupAccount.signTypedData(walletOwnerUpdateSafeTx(safe, update.steps, update.safeNonce, 42161))];
     const assertion = signGet({ ...key, ...policy, challenge: quoted.challenge! });
     await expect(networks.approve(session, { bundleId: quoted.bundle!.id, assertion })).rejects.toMatchObject({ code: "WALLET_NETWORKS_INVALID" });
-    const wrong = await privateKeyToAccount(`0x${"77".repeat(32)}`).signTypedData(walletOwnerChangeSafeTx(safe, update.steps[0]!, "0", 42161));
+    const wrong = await privateKeyToAccount(`0x${"77".repeat(32)}`).signTypedData(walletOwnerUpdateSafeTx(safe, update.steps, update.safeNonce, 42161));
     await expect(networks.approve(session, { bundleId: quoted.bundle!.id, assertion, owners: { changeId: quoted.owners!.changeId, signatures: [{ chainId: 42161, signatures: [wrong] }] } }))
       .rejects.toMatchObject({ code: "WALLET_NETWORKS_BACKUP_INVALID" });
     const approved = await networks.approve(session, { bundleId: quoted.bundle!.id, assertion, owners: { changeId: quoted.owners!.changeId, signatures: [{ chainId: 42161, signatures }] } });
@@ -454,7 +457,7 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     };
     const { safe, key, networks, session } = await recoveredOnBase(true, store);
     const quoted = await networks.quote(session, { chainIds: [42161] }), update = quoted.owners!.chains[0]!;
-    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(index), 42161))));
+    const signatures = [await enrollmentBackupAccount.signTypedData(walletOwnerUpdateSafeTx(safe, update.steps, update.safeNonce, 42161))];
     await expect(networks.approve(session, { bundleId: quoted.bundle!.id, assertion: signGet({ ...key, ...policy, challenge: quoted.challenge! }),
       owners: { changeId: quoted.owners!.changeId, signatures: [{ chainId: 42161, signatures }] } })).rejects.toMatchObject({ code: "WALLET_NETWORKS_STATE" });
     expect((await pool.query("SELECT state FROM rest_wallet_network_bundles WHERE id=$1", [quoted.bundle!.id])).rows[0].state).toBe("quoted");
@@ -465,7 +468,7 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     await deploySafe(10, safe, [candidate.intent.priorSigner, candidate.intent.recoveryOwner]);
     await deployedRows(accountId, [10], Date.now());
     const quoted = await networks.quote(session, { chainIds: [10] }), update = quoted.owners!.chains[0]!;
-    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(BigInt(update.safeNonce) + BigInt(index)), 10))));
+    const signatures = [await enrollmentBackupAccount.signTypedData(walletOwnerUpdateSafeTx(safe, update.steps, update.safeNonce, 10))];
     await networks.approveOwners(session, { changeId: quoted.owners!.changeId, signatures: [{ chainId: 10, signatures }] });
     // Base gains an owner the update never brings: its additions still show on Base, but its owner set is no longer Base's.
     const stray = getAddress(`0x${"5a".repeat(20)}`);
@@ -477,9 +480,9 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(provider.quotes).toBe(0);
   }, 60_000);
 
-  it("a network repaired to Base's owners runs its Safe transactions in nonce order, one bundle each", async () => {
+  it("a network repaired to Base's owners runs all its owner calls as one Safe transaction at the network's nonce", async () => {
     const { candidate, safe, accountId, provider, networks, owners, session } = await recoveredOnBase(false);
-    // Optimism holds the old passkey and an owner the account never recorded: two Safe transactions bring it to Base's owners.
+    // Optimism holds the old passkey and an owner the account never recorded: two owner calls bring it to Base's owners.
     const stray = getAddress(`0x${"5a".repeat(20)}`);
     await deploySafe(10, safe, [candidate.intent.priorSigner, stray, candidate.intent.recoveryOwner]);
     await deployedRows(accountId, [10], Date.now());
@@ -492,15 +495,15 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(quoted.bundle).toBeNull();
     const update = quoted.owners!.chains[0]!;
     expect(update.steps).toHaveLength(2);
-    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(BigInt(update.safeNonce) + BigInt(index)), 10))));
+    const signatures = [await enrollmentBackupAccount.signTypedData(walletOwnerUpdateSafeTx(safe, update.steps, update.safeNonce, 10))];
     const view = await networks.approveOwners(session, { changeId: quoted.owners!.changeId, signatures: [{ chainId: 10, signatures }] });
     expect(view.networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "updating"]);
     await expect(networks.quote(session, { chainIds: [10] })).rejects.toMatchObject({ code: "WALLET_NETWORKS_UPDATING" });
     for (let pass = 0; pass < 8 && (await owners.status(quoted.owners!.changeId)).some(chain => chain.state !== "updated"); pass++) await owners.tick();
     expect(await owners.status(quoted.owners!.changeId)).toEqual([{ chainId: 10, name: "Optimism", state: "updated" }]);
-    // Each bundle carried the next Safe transaction only, so their nonces never raced.
+    // One bundle, one Safe transaction: the MultiSend ran both calls at the nonce the backup signed, and no later nonce was signed.
     const bundles = [...provider.bundles.values()].map(bundle => bundle.entries.filter(entry => entry.target.toLowerCase() === safe.toLowerCase()).length);
-    expect(bundles).toEqual([1, 1]);
+    expect(bundles).toEqual([1]);
     expect((await observeWalletOwners({ account: safe, chains: [8453, 10], rpc })).map(state => state.status)).toEqual(["consistent", "consistent"]);
     expect(await canSign(10, safe, stray)).toBe(false);
   }, 60_000);

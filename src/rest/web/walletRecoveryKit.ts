@@ -1,5 +1,7 @@
 import { validateMnemonic } from '@scure/bip39';
-import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'viem';
+import { concatHex, decodeAbiParameters, getAddress, getContractAddress, hashTypedData, isAddress, keccak256, type Address, type Hex } from 'viem';
+import { SAFE_141_PROXY_CREATION_CODE } from '../smartAccounts/safeCode.js';
+import { walletOwnerUpdateSafeTx } from './walletOwnerUpdate.js';
 import { walletOwnerChangeSafeTx, walletOwnerPlan } from './walletRecoveryReview.js';
 import { signaChains } from '../wallet/chains.js';
 import { wordlist as english } from '@scure/bip39/wordlists/english';
@@ -105,8 +107,11 @@ export async function readHomeOwners(walletAddress: string): Promise<Address[]> 
  * read from Base itself (`readHomeOwners`). On a deployed network, `from`, its order and the Safe nonce must be exactly what
  * this page read there (`readChainSafe`), so no signature waits for a later nonce; an undeployed one starts at nonce 0.
  * Returns the backup's address and each call's SafeTx, in order. */
-export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[]; destination: WalletChainSafe }) {
-  const update = input as { chainId: number; walletAddress: Address; recoveryOwner: Address; from: Address[]; owners: Address[]; safeNonce: string; steps: Hex[] };
+export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[]; destination: WalletChainSafe;
+  /** The backup file's record of the account's creation, when the backup came from the file. */
+  initializerHash?: Hex }) {
+  const update = input as { chainId: number; walletAddress: Address; recoveryOwner: Address; from: Address[]; owners: Address[]; safeNonce: string; steps: Hex[];
+    creation?: { to: Address; data: Hex } };
   const owners = (value: unknown) => { if (!Array.isArray(value) || !value.length || value.length > 16) invalid(); for (const item of value) address(item); return (value as Address[]).map(item => getAddress(item)); };
   if (!update || typeof update !== 'object' || !expected.chainIds.includes(update.chainId) || !Array.isArray(update.steps) || !update.steps.length) invalid();
   address(update.walletAddress); address(update.recoveryOwner);
@@ -115,11 +120,24 @@ export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAdd
   if (new Set(target).size !== target.length || !from.includes(backup) || !target.includes(backup)
     || target.length !== expected.homeOwners.length || target.some(owner => !expected.homeOwners.some(item => getAddress(item) === owner))) invalid();
   const there = expected.destination;
-  if (there.deployed ? there.threshold !== 1n || BigInt(update.safeNonce) !== there.nonce || from.length !== there.owners.length
-    || from.some((owner, index) => owner !== there.owners[index]) : update.safeNonce !== '0') invalid();
+  const start = there.deployed ? { owners: there.owners, threshold: there.threshold, nonce: there.nonce } : { ...creationOwners(update.creation, update.walletAddress, expected.initializerHash), nonce: 0n };
+  if (start.threshold !== 1n || BigInt(update.safeNonce) !== start.nonce || from.length !== start.owners.length || from.some((owner, index) => owner !== start.owners[index])) invalid();
   const plan = walletOwnerPlan(from, target);
   if (plan.steps.length !== update.steps.length || plan.steps.some((step, index) => step !== update.steps[index])) invalid();
-  return { recoveryOwner: backup, documents: plan.steps.map((step, index) => walletOwnerChangeSafeTx(update.walletAddress, step, String(BigInt(update.safeNonce) + BigInt(index)), update.chainId)) };
+  return { recoveryOwner: backup, documents: [walletOwnerUpdateSafeTx(getAddress(update.walletAddress), plan.steps, update.safeNonce, update.chainId)] };
+}
+/** The owners a network not deployed yet starts with: those its replayed creation call sets up. The call is trusted only
+ * because it creates exactly this account's address (CREATE2 over the Safe 1.4.1 proxy, its singleton, initializer and
+ * salt), and, given the backup file, because its initializer is the one the file recorded. */
+function creationOwners(creation: { to: Address; data: Hex } | undefined, walletAddress: Address, initializerHash?: Hex) {
+  if (!creation || typeof creation !== 'object' || typeof creation.data !== 'string' || !creation.data.startsWith('0x1688f0b9')) invalid(); // createProxyWithNonce
+  address(creation.to);
+  const [singleton, initializer, saltNonce] = decodeAbiParameters([{ type: 'address' }, { type: 'bytes' }, { type: 'uint256' }], `0x${creation.data.slice(10)}`);
+  const salt = keccak256(concatHex([keccak256(initializer), `0x${saltNonce.toString(16).padStart(64, '0')}`]));
+  const created = getContractAddress({ from: getAddress(creation.to), opcode: 'CREATE2', salt, bytecode: concatHex([SAFE_141_PROXY_CREATION_CODE, `0x${singleton.slice(2).padStart(64, '0')}`]) });
+  if (created !== getAddress(walletAddress) || (initializerHash && keccak256(initializer) !== initializerHash.toLowerCase()) || !initializer.startsWith('0xb63e800d')) invalid(); // setup
+  const [owners, threshold] = decodeAbiParameters([{ type: 'address[]' }, { type: 'uint256' }], `0x${initializer.slice(10)}`);
+  return { owners: owners.map(owner => getAddress(owner)), threshold };
 }
 /** The backup file or password signs one checked network update (`walletOwnerUpdateDocuments`). */
 export async function signWalletOwnerUpdate(mnemonic: string, input: unknown, expected: Parameters<typeof walletOwnerUpdateDocuments>[1]): Promise<Hex[]> {

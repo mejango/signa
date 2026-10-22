@@ -568,6 +568,60 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(errors).toEqual([]);
   });
 
+  it("signs nothing and sends nothing when a chain cannot be read or the signup wallet is not ready", async () => {
+    const sentinel = "0x0000000000000000000000000000000000000001";
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
+    // Each chain's public RPC answers as the test sets it: a real answer, a refused request, or a page that is not JSON.
+    const modes: Record<string, "ok" | "abort" | "html"> = { base: "ok", optimism: "ok" };
+    const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0");
+    for (const [name, url, chainId, owners, nonce] of [["base", "https://mainnet.base.org", 8453, [newPasskey, backupOwner], 9n], ["optimism", "https://mainnet.optimism.io", 10, [oldPasskey, backupOwner], 3n]] as const) {
+      const calls: Record<string, string> = { "0xa0e67e2b": `0x${word(32n)}${word(2n)}${owners.map(owner => word(owner)).join("")}`, "0xe75235b8": `0x${word(1n)}`, "0xaffed0e0": `0x${word(nonce)}` };
+      await page.route(`${url}/**`, async route => {
+        if (modes[name] === "abort") return route.abort("connectionrefused");
+        if (modes[name] === "html") return route.fulfill({ status: 200, contentType: "text/html", headers: { "access-control-allow-origin": "*" }, body: "<html>busy</html>" });
+        const result = (request: { method: string; params: unknown[] }) => request.method === "eth_chainId" ? `0x${chainId.toString(16)}`
+          : request.method === "eth_blockNumber" ? "0x10" : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
+        await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+          body: JSON.stringify((JSON.parse(route.request().postData() ?? "[]") as { id: number; method: string; params: unknown[] }[]).map(request => ({ jsonrpc: "2.0", id: request.id, result: result(request) }))) });
+      });
+    }
+    // The signup wallet: which account it offers, whether it follows a network switch, and whether its holder declines.
+    const backup = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }), other = mnemonicToAccount(generateMnemonic(english, 256)).address;
+    const wallet = { account: other as string, switches: false, declines: false, chain: "0x2105" };
+    await page.exposeFunction("backupWallet", async (method: string, params: unknown[]) => {
+      if (method === "eth_requestAccounts") return [wallet.account];
+      if (method === "wallet_switchEthereumChain") { if (wallet.switches) wallet.chain = (params[0] as { chainId: string }).chainId; return null; }
+      if (method === "eth_chainId") return wallet.chain;
+      if (wallet.declines) return { declined: true };
+      const { types: { EIP712Domain: _domain, ...types }, ...document } = JSON.parse(params[1] as string);
+      return backup.signTypedData({ ...document, types, message: { ...document.message, nonce: BigInt(document.message.nonce), value: 0n, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n } });
+    });
+    await page.addInitScript(() => { (window as unknown as { ethereum: unknown }).ethereum = { request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+      const answer = await (window as unknown as { backupWallet(method: string, params: unknown[]): Promise<unknown> }).backupWallet(method, params ?? []);
+      if (answer && typeof answer === "object" && "declined" in answer) throw Object.assign(new Error("User rejected the request."), { code: 4001 });
+      return answer;
+    } }; });
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-networks-update").click();
+    const attempt = async (message: string) => {
+      await page.locator("#wallet-networks-deploy").click();
+      await expect.poll(() => page.locator("#wallet-status").textContent()).toContain(message);
+      expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(0);
+    };
+    modes.base = "abort"; await attempt("Couldn't read this account's owners on Base. Try again.");
+    modes.base = "ok"; modes.optimism = "html"; await attempt("Couldn't read this account's owners on Optimism. Try again.");
+    modes.optimism = "ok"; await attempt("Select the wallet you chose at signup, then try again.");
+    wallet.account = backup.address; await attempt("Switch your wallet to Optimism, then try again.");
+    wallet.switches = true; wallet.declines = true; await attempt("Nothing was signed.");
+    // Once everything is in place, the same click signs and sends the update.
+    wallet.declines = false;
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
+    expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
   it("drops one account's network labels when another account signs in and its read fails", async () => {
     onramp = true;
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");

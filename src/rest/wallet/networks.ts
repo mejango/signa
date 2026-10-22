@@ -9,7 +9,8 @@ import type { preparePasskeySafe7579Creation } from "../smartAccounts/creation.j
 import type { SmartAccountManifest } from "../smartAccounts/types.js";
 import { predictPasskeySignerAddress } from "../smartAccounts/passkeyCreation.js";
 import { canonicalEoaSignature } from "../smartAccounts/accountExecution.js";
-import { walletOwnerChangeSafeTx, walletOwnerPlan } from "../web/walletRecoveryReview.js";
+import { walletOwnerPlan } from "../web/walletRecoveryReview.js";
+import { walletOwnerUpdateSafeTx } from "../web/walletOwnerUpdate.js";
 import type { WalletEnrollment } from "./enrollment.js";
 import type { WalletCentralSession } from "./login.js";
 import type { WalletAuthorityContext } from "./authority.js";
@@ -119,6 +120,8 @@ export interface WalletNetworksStore {
 export interface WalletNetworkOwners {
   version: "center-wallet-network-owners-v1"; chainId: number; walletAddress: Address; recoveryOwner: Address;
   from: Address[]; owners: Address[]; safeNonce: string; steps: Hex[]; createSigners: WalletOwnerCall[];
+  /** For a network not deployed yet: the creation call it replays, from which the page proves the owners it starts with. */
+  creation?: { to: Address; data: Hex };
 }
 export interface WalletNetworksDependencies {
   enrollments: { get(id: string): Promise<WalletEnrollment | null> };
@@ -237,7 +240,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
    * adds is one the account has recorded, and its signer is created there first. */
   async function ownerPlan(session: WalletCentralSession, enrollment: WalletEnrollment, home: Awaited<ReturnType<typeof homeOwners>>, deployed: number[], fresh: number[]) {
     const creation = enrollment.creation!, recoveryOwner = getAddress(enrollment.intent.recoveryOwner), account = getAddress(creation.address);
-    const sources = [...fresh.map(chainId => ({ chainId, owners: creation.owners.map(owner => getAddress(owner)), threshold: BigInt(creation.threshold), nonce: 0n })),
+    const sources = [...fresh.map(chainId => ({ chainId, owners: creation.owners.map(owner => getAddress(owner)), threshold: BigInt(creation.threshold), nonce: 0n, fresh: true })),
       ...await Promise.all(deployed.map(async chainId => ({ chainId, ...await readWalletSafe({ account, chainId, rpc, now })
         .catch(() => { throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", `${name(chainId)} could not be read. Try again shortly.`); }) })))];
     const differ = sources.filter(source => source.threshold !== 1n || home.threshold !== 1n || !sameSet(source.owners, home.owners));
@@ -255,12 +258,13 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
       const plan = walletOwnerPlan(source.owners, home.owners);
       const review: WalletNetworkOwners = { version: "center-wallet-network-owners-v1", chainId: source.chainId, walletAddress: account, recoveryOwner,
         from: source.owners, owners: home.owners, safeNonce: source.nonce.toString(), steps: plan.steps,
+        ...("fresh" in source ? { creation: { to: getAddress(creation.transaction.to), data: creation.transaction.data } } : {}),
         createSigners: passkeys.filter(passkey => !includes(source.owners, passkey.signer) && includes(home.owners, passkey.signer)).map(passkey => ({
           to: getAddress(profile.signerFactory.address), value: "0" as const, data: encodeFunctionData({ abi: factoryAbi, functionName: "createSigner",
             args: [BigInt(passkey.publicKey.x), BigInt(passkey.publicKey.y), BigInt(profile.p256Verifier.address)] }) })) };
       await store.recordOwnerChain({ changeId, kind: "network", accountId: session.accountId, chainId: source.chainId, state: "review", review, reason: null, now: current,
         target: { safeNonce: review.safeNonce, requires: source.owners, add: home.owners.filter(owner => !includes(source.owners, owner)),
-          remove: source.owners.filter(owner => !includes(home.owners, owner)), path: plan.path } });
+          remove: source.owners.filter(owner => !includes(home.owners, owner)), path: [source.owners, home.owners] } });
       chains.push(review);
     }
     return { changeId, recoveryOwner, chains };
@@ -280,17 +284,15 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     if (signatures.length !== open.length) backupInvalid();
     const approvals = await Promise.all(open.map(async row => {
       const review = row.review!, item = signatures.find(entry => (entry as { chainId?: unknown })?.chainId === review.chainId) as { chainId: number; signatures?: unknown } | undefined;
-      if (!item || Object.keys(item).sort().join(",") !== "chainId,signatures" || !Array.isArray(item.signatures) || item.signatures.length !== review.steps.length
+      if (!item || Object.keys(item).sort().join(",") !== "chainId,signatures" || !Array.isArray(item.signatures) || item.signatures.length !== 1
         || !same(review.recoveryOwner, recoveryOwner)) backupInvalid();
-      const calls: WalletOwnerCall[] = [...review.createSigners];
-      for (const [index, step] of review.steps.entries()) {
-        let signature: Hex;
-        try { signature = canonicalEoaSignature(item.signatures[index] as Hex); } catch { return backupInvalid(); }
-        const hash = hashTypedData(walletOwnerChangeSafeTx(review.walletAddress, step, (BigInt(review.safeNonce) + BigInt(index)).toString(), review.chainId));
-        if (!same(await recoverAddress({ hash, signature }).catch(() => zeroAddress), recoveryOwner)) backupInvalid();
-        calls.push({ to: review.walletAddress, value: "0", data: encodeFunctionData({ abi: execAbi, functionName: "execTransaction",
-          args: [review.walletAddress, 0n, step, 0, 0n, 0n, 0n, zeroAddress, zeroAddress, signature] }) });
-      }
+      // One Safe transaction at the network's nonce carries every owner call (`walletOwnerUpdateSafeTx`).
+      const safeTx = walletOwnerUpdateSafeTx(review.walletAddress, review.steps, review.safeNonce, review.chainId);
+      let signature: Hex;
+      try { signature = canonicalEoaSignature(item.signatures[0] as Hex); } catch { return backupInvalid(); }
+      if (!same(await recoverAddress({ hash: hashTypedData(safeTx), signature }).catch(() => zeroAddress), recoveryOwner)) backupInvalid();
+      const calls: WalletOwnerCall[] = [...review.createSigners, { to: review.walletAddress, value: "0", data: encodeFunctionData({ abi: execAbi, functionName: "execTransaction",
+        args: [safeTx.message.to, 0n, safeTx.message.data, safeTx.message.operation, 0n, 0n, 0n, zeroAddress, zeroAddress, signature] }) }];
       return { chainId: review.chainId, review, approval: { calls, setup: review.createSigners.length } };
     }));
     await store.approveOwnerChains(value.changeId, approvals, now());
