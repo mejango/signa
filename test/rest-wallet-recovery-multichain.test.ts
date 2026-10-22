@@ -23,7 +23,7 @@ import { createRegistration, enrollmentBackupAccount, signBackupProof, signGet }
 import { anvilAvailable, spawnAnvil } from "./support/anvil.js";
 import { createWalletDeviceIntent, prepareWalletDeviceAddition, prepareWalletDeviceCandidate, verifyWalletDeviceAddition, walletDeviceAdditionDocument } from "../src/rest/wallet/deviceAddition.js";
 import { createWalletDeviceChains } from "../src/rest/wallet/deviceChains.js";
-import { createWalletOwnerChains } from "../src/rest/wallet/ownerChains.js";
+import { approveWalletOwnerChains, createWalletOwnerChains, recordWalletOwnerChain } from "../src/rest/wallet/ownerChains.js";
 import { PostgresWalletEnrollmentStore } from "../src/rest/wallet/enrollmentPostgres.js";
 import type { WalletCentralSession } from "../src/rest/wallet/login.js";
 import { walletOwnerChangeSafeTx } from "../src/rest/web/walletRecoveryReview.js";
@@ -36,6 +36,7 @@ const proxy = JSON.parse(readFileSync(new URL("../src/rest/smartAccounts/stack/a
 const singleton = JSON.parse(readFileSync(new URL("../src/rest/smartAccounts/stack/artifacts/SafeL2.json", import.meta.url), "utf8")) as { deployedBytecode: Hex; address: Address };
 const safeAbi = parseAbi([
   "function setup(address[] owners,uint256 threshold,address to,bytes data,address fallbackHandler,address paymentToken,uint256 payment,address paymentReceiver)",
+  "function addOwnerWithThreshold(address owner,uint256 threshold)",
   "function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures) payable returns(bool)",
 ]);
 /** A stand-in passkey signer: approves any EIP-1271 check (it returns the called selector, which is the magic value). */
@@ -341,6 +342,39 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(provider.quotes).toBe(0);
   }, 60_000);
 
+  it("a device whose signer creation failed on a chain is updated there only once its signer exists, by sending the creation again", async () => {
+    const { primary, safe, intent, candidate, owners, provider, networks, passkey } = await deviceAccount();
+    const chains = createWalletDeviceChains({ pool, rpc, networks, checkIntervalMs: 0 });
+    const reviews = await chains.prepare(candidate);
+    await chains.approve(candidate, reviews.map(review => ({ chainId: review.chainId!, assertion: signGet({ ...primary, ...policy,
+      challenge: hashTypedData(walletDeviceAdditionDocument(review)) }) })), passkey);
+    const base = prepareWalletDeviceAddition(candidate, { owners, threshold: 1, safeNonce: "0" });
+    expect(await send(8453, safe, verifyWalletDeviceAddition(candidate, base, signGet({ ...primary, ...policy, challenge: hashTypedData(walletDeviceAdditionDocument(base)) }), passkey).addOwner.data)).toBe("0x1");
+    // Optimism's signer creation does nothing: the owner lands there, but the device could not sign.
+    await call(10, "anvil_setCode", [candidate.signerAddress, "0x"]);
+    for (let pass = 0; pass < 3; pass++) await chains.tick();
+    expect(await chains.status(intent.id)).toEqual([{ chainId: 10, name: "Optimism", state: "submitted" }, { chainId: 42161, name: "Arbitrum", state: "updated" }]);
+    // The next bundle carries only Optimism's signer creation; its Safe nonce already moved.
+    const last = [...provider.bundles.values()].at(-1)!.entries;
+    expect(last.map(entry => entry.chain)).toEqual([10]);
+    expect(last[0]!.target.toLowerCase()).not.toBe(safe.toLowerCase());
+    await call(10, "anvil_setCode", [candidate.signerAddress, approvesEverything]);
+    await chains.tick();
+    expect((await chains.status(intent.id)).map(chain => chain.state)).toEqual(["updated", "updated"]);
+  }, 60_000);
+
+  it("a second change for a chain cannot be approved while another is on its way there", async () => {
+    const { primary, intent, candidate, passkey, networks, safe } = await deviceAccount();
+    const chains = createWalletDeviceChains({ pool, rpc, networks, checkIntervalMs: 0 });
+    const reviews = await chains.prepare(candidate);
+    await chains.approve(candidate, reviews.map(review => ({ chainId: review.chainId!, assertion: signGet({ ...primary, ...policy,
+      challenge: hashTypedData(walletDeviceAdditionDocument(review)) }) })), passkey);
+    const other = randomUUID(), now = Date.now(), target = { safeNonce: "0", requires: [], add: [safe], remove: [] };
+    await recordWalletOwnerChain(pool, { changeId: other, kind: "device", accountId: intent.accountId, chainId: 10, state: "review", review: { other }, target, reason: null, now });
+    await expect(approveWalletOwnerChains(pool, other, [{ chainId: 10, review: { other }, approval: { calls: [] } }], now))
+      .rejects.toMatchObject({ code: "WALLET_OWNER_CHAINS_CHANGED" });
+  }, 60_000);
+
   /** An account recovered on Base only, with the creation stack on Base and Arbitrum, and the networks service as the recovered account sees it. */
   async function recoveredOnBase(creates = true) {
     const { candidate, safe, accountId, context, key } = await account([8453]);
@@ -401,6 +435,23 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(await canSign(42161, safe, candidate.intent.priorSigner)).toBe(false);
     expect(await canSign(42161, safe, candidate.signerAddress)).toBe(true);
     expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "consistent"]);
+  }, 60_000);
+
+  it("a network update stops when Base's owners move on before it is sent", async () => {
+    const { candidate, safe, accountId, provider, networks, owners, session } = await recoveredOnBase(false);
+    await deploySafe(10, safe, [candidate.intent.priorSigner, candidate.intent.recoveryOwner]);
+    await deployedRows(accountId, [10], Date.now());
+    const quoted = await networks.quote(session, { chainIds: [10] }), update = quoted.owners!.chains[0]!;
+    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(BigInt(update.safeNonce) + BigInt(index)), 10))));
+    await networks.approveOwners(session, { changeId: quoted.owners!.changeId, signatures: [{ chainId: 10, signatures }] });
+    // Base gains an owner the update never brings: its additions still show on Base, but its owner set is no longer Base's.
+    const stray = getAddress(`0x${"5a".repeat(20)}`);
+    const signature = concatHex([padHex(candidate.signerAddress, { size: 32 }), padHex(toHex(65), { size: 32 }), "0x00", padHex("0x0", { size: 32 })]);
+    expect(await send(8453, safe, encodeFunctionData({ abi: safeAbi, functionName: "execTransaction", args: [safe, 0n,
+      encodeFunctionData({ abi: safeAbi, functionName: "addOwnerWithThreshold", args: [stray, 1n] }), 0, 0n, 0n, 0n, zeroAddress, zeroAddress, signature] }))).toBe("0x1");
+    await owners.tick();
+    expect(await owners.status(quoted.owners!.changeId)).toEqual([{ chainId: 10, name: "Optimism", state: "failed" }]);
+    expect(provider.quotes).toBe(0);
   }, 60_000);
 
   it("a network repaired to Base's owners runs its Safe transactions in nonce order, one bundle each", async () => {

@@ -27,3 +27,5 @@ ALTER TABLE rest_wallet_owner_chains ADD CONSTRAINT rest_wallet_owner_chains_tar
 -- A network's update sends its Safe transactions one per bundle; attempts count for the one last sent.
 ALTER TABLE rest_wallet_owner_chains ADD COLUMN sent_step integer NOT NULL DEFAULT 0 CHECK (sent_step BETWEEN 0 AND 64);
 CREATE INDEX rest_wallet_owner_chains_account ON rest_wallet_owner_chains(account_id) WHERE state IN ('review','approved','submitted');
+-- One approved change per account and chain is on its way at a time, so two never fund calls for the same Safe nonce.
+CREATE UNIQUE INDEX rest_wallet_owner_chains_underway ON rest_wallet_owner_chains(account_id,chain_id) WHERE state IN ('approved','submitted');

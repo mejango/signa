@@ -382,6 +382,9 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
         if (!bundle?.document) state();
         if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId, funding, false) };
         if (now() >= bundle.document.expiresAtMs) { await fail(bundle, "quoted", funding); throw new RestError(410, "WALLET_NETWORKS_EXPIRED", "The quote expired. Get a new quote."); }
+        // Checked again at the payment: Base still has the quoted owners and the owner update is still on its way.
+        await assertExpectedOwners(bundle, enrollment.creation!);
+        if (bundle.ownerChangeId && (await funding.ownerChainRows(bundle.ownerChangeId)).some(row => !["approved", "submitted", "updated"].includes(row.state))) state();
         if (!await pay(bundle, funding)) { const current = (await funding.getBundle(session.accountId, bundle.id))!; return { bundle: publicBundle(current), replayed: true, view: await view(session.accountId, funding, false) }; }
         return { bundle: publicBundle(bundle), replayed: false, view: await view(session.accountId, funding, false) };
       });

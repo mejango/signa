@@ -3,6 +3,7 @@ import { getAddress, type Address, type Hex } from "viem";
 import { RestError, type RestRpc } from "../core.js";
 import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from "./chains.js";
 import type { createWalletNetworks } from "./networks.js";
+import { operationRpc, walletPreflightRpcBounds } from "./operationRpc.js";
 import { readWalletSafe } from "./ownerState.js";
 
 /** review: waiting for the owner's signature; approved: signed, waiting for Base; submitted: paid to Relayr;
@@ -70,7 +71,12 @@ export async function approveWalletOwnerChains(pool: Pool, changeId: string, app
       if (written.rowCount !== 1) changed();
     }
     await client.query("COMMIT");
-  } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  } catch (error) {
+    await client.query("ROLLBACK");
+    // Another change already holds one of these chains: only one approved change per chain is on its way.
+    if ((error as { code?: string }).code === "23505") changed();
+    throw error;
+  } finally { client.release(); }
 }
 /** The account's chains with an owner change approved and still on its way. */
 export async function walletOwnerChainsUnderway(sql: Pool | PoolClient, accountId: string): Promise<number[]> {
@@ -90,6 +96,15 @@ export function createWalletOwnerChains(options: { pool: Pool; rpc: RestRpc;
   const { pool, rpc } = options, interval = options.checkIntervalMs ?? 10_000, now = options.now ?? Date.now;
   const read = (accountId: string, chainId: number, signal?: AbortSignal) => readWalletSafe({ account: getAddress(accountId.slice(`eip155:${SIGNA_HOME_CHAIN_ID}:`.length)),
     chainId, rpc, now, ...(signal ? { signal } : {}) });
+  /** The owners a change adds that are contracts on Base (its passkey signers) but have no code yet on the chain. */
+  async function unsetSigners(chainId: number, owners: Address[], signal?: AbortSignal) {
+    const code = async (chain: number) => {
+      const reads = operationRpc(rpc, walletPreflightRpcBounds, signal, false, chain);
+      try { return await Promise.all(owners.map(async owner => (await reads.request("eth_getCode", [owner, "latest"])) !== "0x")); } finally { reads.close(); }
+    };
+    const [home, there] = await Promise.all([code(SIGNA_HOME_CHAIN_ID), code(chainId)]);
+    return owners.filter((_, index) => home[index] && !there[index]);
+  }
   async function set(id: string, chainId: number, from: WalletOwnerChainState[], state: WalletOwnerChainState, reason: string | null) {
     await pool.query("UPDATE rest_wallet_owner_chains SET state=$3,reason=$4,updated_at_ms=$5 WHERE change_id=$1 AND chain_id=$2 AND state=ANY($6)",
       [id, chainId, state, reason, now(), from]);
@@ -109,8 +124,13 @@ export function createWalletOwnerChains(options: { pool: Pool; rpc: RestRpc;
     for (const bundleId of new Set(open.flatMap(row => row.state === "submitted" ? [row.bundle_id!] : [])))
       outcomes.set(bundleId, await options.networks?.ownerCallsStatus(accountId, bundleId).catch(() => null) ?? null);
     // Every other chain follows Base: nothing is sent until Base shows the same change.
-    const home = await read(accountId, SIGNA_HOME_CHAIN_ID, signal), gate = open.map(row => walletOwnerChangeApplied(home.owners, row.target!));
-    for (const [index, row] of open.entries()) if (row.state === "approved" && !gate[index] && now() - Number(row.updated_at_ms) > baseWaitMs)
+    // A network's update brings the chain to Base's exact owners, so it follows only while Base holds exactly those.
+    const home = await read(accountId, SIGNA_HOME_CHAIN_ID, signal), gate = open.map(({ target }) => target!.path
+      ? home.threshold === 1n && sameSet(home.owners, target!.path[target!.path.length - 1]!) : walletOwnerChangeApplied(home.owners, target!));
+    // A network's update was quoted from Base's owners, so one Base no longer matches has been overtaken.
+    for (const [index, row] of open.entries()) if (row.state === "approved" && !gate[index] && row.target!.path)
+      await set(id, Number(row.chain_id), ["approved"], "failed", "base-changed");
+    else if (row.state === "approved" && !gate[index] && now() - Number(row.updated_at_ms) > baseWaitMs)
       await set(id, Number(row.chain_id), ["approved"], "failed", "base-unchanged");
     // A sent change is always reconciled; an approved one is read only once Base shows it.
     const states = await Promise.all(open.map((row, index) => gate[index] || row.state === "submitted" ? read(accountId, Number(row.chain_id), signal).catch(() => null) : null));
@@ -120,7 +140,7 @@ export function createWalletOwnerChains(options: { pool: Pool; rpc: RestRpc;
     // The Safe transactions that already ran there, counted by the chain's nonce.
     const done = open.map((row, index) => states[index] ? Number(states[index].nonce - BigInt(row.target!.safeNonce)) : -1);
     // A bundle that failed before any payment was signed for it costs no attempt.
-    const resend: typeof open = [], unpaid = new Set<number>();
+    const resend: { row: typeof open[number]; calls: WalletOwnerCall[] }[] = [], unpaid = new Set<number>();
     // The signed calls still apply only while Base shows the change, their signer's owners remain, and the chain is at a
     // nonce one of them was signed for, holding the owners that call expects.
     const live = open.map((row, index) => {
@@ -134,7 +154,15 @@ export function createWalletOwnerChains(options: { pool: Pool; rpc: RestRpc;
       const chainId = Number(row.chain_id), state = states[index], outcome = row.state === "submitted" ? outcomes.get(row.bundle_id!) : undefined;
       // A chain stays open while its payment is unsettled or unread, so the payment keeps being reconciled.
       if (!state || (row.state === "submitted" && (!outcome || outcome.state === "paying"))) continue;
-      if (applied(row, state)) { await set(id, chainId, ["approved", "submitted"], "updated", null); continue; }
+      // Relayr runs each call on its own, so the owner change can land while a signer's creation failed: the chain is
+      // updated only once every added passkey signer exists there, and a missing one gets its creation sent again.
+      if (applied(row, state) && (!row.target!.path || gate[index])) {
+        if (!(await unsetSigners(chainId, row.target!.add, signal)).length) { await set(id, chainId, ["approved", "submitted"], "updated", null); continue; }
+        if (outcome && !outcome.paid) unpaid.add(chainId);
+        if (row.attempts >= maximumAttempts && row.sent_step === done[index] && !unpaid.has(chainId)) { await set(id, chainId, ["approved", "submitted"], "failed", "attempts-exhausted"); continue; }
+        resend.push({ row, calls: row.approval!.calls.slice(0, row.approval!.setup ?? 1) });
+        continue;
+      }
       // Base moved on since this change was approved: it no longer brings the chain to Base's owners.
       if (!gate[index]) { await set(id, chainId, ["approved", "submitted"], "failed", "base-changed"); continue; }
       if (outcome) {
@@ -150,21 +178,21 @@ export function createWalletOwnerChains(options: { pool: Pool; rpc: RestRpc;
       if (!live[index]) { await set(id, chainId, ["approved", "submitted"], "failed", "approval-stale"); continue; }
       // Attempts count per Safe transaction: a step that ran starts the next one's count.
       if (row.attempts >= maximumAttempts && row.sent_step === done[index] && !unpaid.has(chainId)) { await set(id, chainId, ["approved", "submitted"], "failed", "attempts-exhausted"); continue; }
-      resend.push(row);
+      resend.push({ row, calls: nextCalls(row.approval!, done[index]!) });
     }
     // One bundle per family carries every chain still to update there.
     for (const family of ["mainnet", "testnet"] as const) {
-      const batch = resend.filter(row => signaChains.find(chain => chain.chainId === Number(row.chain_id))?.family === family);
+      const batch = resend.filter(({ row }) => signaChains.find(chain => chain.chainId === Number(row.chain_id))?.family === family);
       if (!batch.length) continue;
       let bundleId: string;
       try {
         if (!options.networks) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network funding is not configured.");
         bundleId = await options.networks.quoteOwnerCalls({ accountId, changeId: id,
-          calls: batch.flatMap(row => nextCalls(row.approval!, done[open.indexOf(row)]!).map(call => ({ chainId: Number(row.chain_id), ...call }))) });
+          calls: batch.flatMap(({ row, calls }) => calls.map(call => ({ chainId: Number(row.chain_id), ...call }))) });
       } catch (error) {
         // Nothing was paid; a later pass quotes again.
         const reason = error instanceof RestError ? error.code : "quote-unavailable";
-        for (const row of batch) await pool.query("UPDATE rest_wallet_owner_chains SET reason=$3 WHERE change_id=$1 AND chain_id=$2", [id, row.chain_id, reason]);
+        for (const { row } of batch) await pool.query("UPDATE rest_wallet_owner_chains SET reason=$3 WHERE change_id=$1 AND chain_id=$2", [id, row.chain_id, reason]);
         continue;
       }
       // The bundle is on record against every one of its chains before any payment is signed for it. A row another
@@ -172,7 +200,7 @@ export function createWalletOwnerChains(options: { pool: Pool; rpc: RestRpc;
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
-        for (const row of batch) {
+        for (const { row } of batch) {
           const written = await client.query(`UPDATE rest_wallet_owner_chains SET state='submitted',bundle_id=$3,
             attempts=CASE WHEN sent_step=$9 THEN attempts+$7 ELSE $7 END,sent_step=$9,reason=NULL,updated_at_ms=$4
             WHERE change_id=$1 AND chain_id=$2 AND state=$5 AND bundle_id IS NOT DISTINCT FROM $6 AND attempts=$8`,
