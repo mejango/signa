@@ -156,7 +156,7 @@ tokens, browser private keys or raw request bodies.
 
 ## Evidence
 
-Run `npm run check` with Node 22.23.1, PostgreSQL 16 via `TEST_DATABASE_URL`, the
+Run `npm run check` with Node 22.23.4, PostgreSQL 16 via `TEST_DATABASE_URL`, the
 pinned browser installation, and Foundry available. The required catalog includes
 the signup PostgreSQL, HTTP-boundary and joined EVM/browser suites.
 
