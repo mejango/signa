@@ -1,6 +1,6 @@
 import type { Pool } from "pg";
 import type { Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import type { ServerSigner } from "../signer.js";
 import { RestError, type RestRpc } from "../core.js";
 import type { createSmartAccountService } from "../smartAccounts/service.js";
 import { PostgresSmartAccountRegistry } from "../smartAccounts/postgres.js";
@@ -38,8 +38,8 @@ function authorityChain(context: BaseWalletHostContext, rpc: RestRpc, options: {
 export interface BaseWalletSignupHostOptions {
   url: string;
   genesisHash?: Hex;
-  /** Dedicated creation treasury key. Read from the host environment only; never logged. */
-  signerKey: Hex;
+  /** Dedicated creation treasury signer. */
+  signer: ServerSigner;
   poolId: string;
   allocationWei: string;
   /** The sender's expected first nonce. Initialization never adopts a provider value. */
@@ -57,10 +57,9 @@ export const baseWalletCreationPolicy = Object.freeze({ maximumRawBytes: 32768, 
 /** Explicit host composition for hosted Base signup. Startup configures the single permanent pool
  * and initializes its accounting exactly once; a later start with different values fails closed. */
 export async function createBaseWalletSignupHost(context: BaseWalletHostContext, options: BaseWalletSignupHostOptions) {
-  if (typeof options.signerKey !== "string" || !/^0x[0-9a-f]{64}$/i.test(options.signerKey) ||
-      typeof options.initialNonce !== "string" || !/^(0|[1-9][0-9]{0,15})$/.test(options.initialNonce))
+  if (!options.signer || typeof options.initialNonce !== "string" || !/^(0|[1-9][0-9]{0,15})$/.test(options.initialNonce))
     throw new RestError(500, "WALLET_CREATION_CONFIG_INVALID", "Hosted creation requires a signer key and explicit first nonce.");
-  const signer = privateKeyToAccount(options.signerKey);
+  const signer = options.signer;
   const configuration: WalletDeploymentPoolConfiguration = { id: options.poolId, chainId: 8453, sender: signer.address.toLowerCase() as Hex,
     allocationWei: options.allocationWei, globalAllocationLimitWei: options.allocationWei, policy: { ...baseWalletCreationPolicy } };
   const base = { url: options.url, ...(options.genesisHash ? { genesisHash: options.genesisHash } : {}) };
@@ -87,8 +86,8 @@ export async function createBaseWalletSignupHost(context: BaseWalletHostContext,
 export interface BaseWalletRecoveryHostOptions {
   url: string;
   genesisHash?: Hex;
-  /** Dedicated recovery relay key, distinct from the creation treasury. Never logged. */
-  signerKey: Hex;
+  /** Dedicated recovery relay signer, distinct from the creation treasury. */
+  signer: ServerSigner;
   maximumOperations: number;
   maximumCostWei: string;
   manifest: SmartAccountManifest;
@@ -98,7 +97,7 @@ export interface BaseWalletRecoveryHostOptions {
 /** Explicit host composition for adding devices on hosted Base. It shares the recovery relay's
  * signer key and lane (one owner change at a time per sender); the lane row is created on first use. */
 export function createBaseWalletDeviceHost(context: BaseWalletHostContext, options: BaseWalletRecoveryHostOptions & { onDeviceEvent?: Parameters<typeof createLocalWalletDevices>[0]["onEvent"] }) {
-  if (typeof options.signerKey !== "string" || !/^0x[0-9a-f]{64}$/i.test(options.signerKey))
+  if (!options.signer)
     throw new RestError(500, "WALLET_DEVICE_CONFIG_INVALID", "Adding devices requires the dedicated relay signer key.");
   const reader = createBaseWalletDeploymentReader({ url: options.url, ...(options.genesisHash ? { genesisHash: options.genesisHash } : {}) });
   const chain = authorityChain(context, reader.reads, options);
@@ -107,12 +106,12 @@ export function createBaseWalletDeviceHost(context: BaseWalletHostContext, optio
     devices: new PostgresWalletDeviceStore(context.pool, { origin, rpId }, { audience: context.audience, observe: value => chain.observe(value) }),
     ...(options.onDeviceEvent ? { onEvent: options.onDeviceEvent } : {}),
     addition: createBaseWalletDeviceRelay({ pool: context.pool, url: options.url, ...(options.genesisHash ? { genesisHash: options.genesisHash } : {}),
-      signer: privateKeyToAccount(options.signerKey), manifest: options.manifest, utility: options.utility,
+      signer: options.signer, manifest: options.manifest, utility: options.utility,
       maximumOperations: options.maximumOperations, maximumCostWei: options.maximumCostWei }) });
 }
 /** Explicit host composition for hosted Base recovery. The lane row is created on first use. */
 export function createBaseWalletRecoveryHost(context: BaseWalletHostContext, options: BaseWalletRecoveryHostOptions) {
-  if (typeof options.signerKey !== "string" || !/^0x[0-9a-f]{64}$/i.test(options.signerKey))
+  if (!options.signer)
     throw new RestError(500, "WALLET_RECOVERY_CONFIG_INVALID", "Hosted recovery requires a dedicated relay signer key.");
   const reader = createBaseWalletDeploymentReader({ url: options.url, ...(options.genesisHash ? { genesisHash: options.genesisHash } : {}) });
   const chain = authorityChain(context, reader.reads, options);
@@ -122,6 +121,6 @@ export function createBaseWalletRecoveryHost(context: BaseWalletHostContext, opt
     recoveries: new PostgresWalletRecoveryStore(context.pool, { origin, rpId }, { audience: context.audience, observe: value => chain.observe(value) }),
     flows: new PostgresWalletRecoveryFlowStore(context.pool), ...(options.onEvent ? { onEvent: options.onEvent } : {}),
     rotation: createBaseWalletRecovery({ pool: context.pool, url: options.url, ...(options.genesisHash ? { genesisHash: options.genesisHash } : {}),
-      signer: privateKeyToAccount(options.signerKey), manifest: options.manifest, utility: options.utility,
+      signer: options.signer, manifest: options.manifest, utility: options.utility,
       maximumOperations: options.maximumOperations, maximumCostWei: options.maximumCostWei }) });
 }

@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 import { toHex } from 'viem';
-import type { PrivateKeyAccount } from 'viem/accounts';
+import type { ServerSigner } from '../signer.js';
 import type { ContractPin, SmartAccountManifest } from '../smartAccounts/types.js';
 import { observeBaseReceiptFees } from './baseFeeObservation.js';
 import { createBaseWalletDeploymentReader, type BaseWalletDeploymentOptions } from './deploymentBase.js';
@@ -17,7 +17,7 @@ function unavailable(): never { throw new RestError(502, 'WALLET_RECOVERY_BASE_U
 /** Hosted Base recovery relay: the same single Dwellir endpoint and pinned fee runtimes as
  * creation, complete receipt fees per transaction, and lane release only after finality. */
 export function createBaseWalletRecovery(options: BaseWalletDeploymentOptions & {
-  pool: Pool; signer: PrivateKeyAccount; manifest: SmartAccountManifest; utility: ContractPin; maximumOperations: number; maximumCostWei: string;
+  pool: Pool; signer: ServerSigner; manifest: SmartAccountManifest; utility: ContractPin; maximumOperations: number; maximumCostWei: string;
 }) {
   const reader = createBaseWalletDeploymentReader(options);
   return createWalletRecoveryRelay({ pool: options.pool, signer: options.signer, manifest: options.manifest, utility: options.utility,
