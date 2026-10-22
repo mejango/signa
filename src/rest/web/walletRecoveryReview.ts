@@ -1,5 +1,6 @@
 import { encodeFunctionData, getAddress, isAddress, zeroAddress, type Address, type Hex } from 'viem';
 import type { WalletRecoveryRotation } from '../wallet/recoveryRotation.js';
+import { SIGNA_HOME_CHAIN_ID } from '../wallet/chains.js';
 
 export interface WalletRecoveryReviewSelection {
   id: string; candidateDigest: string; walletAddress: Address; initializerHash: Hex;
@@ -17,15 +18,16 @@ const types = { SafeTx: [
 function invalid(): never { throw new Error('The recovery rotation review changed. Reload the original recovery before approving.'); }
 /** Browser-compatible standard SafeTx builder, shared with the server's validated review.
  * This returns signing data only; callers must establish the selected review's provenance. */
-export function walletRecoveryRotationSafeTx(walletAddress: Address, data: Hex, safeNonce: string) {
+export function walletRecoveryRotationSafeTx(walletAddress: Address, data: Hex, safeNonce: string, chainId: number = SIGNA_HOME_CHAIN_ID) {
   if (!/^0x[0-9a-f]{200}$/.test(data)) invalid();
-  return walletOwnerChangeSafeTx(walletAddress, data, safeNonce);
+  return walletOwnerChangeSafeTx(walletAddress, data, safeNonce, chainId);
 }
-/** The same standard SafeTx for any reviewed owner change: a swap (100 bytes) or an addition (68 bytes). */
-export function walletOwnerChangeSafeTx(walletAddress: Address, data: Hex, safeNonce: string) {
-  if (!isAddress(walletAddress) || !/^0x[0-9a-f]{136}$|^0x[0-9a-f]{200}$/.test(data)
+/** The same standard SafeTx for any reviewed owner change: a swap (100 bytes) or an addition (68 bytes).
+ * The chain id is in the domain, so an approval for one chain never executes on another. */
+export function walletOwnerChangeSafeTx(walletAddress: Address, data: Hex, safeNonce: string, chainId: number = SIGNA_HOME_CHAIN_ID) {
+  if (!isAddress(walletAddress) || !/^0x[0-9a-f]{136}$|^0x[0-9a-f]{200}$/.test(data) || !Number.isSafeInteger(chainId) || chainId <= 0
     || !/^(0|[1-9][0-9]{0,77})$/.test(safeNonce) || BigInt(safeNonce) >= 1n << 256n) invalid();
-  return { domain: { chainId: 8453, verifyingContract: walletAddress }, types, primaryType: 'SafeTx' as const,
+  return { domain: { chainId, verifyingContract: walletAddress }, types, primaryType: 'SafeTx' as const,
     message: { to: walletAddress, value: 0n, data, operation: 0, safeTxGas: 0n, baseGas: 0n,
       gasPrice: 0n, gasToken: zeroAddress, refundReceiver: zeroAddress, nonce: BigInt(safeNonce) } };
 }
@@ -53,12 +55,15 @@ export function assertWalletRecoveryRotationReview(input: unknown, selected: Wal
   // ahead of the primary in the Safe list). A wrong value only reverts the swap; the rotating signers
   // themselves are rebuilt from the selection below, so they can never be the link.
   const previous = review?.previousOwner;
+  // A review for another chain names it; the home chain's review carries no chain id.
+  const chain = review && Object.hasOwn(review, 'chainId') ? review.chainId : undefined;
+  if (chain !== undefined && (!Number.isSafeInteger(chain) || chain <= 0 || chain === SIGNA_HOME_CHAIN_ID)) invalid();
   if (!review || typeof previous !== 'string' || !isAddress(previous, { strict: true }) || previous === zeroAddress || previous === selected.priorSigner || previous === selected.replacementSigner) invalid();
   const p = selected.rotationContext;
   if (!p || !/^0x[0-9a-f]{64}$/.test(p.publicKey?.x) || !/^0x[0-9a-f]{64}$/.test(p.publicKey?.y)
     || !/^0x[0-9a-fA-F]{1,44}$/.test(p.verifiers) || BigInt(p.verifiers) <= 1n
     || !isAddress(p.signerFactory) || !isAddress(selected.walletAddress)) invalid();
-  const expected: WalletRecoveryRotation = { version: 'center-wallet-recovery-rotation-v1', recoveryId: selected.id,
+  const expected: WalletRecoveryRotation = { version: 'center-wallet-recovery-rotation-v1', ...(chain === undefined ? {} : { chainId: chain }), recoveryId: selected.id,
     candidateDigest: selected.candidateDigest, walletAddress: getAddress(selected.walletAddress), initializerHash: selected.initializerHash,
     recoveryOwner: selected.recoveryOwner, priorSigner: selected.priorSigner, replacementSigner: selected.replacementSigner,
     previousOwner: review.previousOwner, safeNonce: review.safeNonce,
@@ -66,7 +71,7 @@ export function assertWalletRecoveryRotationReview(input: unknown, selected: Wal
       args: [BigInt(p.publicKey.x), BigInt(p.publicKey.y), BigInt(p.verifiers)] }) },
     swapOwner: { to: getAddress(selected.walletAddress), value: '0', data: encodeFunctionData({ abi: safeAbi, functionName: 'swapOwner',
       args: [review.previousOwner as Address, selected.priorSigner, selected.replacementSigner] }) } };
-  const document = walletRecoveryRotationSafeTx(expected.walletAddress, expected.swapOwner.data, expected.safeNonce);
+  const document = walletRecoveryRotationSafeTx(expected.walletAddress, expected.swapOwner.data, expected.safeNonce, chain);
   const expectedJson = JSON.parse(JSON.stringify({ review: expected, document }, (_key, item) => typeof item === 'bigint' ? String(item) : item));
   if (received !== canonical(expectedJson)) invalid();
   return document;

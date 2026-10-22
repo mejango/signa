@@ -1,0 +1,167 @@
+import type { Pool } from "pg";
+import { getAddress, type Address, type Hex } from "viem";
+import { RestError, type RestRpc } from "../core.js";
+import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from "./chains.js";
+import type { createWalletNetworks } from "./networks.js";
+import { PostgresWalletNetworksStore } from "./networksPostgres.js";
+import { readWalletSafe } from "./ownerState.js";
+import type { WalletRecoveryCandidate } from "./recovery.js";
+import { prepareWalletRecoveryRotation, verifyWalletRecoveryRotation, type WalletRecoveryRotation, type WalletRecoveryRotationCall } from "./recoveryRotation.js";
+
+/** review: waiting for the recovery owner; approved: signed, waiting for Base; submitted: paid to Relayr;
+ * updated: the chain shows the new passkey and not the old one; failed: this recovery cannot change it. */
+export type WalletRecoveryChainState = "review" | "approved" | "submitted" | "updated" | "failed";
+export interface WalletRecoveryChain { chainId: number; name: string; state: WalletRecoveryChainState }
+type Row = { chain_id: string; state: WalletRecoveryChainState; review: WalletRecoveryRotation | null;
+  approval: { createSigner: WalletRecoveryRotationCall; ownerChange: WalletRecoveryRotationCall } | null; bundle_id: string | null; attempts: number };
+/** Each paid Relayr bundle for a chain is an attempt; a chain that fails this many is reported, not retried. */
+const maximumAttempts = 3;
+const same = (owners: readonly Address[], owner: Address) => owners.some(item => item.toLowerCase() === owner.toLowerCase());
+function changed(): never { throw new RestError(409, "WALLET_RECOVERY_CHAINS_CHANGED", "The networks to update changed. Review the replacement again."); }
+
+/** Recovery on the account's other chains. Each chain gets the same swap as Base, signed by the recovery
+ * owner for that chain's own Safe nonce in the same approval. Nothing is sent before Base's own swap is on
+ * chain; then Center's networks payer funds one Relayr bundle per family. The chain's owners, never a
+ * provider's word, decide when a chain is updated. */
+export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
+  networks?: Pick<ReturnType<typeof createWalletNetworks>, "quoteOwnerCalls" | "payOwnerCalls" | "ownerCallsStatus">;
+  /** How long a chain waits between checks; each check reads the chain and Relayr. */
+  checkIntervalMs?: number; now?: () => number }) {
+  const { pool, rpc } = options, interval = options.checkIntervalMs ?? 10_000, now = options.now ?? Date.now;
+  const networkRows = new PostgresWalletNetworksStore(pool);
+  const rows = async (id: string) => (await pool.query<Row>("SELECT chain_id,state,review,approval,bundle_id,attempts FROM rest_wallet_recovery_chains WHERE recovery_id=$1 ORDER BY chain_id", [id])).rows;
+  const safe = (candidate: WalletRecoveryCandidate) => getAddress(candidate.intent.accountId.slice(`eip155:${SIGNA_HOME_CHAIN_ID}:`.length));
+  const read = (candidate: WalletRecoveryCandidate, chainId: number, signal?: AbortSignal) => readWalletSafe({ account: safe(candidate), chainId, rpc, now, ...(signal ? { signal } : {}) });
+  const rotated = (owners: readonly Address[], candidate: WalletRecoveryCandidate) => same(owners, candidate.signerAddress) && !same(owners, candidate.intent.priorSigner);
+  async function deployed(candidate: WalletRecoveryCandidate) {
+    return (await networkRows.listNetworks(candidate.intent.accountId)).filter(row => row.state === "deployed" && row.chainId !== SIGNA_HOME_CHAIN_ID).map(row => row.chainId);
+  }
+  async function set(id: string, chainId: number, from: WalletRecoveryChainState[], state: WalletRecoveryChainState, reason: string | null) {
+    await pool.query("UPDATE rest_wallet_recovery_chains SET state=$3,reason=$4,updated_at_ms=$5 WHERE recovery_id=$1 AND chain_id=$2 AND state=ANY($6)",
+      [id, chainId, state, reason, now(), from]);
+  }
+
+  /** One pass over a recovery's open chains, by one worker at a time. */
+  async function progress(id: string, signal?: AbortSignal) {
+    const candidate = (await pool.query<{ candidate: WalletRecoveryCandidate }>("SELECT candidate FROM rest_wallet_recoveries WHERE id=$1", [id])).rows[0]?.candidate;
+    await pool.query("UPDATE rest_wallet_recovery_chains SET checked_at_ms=$2 WHERE recovery_id=$1 AND state IN ('approved','submitted')", [id, now()]);
+    const open = (await rows(id)).filter(row => row.state === "approved" || row.state === "submitted");
+    if (!candidate || !open.length) return;
+    // Every other chain follows Base: nothing is sent until Base's own swap is on chain.
+    if (!rotated((await read(candidate, SIGNA_HOME_CHAIN_ID, signal)).owners, candidate)) return;
+    const states = await Promise.all(open.map(row => read(candidate, Number(row.chain_id), signal).catch(() => null)));
+    // A bundle that failed before any payment was signed for it costs no attempt.
+    const resend: Row[] = [], unpaid = new Set<number>();
+    for (const [index, row] of open.entries()) {
+      const chainId = Number(row.chain_id), state = states[index];
+      if (!state) continue;
+      if (rotated(state.owners, candidate)) { await set(id, chainId, ["approved", "submitted"], "updated", null); continue; }
+      // The signed swap still applies only while the old passkey is an owner and the Safe nonce is the one signed.
+      const live = same(state.owners, candidate.intent.priorSigner) && state.nonce.toString() === row.review!.safeNonce;
+      if (row.state === "submitted") {
+        const outcome = await options.networks?.ownerCallsStatus(candidate.intent.accountId, row.bundle_id!).catch(() => null);
+        if (outcome?.state === "quoted") { await options.networks!.payOwnerCalls(candidate.intent.accountId, row.bundle_id!).catch(() => undefined); continue; }
+        if (!outcome || (outcome.state !== "failed" && !outcome.failed.includes(chainId))) { if (!live) await set(id, chainId, ["submitted"], "failed", "approval-stale"); continue; }
+        if (!outcome.paid) unpaid.add(chainId);
+      }
+      if (!live) { await set(id, chainId, ["approved", "submitted"], "failed", "approval-stale"); continue; }
+      if (row.attempts >= maximumAttempts && !unpaid.has(chainId)) { await set(id, chainId, ["approved", "submitted"], "failed", "attempts-exhausted"); continue; }
+      resend.push(row);
+    }
+    // One bundle per family carries every chain still to update there.
+    for (const family of ["mainnet", "testnet"] as const) {
+      const batch = resend.filter(row => signaChains.find(chain => chain.chainId === Number(row.chain_id))?.family === family);
+      if (!batch.length) continue;
+      if (!options.networks) { for (const row of batch) await set(id, Number(row.chain_id), ["approved", "submitted"], "failed", "no-relay"); continue; }
+      let bundleId: string;
+      try {
+        bundleId = await options.networks.quoteOwnerCalls({ accountId: candidate.intent.accountId, recoveryId: id,
+          calls: batch.flatMap(row => [{ chainId: Number(row.chain_id), ...row.approval!.createSigner }, { chainId: Number(row.chain_id), ...row.approval!.ownerChange }]) });
+      } catch (error) {
+        // Nothing was paid; a later pass quotes again.
+        const reason = error instanceof RestError ? error.code : "quote-unavailable";
+        for (const row of batch) await pool.query("UPDATE rest_wallet_recovery_chains SET reason=$3 WHERE recovery_id=$1 AND chain_id=$2", [id, row.chain_id, reason]);
+        continue;
+      }
+      // The bundle is on record against its chains before any payment is signed for it.
+      for (const row of batch) await pool.query(`UPDATE rest_wallet_recovery_chains SET state='submitted',bundle_id=$3,attempts=attempts+$6,reason=NULL,updated_at_ms=$4
+        WHERE recovery_id=$1 AND chain_id=$2 AND state IN ('approved','submitted') AND attempts=$5`, [id, row.chain_id, bundleId, now(), row.attempts, unpaid.has(Number(row.chain_id)) ? 0 : 1]);
+      await options.networks.payOwnerCalls(candidate.intent.accountId, bundleId).catch(() => undefined);
+    }
+  }
+
+  return {
+    /** Reads every other deployed chain and returns the swaps the recovery owner signs with Base's. A chain
+     * already showing the new passkey is updated; one whose owners are not the account's original pair fails. */
+    async prepare(candidate: WalletRecoveryCandidate): Promise<WalletRecoveryRotation[]> {
+      const id = candidate.intent.id, known = await rows(id);
+      const fresh = (await deployed(candidate)).filter(chainId => (known.find(row => Number(row.chain_id) === chainId)?.state ?? "review") === "review");
+      const states = await Promise.all(fresh.map(chainId => read(candidate, chainId).catch(() => {
+        throw new RestError(503, "WALLET_RECOVERY_CHAIN_UNAVAILABLE", `${signaChainName(chainId)} could not be read. Try again shortly.`);
+      })));
+      for (const [index, chainId] of fresh.entries()) {
+        const state = states[index]!, { priorSigner, recoveryOwner } = candidate.intent;
+        let review: WalletRecoveryRotation | null = null, next: WalletRecoveryChainState = "failed";
+        if (rotated(state.owners, candidate)) next = "updated";
+        else if (same(state.owners, priorSigner) && same(state.owners, recoveryOwner) && state.threshold === 1n) {
+          try { review = prepareWalletRecoveryRotation(candidate, { owners: state.owners, threshold: 1, safeNonce: state.nonce.toString() }, chainId); next = "review"; }
+          catch { /* An owner list the swap cannot be built from. */ }
+        }
+        await pool.query(`INSERT INTO rest_wallet_recovery_chains(recovery_id,chain_id,state,review,reason,updated_at_ms) VALUES($1,$2,$3,$4,$5,$6)
+          ON CONFLICT(recovery_id,chain_id) DO UPDATE SET state=EXCLUDED.state,review=EXCLUDED.review,reason=EXCLUDED.reason,updated_at_ms=EXCLUDED.updated_at_ms
+          WHERE rest_wallet_recovery_chains.state='review'`, [id, chainId, next, review, next === "failed" ? "owners-differ" : null, now()]);
+      }
+      return (await rows(id)).filter(row => row.state === "review" || row.state === "approved").map(row => row.review!);
+    },
+    /** Records the recovery owner's signature for every chain under review, all or none. Each is checked
+     * against the stored swap before it is kept; a chain deployed since the review sends the user back to it. */
+    async approve(candidate: WalletRecoveryCandidate, input: unknown): Promise<void> {
+      const id = candidate.intent.id, known = await rows(id), open = known.filter(row => row.state === "review" || row.state === "approved");
+      if ((await deployed(candidate)).some(chainId => !known.some(row => Number(row.chain_id) === chainId))) changed();
+      if (!Array.isArray(input) || input.length !== open.length) changed();
+      const signatures = new Map<number, Hex>();
+      for (const item of input as unknown[]) {
+        const value = item as { chainId?: unknown; signature?: unknown };
+        if (!value || typeof value !== "object" || Object.keys(value).sort().join(",") !== "chainId,signature" || typeof value.chainId !== "number"
+          || typeof value.signature !== "string" || signatures.has(value.chainId)) changed();
+        signatures.set(value.chainId, value.signature as Hex);
+      }
+      if (open.some(row => !signatures.has(Number(row.chain_id)))) changed();
+      const approvals = await Promise.all(open.filter(row => row.state === "review").map(async row => {
+        const verified = await verifyWalletRecoveryRotation(candidate, row.review!, signatures.get(Number(row.chain_id))!);
+        return { row, approval: { createSigner: verified.createSigner, ownerChange: verified.rotateOwner, safeTxHash: verified.safeTxHash } };
+      }));
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const { row, approval } of approvals) {
+          const written = await client.query(`UPDATE rest_wallet_recovery_chains SET state='approved',approval=$3,updated_at_ms=$4
+            WHERE recovery_id=$1 AND chain_id=$2 AND state='review' AND review=$5::jsonb`, [id, row.chain_id, approval, now(), JSON.stringify(row.review)]);
+          if (written.rowCount !== 1) changed();
+        }
+        await client.query("COMMIT");
+      } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+    },
+    async status(id: string): Promise<WalletRecoveryChain[]> {
+      return (await rows(id)).map(row => ({ chainId: Number(row.chain_id), name: signaChainName(Number(row.chain_id)), state: row.state }));
+    },
+    /** The worker step: every recovery with a chain due for a check gets one pass, one worker per recovery. */
+    async tick(signal?: AbortSignal): Promise<void> {
+      const due = (await pool.query<{ recovery_id: string }>(`SELECT DISTINCT recovery_id FROM rest_wallet_recovery_chains
+        WHERE state IN ('approved','submitted') AND checked_at_ms <= $1 LIMIT 16`, [now() - interval])).rows;
+      for (const { recovery_id: id } of due) {
+        signal?.throwIfAborted();
+        const client = await pool.connect();
+        let held = false;
+        try {
+          held = (await client.query<{ held: boolean }>("SELECT pg_try_advisory_lock(hashtextextended('rest_wallet_recovery_chains'::regclass::oid::text||$1,0)) AS held", [id])).rows[0]!.held;
+          // An unread chain or an unavailable service leaves the rows as they are; the next pass checks again.
+          if (held) await progress(id, signal).catch(() => undefined);
+        } finally {
+          try { if (held) await client.query("SELECT pg_advisory_unlock(hashtextextended('rest_wallet_recovery_chains'::regclass::oid::text||$1,0))", [id]); client.release(); }
+          catch { client.release(true); }
+        }
+      }
+    },
+  };
+}

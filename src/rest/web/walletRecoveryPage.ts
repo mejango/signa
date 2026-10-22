@@ -25,10 +25,11 @@ export function walletRecoveryPage(options: { base?: string; assets?: AssetNames
 <button type="submit" id="recovery-begin">Continue</button></form>
 <section id="recovery-details" hidden aria-label="Recovery details"><dl><dt>New passkey name</dt><dd id="recovery-name"></dd>
 <dt>Account address</dt><dd id="recovery-address"></dd><dt>Backup key</dt><dd id="recovery-owner"></dd>
+<div id="recovery-chains-box" hidden><dt>Other networks</dt><dd id="recovery-chains"></dd></div>
 </dl><details><summary>Passkey details</summary><dl><dt>Previous passkey signer</dt><dd id="recovery-prior"></dd>
 <dt>Replacement passkey signer</dt><dd id="recovery-replacement"></dd></dl></details></section>
 <section id="recovery-review" hidden aria-label="Replacement review"><h2>Replace the lost passkey</h2>
-<p>Approve these two actions on Base:</p><ol><li>Create the replacement passkey signer.</li><li>Replace the previous passkey signer on your account.</li></ol>
+<p>Approve these two actions on <span id="recovery-scope">Base</span>:</p><ol><li>Create the replacement passkey signer.</li><li>Replace the previous passkey signer on your account.</li></ol>
 <p>The new passkey will control this account. Your backup key stays the same.</p>
 <dl><dt>Safe transaction nonce</dt><dd id="recovery-nonce"></dd><dt>Signer factory</dt><dd id="recovery-factory"></dd></dl>
 <details><summary>Exact approved calls</summary><pre id="recovery-calls"></pre></details></section>

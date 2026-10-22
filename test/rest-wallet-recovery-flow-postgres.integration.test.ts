@@ -2,17 +2,20 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { hashTypedData, type Hex } from 'viem';
+import { decodeFunctionData, encodeFunctionResult, hashTypedData, toHex, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { PostgresWalletRecoveryStore } from '../src/rest/wallet/recoveryPostgres.js';
 import { PostgresWalletRecoveryFlowStore, assertRecoveryContinuationInTransaction } from '../src/rest/wallet/recoveryFlowPostgres.js';
-import { enrollmentDigest } from '../src/rest/wallet/enrollment.js';
 import { walletRecoveryDocument, createWalletRecoveryMapping } from '../src/rest/wallet/recovery.js';
 import { passkeyOnboardingDocument } from '../src/rest/smartAccounts/passkeyOnboarding.js';
 import { bindSmartAccountInTransaction } from '../src/rest/smartAccounts/postgres.js';
 import type { WalletSignupSetup } from '../src/rest/wallet/signupPostgres.js';
-import { createWalletAuthorityContextFixture } from './fixtures/wallet-authority-context.js';
-import { createRegistration, signBackupProof, signGet } from './fixtures/wallet-enrollment-crypto.js';
+import { insertWalletAccount } from './fixtures/wallet-recovery-account.js';
+import { createWalletRecoveryChains } from '../src/rest/wallet/recoveryChains.js';
+import { walletRecoveryRotationDocument } from '../src/rest/wallet/recoveryRotation.js';
+import { safeAbi } from '../src/rest/smartAccounts/service.js';
+import type { RestRpc } from '../src/rest/core.js';
+import { createRegistration, enrollmentBackupAccount, signBackupProof, signGet } from './fixtures/wallet-enrollment-crypto.js';
 
 const connectionString = process.env.TEST_DATABASE_URL, suite = connectionString ? describe : describe.skip;
 const policy = { rpId: 'juicebox.center', origin: 'https://juicebox.center' };
@@ -26,31 +29,13 @@ suite('durable recovery browser continuation (genuine crypto, modeled canonical 
     for (const name of ['004_rest_accounts.sql', '007_rest_smart_accounts.sql', '012_rest_smart_account_onboarding.sql',
       '013_rest_wallet_ceremonies.sql', '014_rest_passkey_onboarding.sql', '042_wallet_binding_consent.sql', '015_rest_wallet_enrollment.sql', '046_wallet_signup_window.sql', '041_wallet_passkey_name.sql', '043_wallet_networks.sql', '044_wallet_devices.sql',
       '017_rest_wallet_policy.sql', '051_wallet_policy_app_grant_lifetime.sql', '019_rest_wallet_app_grants.sql', '052_wallet_app_grant_lifetime_90d.sql', '020_rest_wallet_authority.sql', '039_wallet_authority_window.sql', '049_wallet_authority_window_15m.sql', '028_wallet_recovery.sql',
-      '029_wallet_recovery_mapping.sql', '033_wallet_unproved_recovery_expiry.sql', '030_wallet_recovery_flow.sql'])
+      '029_wallet_recovery_mapping.sql', '033_wallet_unproved_recovery_expiry.sql', '030_wallet_recovery_flow.sql', '064_wallet_recovery_chains.sql'])
       await pool.query(await readFile(new URL(`../src/db/migrations/${name}`, import.meta.url), 'utf8'));
     recovery = new PostgresWalletRecoveryStore(pool, policy); flows = new PostgresWalletRecoveryFlowStore(pool);
   });
-  beforeEach(async () => { await pool.query('TRUNCATE rest_accounts,rest_wallet_enrollments,rest_wallet_ceremonies CASCADE'); });
+  beforeEach(async () => { await pool.query('TRUNCATE rest_accounts,rest_wallet_enrollments,rest_wallet_ceremonies,rest_wallet_networks,rest_wallet_network_bundles CASCADE'); });
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await admin.end(); } });
-  async function existing() {
-    const context = await createWalletAuthorityContextFixture(await now()), e = context.enrollment, c = context.credential;
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query(`INSERT INTO rest_accounts(id,owner_address,authority_chain_id,display_name,bio,created_at,updated_at)
-        VALUES($1,$2,8453,'','',$3,$3)`, [context.accountId, context.accountId.slice(12), Math.floor(e.createdAt / 1000)]);
-      await client.query(`INSERT INTO rest_wallet_enrollments(id,user_handle,state,intent_digest,created_at,expires_at,retain_until,
-        intent,candidate,candidate_digest,creation,possession,safe_address,account_id,verified_at,receipt)
-        VALUES($1,$2,'verified',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-      [e.intent.id, e.intent.userHandle, enrollmentDigest(e.intent), e.createdAt, e.intent.expiresAt, e.intent.expiresAt + 86400000,
-        e.intent, e.candidate, e.candidateDigest, e.creation, e.possession, e.creation!.address.toLowerCase(), context.accountId, c.verifiedAtMs, e.receipt]);
-      await client.query(`INSERT INTO rest_wallet_credentials(rp_id,credential_id,enrollment_id,account_id,user_handle,public_key_x,public_key_y,backup_eligible,verified_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [c.rpId, c.credentialId, c.enrollmentId, c.accountId, c.userHandle, c.publicKey.x, c.publicKey.y, c.backupEligible, c.verifiedAtMs]);
-      await bindSmartAccountInTransaction(client, context.binding, context.binding.authorization.setup!.issuedAt);
-      await client.query('COMMIT');
-    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
-    return context;
-  }
+  const existing = async () => insertWalletAccount(pool, await now());
   async function registered(options: { accepted?: boolean; lifetimeMs?: number; flowStore?: PostgresWalletRecoveryFlowStore } = {}) {
     const context = await existing(), selected = new PostgresWalletRecoveryStore(pool, { ...policy, ...(options.lifetimeMs ? { lifetimeMs: options.lifetimeMs } : {}) });
     const begun = await selected.begin(context.accountId), intent = begun.record.intent, selectedFlows = options.flowStore ?? flows;
@@ -238,5 +223,58 @@ suite('durable recovery browser continuation (genuine crypto, modeled canonical 
     await pool.query('UPDATE rest_wallet_credentials SET superseded_at=$2 WHERE account_id=$1 AND superseded_at IS NULL', [c.accountId, await now()]);
     await expect(flows.beginResume(value.flow.id)).rejects.toMatchObject({ status: 403 });
     await expect(flows.completeResume(after.input)).rejects.toMatchObject({ status: 403 });
+  });
+  it('keeps each other chain\'s exact approval once and refuses a missing, extra, wrong or stale one', async () => {
+    const value = await registered(), candidate = value.record.candidate!, { priorSigner, recoveryOwner, accountId } = candidate.intent;
+    // Synthetic chains: a current head and the Safe's owners, threshold and nonce on each.
+    const safes: Record<number, { owners: Address[]; nonce: bigint; down?: boolean }> = { 8453: { owners: [priorSigner, recoveryOwner], nonce: 7n }, 10: { owners: [priorSigner, recoveryOwner], nonce: 3n } };
+    const rpc: RestRpc = { async request(chainId, method, params) {
+      const chain = safes[chainId]; if (!chain || chain.down) throw Error('unavailable');
+      if (method === 'eth_chainId') return toHex(chainId);
+      if (method === 'eth_getBlockByNumber') return { number: '0x10', hash: `0x${chainId.toString(16).padStart(64, '0')}`, timestamp: toHex(Math.floor(Date.now() / 1000)) };
+      const { functionName } = decodeFunctionData({ abi: safeAbi, data: (params[0] as { data: Hex }).data });
+      if (functionName === 'getOwners') return encodeFunctionResult({ abi: safeAbi, functionName, result: chain.owners });
+      if (functionName === 'getThreshold') return encodeFunctionResult({ abi: safeAbi, functionName, result: 1n });
+      if (functionName === 'nonce') return encodeFunctionResult({ abi: safeAbi, functionName, result: chain.nonce });
+      throw Error(`unexpected ${method}`);
+    } };
+    const deploy = (chainId: number) => pool.query("INSERT INTO rest_wallet_networks(account_id,chain_id,state,bundle_id,tx_hash,updated_at_ms) VALUES($1,$2,'deployed',NULL,NULL,1)", [accountId, chainId]);
+    const chains = createWalletRecoveryChains({ pool, rpc }), sign = (review: Parameters<typeof walletRecoveryRotationDocument>[0], account = enrollmentBackupAccount) => account.signTypedData(walletRecoveryRotationDocument(review));
+    // An account on Base only needs no other approval.
+    expect(await chains.prepare(candidate)).toEqual([]); await chains.approve(candidate, []);
+    await deploy(10);
+    // A chain deployed after the review sends the user back to it.
+    await expect(chains.approve(candidate, [])).rejects.toMatchObject({ status: 409, code: 'WALLET_RECOVERY_CHAINS_CHANGED' });
+    safes[10]!.down = true;
+    await expect(chains.prepare(candidate)).rejects.toMatchObject({ status: 503, code: 'WALLET_RECOVERY_CHAIN_UNAVAILABLE' });
+    safes[10]!.down = false;
+    const [review] = await chains.prepare(candidate);
+    expect(review).toMatchObject({ chainId: 10, safeNonce: '3', priorSigner, replacementSigner: candidate.signerAddress });
+    expect(walletRecoveryRotationDocument(review!).domain.chainId).toBe(10);
+    // Wrong key, a Base-domain signature, a missing chain and an extra chain are all refused; nothing is kept.
+    await expect(chains.approve(candidate, [{ chainId: 10, signature: await sign(review!, privateKeyToAccount(`0x${'22'.repeat(32)}`)) }])).rejects.toMatchObject({ status: 400 });
+    const { chainId: _chain, ...onBase } = review!;
+    await expect(chains.approve(candidate, [{ chainId: 10, signature: await sign(onBase) }])).rejects.toMatchObject({ status: 400 });
+    await expect(chains.approve(candidate, [])).rejects.toMatchObject({ status: 409 });
+    await expect(chains.approve(candidate, [{ chainId: 10, signature: await sign(review!) }, { chainId: 42161, signature: await sign(review!) }])).rejects.toMatchObject({ status: 409 });
+    expect(await chains.status(value.flow.id)).toEqual([{ chainId: 10, name: 'Optimism', state: 'review' }]);
+    // The nonce moved before approval: the review is read again and the old signature no longer fits.
+    safes[10]!.nonce = 4n;
+    const [fresh] = await chains.prepare(candidate);
+    expect(fresh!.safeNonce).toBe('4');
+    await expect(chains.approve(candidate, [{ chainId: 10, signature: await sign(review!) }])).rejects.toMatchObject({ status: 400 });
+    await chains.approve(candidate, [{ chainId: 10, signature: await sign(fresh!) }]);
+    expect(await chains.status(value.flow.id)).toEqual([{ chainId: 10, name: 'Optimism', state: 'approved' }]);
+    const kept = (await pool.query('SELECT review,approval FROM rest_wallet_recovery_chains WHERE recovery_id=$1', [value.flow.id])).rows[0];
+    expect(kept.review).toEqual(fresh); expect(kept.approval.ownerChange.to.toLowerCase()).toBe(accountId.slice(12));
+    // Approved is kept as signed: a later read does not replace it, and a repeated approval is a no-op.
+    safes[10]!.nonce = 5n;
+    expect(await chains.prepare(candidate)).toEqual([fresh]);
+    await chains.approve(candidate, [{ chainId: 10, signature: await sign(fresh!) }]);
+    expect((await pool.query('SELECT review,approval FROM rest_wallet_recovery_chains WHERE recovery_id=$1', [value.flow.id])).rows[0]).toEqual(kept);
+    // A chain whose owners are not the original pair cannot take this swap: it is reported, not reviewed.
+    safes[42161] = { owners: [`0x${'ab'.repeat(20)}`, recoveryOwner], nonce: 0n }; await deploy(42161);
+    expect(await chains.prepare(candidate)).toEqual([fresh]);
+    expect(await chains.status(value.flow.id)).toEqual([{ chainId: 10, name: 'Optimism', state: 'approved' }, { chainId: 42161, name: 'Arbitrum', state: 'failed' }]);
   });
 });

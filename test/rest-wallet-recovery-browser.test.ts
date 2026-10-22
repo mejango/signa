@@ -1,8 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { build } from 'esbuild';
 import { chromium, type Browser } from 'playwright';
+import { hashTypedData, recoverTypedDataAddress, type Hex } from 'viem';
 import { createWalletRecoverySecret, serializeWalletRecoveryKit } from '../src/rest/web/walletRecoveryKit.js';
 import { walletRecoveryCss, walletRecoveryPage } from '../src/rest/web/walletRecoveryPage.js';
+import { createWalletAuthorityContextFixture } from './fixtures/wallet-authority-context.js';
+import { createRegistration } from './fixtures/wallet-enrollment-crypto.js';
+import { createWalletRecoveryIntent, prepareWalletRecoveryCandidate } from '../src/rest/wallet/recovery.js';
+import { prepareWalletRecoveryRotation, walletRecoveryRotationDocument } from '../src/rest/wallet/recoveryRotation.js';
 
 const origin = 'http://localhost:34171', walletAddress = `0x${'33'.repeat(20)}` as const;
 const initializerHash = `0x${'44'.repeat(32)}` as const, id = '10000000-0000-4000-8000-000000000001';
@@ -169,6 +174,69 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       expect(await page.getByLabel('Backup password', { exact: true }).inputValue()).toBe('');
     } finally { await context.close(); }
   });
+
+  it('shows one review for every chain and signs each chain with the one backup it opened, without a passkey prompt', async () => {
+    const context = await browser.newContext(), page = await context.newPage(), secret = createWalletRecoverySecret();
+    // The modeled server's reviews; the backup key they name is this test's backup password. The SafeTx itself does not carry it.
+    const authority = await createWalletAuthorityContextFixture(Date.now());
+    const intent = createWalletRecoveryIntent(authority, { rpId: authority.credential.rpId, origin: authority.enrollment.intent.origin, nowMs: Date.now(), expiresAtMs: Date.now() + 120_000 });
+    const key = createRegistration({ rpId: intent.rpId, origin: intent.origin, userHandle: intent.userHandle, challenge: `0x${Buffer.from(intent.registration.challenge, 'base64url').toString('hex')}` });
+    const candidate = prepareWalletRecoveryCandidate(intent, key.response), owners = [intent.priorSigner, intent.recoveryOwner];
+    const reviews = [prepareWalletRecoveryRotation(candidate, { owners, threshold: 1, safeNonce: '4' }),
+      prepareWalletRecoveryRotation(candidate, { owners, threshold: 1, safeNonce: '0' }, 10), prepareWalletRecoveryRotation(candidate, { owners, threshold: 1, safeNonce: '2' }, 42161)];
+    const shaped = (review: typeof reviews[number]) => JSON.parse(JSON.stringify({ review: { ...review, recoveryOwner: secret.recoveryOwner }, document: walletRecoveryRotationDocument(review) },
+      (_key, value) => typeof value === 'bigint' ? String(value) : value));
+    let view: Record<string, unknown> = { id: intent.id, passkeyName: 'Juicebox replacement', rpId: 'localhost', origin, expiresAtMs: Date.now() + 3600000,
+      proofExpiresAtMs: intent.expiresAtMs, walletAddress: reviews[0]!.walletAddress, recoveryOwner: secret.recoveryOwner, initializerHash: intent.initializerHash,
+      priorSigner: intent.priorSigner, replacementSigner: candidate.signerAddress, candidateDigest: reviews[0]!.candidateDigest,
+      rotationContext: { publicKey: candidate.credential.publicKey, signerFactory: intent.manifest.ownerProfile!.signerFactory.address, verifiers: intent.manifest.ownerProfile!.p256Verifier.address },
+      phase: 'awaiting_rotation_approval', registration: null, possession: null, transactionHashes: [],
+      chains: [{ chainId: 10, name: 'Optimism', state: 'review' }, { chainId: 42161, name: 'Arbitrum', state: 'review' }] };
+    const approvals: { backupSignature: Hex; chainSignatures: { chainId: number; signature: Hex }[] }[] = [];
+    await page.route(origin + '/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === '/wallet/recover') return route.fulfill({ contentType: 'text/html', body: walletRecoveryPage() });
+      if (path.endsWith('wallet-recovery-kit.js')) return route.fulfill({ contentType: 'text/javascript', body: kitScript });
+      if (path.endsWith('.js')) return route.fulfill({ contentType: 'text/javascript', body: script });
+      if (path.endsWith('.css')) return route.fulfill({ contentType: 'text/css', body: walletRecoveryCss() });
+      if (path.endsWith('/state')) return route.fulfill({ json: { view, csrfToken: Buffer.alloc(32, 3).toString('base64url') } });
+      if (path.endsWith('/rotation/review')) return route.fulfill({ json: { ...shaped(reviews[0]!), chains: reviews.slice(1).map(shaped) } });
+      if (path.endsWith('/rotation/approve')) {
+        approvals.push(JSON.parse(request.postData()!));
+        view = { ...view, phase: 'rotating', chains: [{ chainId: 10, name: 'Optimism', state: 'approved' }, { chainId: 42161, name: 'Arbitrum', state: 'approved' }] };
+        return route.fulfill({ json: { view } });
+      }
+      throw new Error('Unexpected browser request: ' + path);
+    });
+    const contains = async (text: string) => expect.poll(() => page.locator('#wallet-status').textContent()).toContain(text);
+    try {
+      await page.addInitScript(() => { (window as unknown as { prompts: number }).prompts = 0;
+        navigator.credentials.get = async () => { (window as unknown as { prompts: number }).prompts++; throw new DOMException('No prompt expected', 'NotAllowedError'); }; });
+      await page.goto(origin + '/wallet/recover'); await contains('Review and approve');
+      expect(await page.locator('#recovery-chains').textContent()).toBe('Optimism: Waiting for your approval, Arbitrum: Waiting for your approval');
+      await page.getByLabel('My backup password').check();
+      await page.getByLabel('Backup password', { exact: true }).fill(secret.mnemonic);
+      await page.getByRole('button', { name: 'Review passkey replacement' }).click();
+      await contains('Review the account and the exact calls');
+      expect(await page.locator('#recovery-scope').textContent()).toBe('Base, Optimism and Arbitrum');
+      expect(await page.locator('#recovery-review').isVisible()).toBe(true);
+      await page.getByRole('button', { name: 'Approve passkey replacement' }).click();
+      await contains('Replacing your passkey');
+      // One approval, one backup unlock, no passkey prompt: one signature per chain, each for that chain's own swap and nonce.
+      expect(approvals).toHaveLength(1); expect(await page.evaluate(() => (window as unknown as { prompts: number }).prompts)).toBe(0);
+      expect(await page.getByLabel('Backup password', { exact: true }).inputValue()).toBe('');
+      const [approval] = approvals;
+      expect(approval!.chainSignatures.map(item => item.chainId)).toEqual([10, 42161]);
+      for (const [index, signature] of [approval!.backupSignature, ...approval!.chainSignatures.map(item => item.signature)].entries()) {
+        const document = walletRecoveryRotationDocument(reviews[index]!);
+        expect(document.domain.chainId).toBe([8453, 10, 42161][index]);
+        expect((await recoverTypedDataAddress({ ...document, signature })).toLowerCase()).toBe(secret.recoveryOwner.toLowerCase());
+        expect(hashTypedData(document)).not.toBe(hashTypedData(walletRecoveryRotationDocument(reviews[(index + 1) % 3]!)));
+      }
+      expect(await page.locator('#recovery-chains').textContent()).toBe('Optimism: Waiting for Base, Arbitrum: Waiting for Base');
+      expect(JSON.stringify(approvals)).not.toContain(secret.mnemonic);
+    } finally { await context.close(); }
+  }, 30000);
 
   it('refuses recovery secrets or arbitrary return URLs in the page URL before any API call', async () => {
     const context = await browser.newContext(), page = await context.newPage(); let apiCalls = 0;

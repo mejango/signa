@@ -77,8 +77,10 @@ export interface WalletNetworkRow { chainId: number; state: WalletNetworkState; 
 export type WalletNetworkBundleState = "quoted" | "paying" | "paid" | "settled" | "failed";
 export interface WalletNetworkBundle {
   id: string; accountId: string; family: WalletNetworkFamily; chainIds: number[]; state: WalletNetworkBundleState; centerPays: boolean;
+  /** An owner-change bundle carries a recovery's reviewed swaps, which hold their own owner signatures; it has no passkey document and no chain rows. */
+  purpose?: "owners"; recoveryId?: string;
   quote: RelayrQuote<RelayrIndependentEntry>; /** Relayr returns transaction uuids in its own order; the first status read binds them. */ bound: boolean;
-  payment: RelayrPayment; document: WalletNetworksDocumentInput;
+  payment: RelayrPayment; document: WalletNetworksDocumentInput | null;
   paymentTx: { hash: Hex; raw: Hex; nonce: number; sentAtMs: number | null } | null; createdAtMs: number; updatedAtMs: number;
 }
 export interface WalletNetworksStore {
@@ -128,9 +130,13 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
   const maximumPayment = options.maximumPaymentWei ?? WALLET_NETWORKS_MAXIMUM_PAYMENT_WEI, maximumBundles = options.maximumBundlesPerFamily ?? WALLET_NETWORKS_MAXIMUM_BUNDLES_PER_FAMILY;
   const { store, provider, rpc } = options;
   function name(chainId: number) { return chainId === WALLET_HOME_NETWORK.chainId ? WALLET_HOME_NETWORK.name : networkById.get(chainId)?.name ?? `Chain ${chainId}`; }
+  /** The bundles that deploy the account; owner-change bundles hold no chain rows and no passkey document. */
+  async function deployments(accountId: string, source = store) {
+    return (await source.listBundles(accountId)).filter((bundle): bundle is WalletNetworkBundle & { document: WalletNetworksDocumentInput } => !bundle.purpose);
+  }
   /** Each deployed chain carries its owner state: code on a chain says the account exists there, not that Base's owners hold it. */
   async function view(accountId: string, source = store, owners = true) {
-    const rows = await source.listNetworks(accountId), bundles = await source.listBundles(accountId);
+    const rows = await source.listNetworks(accountId), bundles = await deployments(accountId, source);
     const listed = [{ chainId: WALLET_HOME_NETWORK.chainId, name: WALLET_HOME_NETWORK.name, state: "deployed" as WalletNetworkState, txHash: null as Hex | null },
       ...rows.sort((a, b) => a.chainId - b.chainId).map(row => ({ chainId: row.chainId, name: name(row.chainId), state: row.state, txHash: row.txHash }))];
     const deployed = listed.filter(network => network.state === "deployed").map(network => network.chainId);
@@ -156,12 +162,12 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
   /** Fails the bundle and frees its chain rows so they can be quoted again. */
   async function fail(bundle: WalletNetworkBundle, from: WalletNetworkBundleState, source = store) {
     const current = now(); bundle.state = "failed";
-    if (!await source.transitionBundle(bundle, from, current)) return;
+    if (!await source.transitionBundle(bundle, from, current) || bundle.purpose) return;
     for (const chainId of bundle.chainIds) await source.upsertNetwork(bundle.accountId, { chainId, state: "failed", bundleId: bundle.id, txHash: null }, current);
   }
   /** Quotes older than their approval window, and quoted bundles replaced by a new quote, stop holding chains. */
   async function expireQuotes(accountId: string, replacing: readonly number[] = []) {
-    for (const bundle of await store.listBundles(accountId)) {
+    for (const bundle of await deployments(accountId)) {
       if (bundle.state !== "quoted") continue;
       if (now() >= bundle.document.expiresAtMs || bundle.chainIds.some(chainId => replacing.includes(chainId))) await fail(bundle, "quoted");
     }
@@ -201,7 +207,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
       await expireQuotes(session.accountId, input.chainIds);
       const existing = await store.listNetworks(session.accountId);
       if (existing.some(row => input.chainIds.includes(row.chainId) && row.state !== "failed")) state();
-      const funded = (await store.listBundles(session.accountId)).filter(bundle => bundle.family === family && ["paying", "paid", "settled"].includes(bundle.state));
+      const funded = (await deployments(session.accountId)).filter(bundle => bundle.family === family && ["paying", "paid", "settled"].includes(bundle.state));
       if (funded.length >= maximumBundles) throw new RestError(429, "WALLET_NETWORKS_LIMIT", "This account has used its network deployments for now.");
       // Every chosen chain is checked at once against one read of the Base stack; the first failure ends the quote.
       const home = await homeStack(enrollment);
@@ -235,7 +241,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     async approve(session: WalletCentralSession, input: { bundleId: string; assertion: WalletAssertion }) {
       if (!input || typeof input.bundleId !== "string") invalid("Choose the quoted bundle.");
       const bundleId = input.bundleId, bundle = await store.getBundle(session.accountId, bundleId);
-      if (!bundle) state();
+      if (!bundle?.document) state();
       if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId, store, false) };
       if (now() >= bundle.document.expiresAtMs) { await fail(bundle, "quoted"); throw new RestError(410, "WALLET_NETWORKS_EXPIRED", "The quote expired. Get a new quote."); }
       const rows = await store.listNetworks(session.accountId);
@@ -254,7 +260,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
       return store.withPayer(bundle.payment.chainId, options.payer.address, async funding => {
         // A previous request may have completed while this one verified the passkey.
         const bundle = await funding.getBundle(session.accountId, bundleId);
-        if (!bundle) state();
+        if (!bundle?.document) state();
         if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId, funding, false) };
         if (now() >= bundle.document.expiresAtMs) { await fail(bundle, "quoted", funding); throw new RestError(410, "WALLET_NETWORKS_EXPIRED", "The quote expired. Get a new quote."); }
         if (!await pay(bundle, funding)) { const current = (await funding.getBundle(session.accountId, bundle.id))!; return { bundle: publicBundle(current), replayed: true, view: await view(session.accountId, funding, false) }; }
@@ -264,7 +270,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     /** Rebroadcasts a signed payment the chain has not seen, then reads the payment receipt, Relayr and code per chain. */
     async status(session: WalletCentralSession) {
       await expireQuotes(session.accountId);
-      for (const bundle of await store.listBundles(session.accountId)) {
+      for (const bundle of await deployments(session.accountId)) {
         const observed = await relayed(bundle);
         if (!observed) continue;
         let settled = true;
@@ -280,6 +286,40 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
         if (settled) { bundle.state = "settled"; await store.transitionBundle(bundle, "paid", now()); }
       }
       return view(session.accountId);
+    },
+    /** Quotes one bundle for a recovery's reviewed calls on chains of one family. Nothing is paid yet: the
+     * caller records the bundle first, then funds it, so a crash never leaves a payment it does not know about. */
+    async quoteOwnerCalls(input: { accountId: string; recoveryId: string; calls: { chainId: number; to: Address; data: Hex }[] }): Promise<string> {
+      if (!options.payer) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network funding is not configured.");
+      const chainIds = [...new Set(input.calls.map(call => call.chainId))].sort((a, b) => a - b), family = walletNetworkFamily(chainIds);
+      if (chainIds.some(chainId => !networkById.get(chainId)!.centerPays)) throw new RestError(501, "WALLET_NETWORKS_PAYER_REQUIRED", "That network needs the account to pay; not available yet.");
+      const entries = input.calls.map(call => ({ chain: call.chainId, target: getAddress(call.to), data: call.data, value: "0" }));
+      const { quote, payment } = await relayQuote(entries, networkById.get(chainIds[0]!)!.paymentChainId, family), current = now();
+      const bundle: WalletNetworkBundle = { id: randomUUID(), accountId: input.accountId, family, chainIds, state: "quoted", centerPays: true,
+        purpose: "owners", recoveryId: input.recoveryId, quote, bound: false, payment, document: null, paymentTx: null, createdAtMs: current, updatedAtMs: current };
+      await store.createBundle(bundle, current);
+      return bundle.id;
+    },
+    /** Funds a quoted owner-change bundle; one that cannot be paid in time fails instead and is quoted again by the caller. */
+    async payOwnerCalls(accountId: string, bundleId: string): Promise<void> {
+      if (!options.payer) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network funding is not configured.");
+      const quoted = await store.getBundle(accountId, bundleId);
+      if (quoted?.purpose !== "owners") state();
+      await store.withPayer(quoted.payment.chainId, options.payer.address, async funding => {
+        const bundle = (await funding.getBundle(accountId, bundleId))!;
+        if (bundle.state !== "quoted") return;
+        // A payment signed this close to its deadline might never be sent and would hold the payer's nonce.
+        if (now() >= Number(bundle.payment.deadline) * 1000 - 60_000) { await fail(bundle, "quoted", funding); return; }
+        await pay(bundle, funding);
+      });
+    },
+    /** An owner-change bundle's progress, whether a payment was ever signed for it, and the chains Relayr reports will not run. */
+    async ownerCallsStatus(accountId: string, bundleId: string): Promise<{ state: WalletNetworkBundleState; paid: boolean; failed: number[] }> {
+      const bundle = await store.getBundle(accountId, bundleId);
+      if (bundle?.purpose !== "owners") state();
+      const observed = await relayed(bundle);
+      const failed = (observed ?? []).filter(item => relayFailed.test(item.providerState)).map(item => bundle.quote.entries[item.step]!.entry.chain);
+      return { state: bundle.state, paid: bundle.paymentTx !== null, failed: [...new Set(failed)] };
     },
   };
   /** A funded bundle's progress: rebroadcasts a payment the chain has not seen, fails a reverted payment,
@@ -350,12 +390,12 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     }
     const current = now();
     bundle.state = "paid"; bundle.paymentTx = { ...tx, sentAtMs: tx.sentAtMs ?? current };
-    if (!await source.transitionBundle(bundle, "paying", current)) return;
+    if (!await source.transitionBundle(bundle, "paying", current) || bundle.purpose) return;
     for (const chainId of bundle.chainIds) await source.upsertNetwork(bundle.accountId, { chainId, state: "pending", bundleId: bundle.id, txHash: null }, current);
   }
   function publicBundle(bundle: WalletNetworkBundle) {
     return { id: bundle.id, family: bundle.family, chainIds: bundle.chainIds, state: bundle.state, centerPays: bundle.centerPays,
       payment: { chainId: bundle.payment.chainId, value: bundle.payment.value, deadline: bundle.payment.deadline, hash: bundle.paymentTx?.hash ?? null },
-      expiresAtMs: bundle.document.expiresAtMs, networks: bundle.chainIds.map(chainId => ({ chainId, name: name(chainId) })) };
+      expiresAtMs: bundle.document!.expiresAtMs, networks: bundle.chainIds.map(chainId => ({ chainId, name: name(chainId) })) };
   }
 }

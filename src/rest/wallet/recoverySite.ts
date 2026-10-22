@@ -4,6 +4,7 @@ import type { Address, Hex } from 'viem';
 import { RestError } from '../core.js';
 import { walletAppFields } from './appGrants.js';
 import type { createLocalWalletRecovery } from './recoveryService.js';
+import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 import { walletRecoveryPage, walletRecoveryCss } from '../web/walletRecoveryPage.js';
 import { assertWalletHttpHost, assertWalletHttpRequest, assertWalletCsrf, readWalletCookie, readWalletJson,
   walletCookie, walletCsrfToken, walletRecoveryCookie, walletRecoveryResumeCookie, walletHttpBytes, walletHttpAssertion,
@@ -34,17 +35,17 @@ export function mountWalletRecovery(app: Hono, options: WalletRecoverySiteOption
     if (!token) invalid(403);
     assertWalletCsrf(c.req.raw, token); return token;
   }
-  async function body(c: Context, keys: string[]) {
+  async function body(c: Context, keys: string[], optional: string[] = []) {
     assertWalletHttpRequest(c.req.raw, origin, 'central');
     const value = await readWalletJson(c.req.raw);
-    try { return walletAppFields(value, keys); } catch { return invalid(); }
+    try { return walletAppFields(value, keys, optional); } catch { return invalid(); }
   }
   const json = (c: Context, value: unknown) => {
     // A view still preparing the login asks the worker for the observation login needs; the queue
     // dedupes by account and the page keeps polling state meanwhile.
     const view = (value as { view?: { phase?: string; walletAddress?: string | null } } | null)?.view;
     if (options.refresh && view?.phase === 'preparing_sign_in' && view.walletAddress) {
-      const refresh = options.refresh, accountId = `eip155:8453:${view.walletAddress.toLowerCase()}`;
+      const refresh = options.refresh, accountId = `eip155:${SIGNA_HOME_CHAIN_ID}:${view.walletAddress.toLowerCase()}`;
       void refresh.request(accountId).then(() => refresh.tick()).catch(() => { /* The page polls; the worker retries. */ });
     }
     return c.body(JSON.stringify(value, (_key, item) => typeof item === 'bigint' ? String(item) : item), 200, { 'Content-Type': 'application/json' });
@@ -96,8 +97,8 @@ export function mountWalletRecovery(app: Hono, options: WalletRecoverySiteOption
     await body(c, []); return json(c, await recovery.prepareRotation(cookie(c, walletRecoveryCookie)));
   });
   app.post(`${base}/recovery/rotation/approve`, async c => {
-    const input = await body(c, ['backupSignature']), token = cookie(c, walletRecoveryCookie);
-    return json(c, { view: await recovery.approveRotation(token, input.backupSignature as Hex) });
+    const input = await body(c, ['backupSignature'], ['chainSignatures']), token = cookie(c, walletRecoveryCookie);
+    return json(c, { view: await recovery.approveRotation(token, input.backupSignature as Hex, input.chainSignatures ?? []) });
   });
   app.post(`${base}/recovery/activate`, async c => {
     await body(c, []);

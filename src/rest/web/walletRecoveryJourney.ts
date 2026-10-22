@@ -3,9 +3,11 @@ import { defaultPasskeyName } from './passkeyName.js';
 import { base } from './walletBase.js';
 import { getAddress, hashTypedData, isAddress, type Address, type TypedDataDefinition } from 'viem';
 import type { WalletRecoveryView } from '../wallet/recoveryService.js';
+import type { WalletRecoveryRotation } from '../wallet/recoveryRotation.js';
 import type { WalletRecoveryKit, WalletRecoverySecret } from './walletRecoveryKit.js';
 import { loadRecoveryKit as loadKit, preloadRecoveryKit } from './walletRecoveryKitLoader.js';
 import { assertWalletRecoveryRotationReview } from './walletRecoveryReview.js';
+import { SIGNA_HOME_CHAIN_ID, signaChainName } from '../wallet/chains.js';
 
 type Ethereum = { request(input: { method: string; params?: unknown[] }): Promise<unknown> };
 type TypedDocument = { domain: Record<string, any>; types: Record<string, { name: string; type: string }[]>; primaryType: string; message: Record<string, any> };
@@ -17,7 +19,9 @@ const status = el('wallet-status'), locatorKey = 'center:recovery:reference';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, word = /^0x[0-9a-f]{64}$/;
 let view: WalletRecoveryView | null = null, known = false, busy = false, csrf = '', native: AbortController | null = null;
 let pending: { path: string; body: unknown; csrf: string } | null = null;
-let rotation: Parameters<typeof assertWalletRecoveryRotationReview>[0] | null = null;
+type Rotation = { review: WalletRecoveryRotation; document: unknown };
+type Review = Rotation & { chains: Rotation[] };
+let rotation: Review | null = null;
 let secret: WalletRecoverySecret | null = null, kit: WalletRecoveryKit | null = null, selectedWallet: Address | null = null;
 let disposed = false, pollCount = 0;
 const method = () => el<HTMLFieldSetElement>('recovery-method').querySelector<HTMLInputElement>('input:checked')?.value ?? 'kit';
@@ -32,6 +36,11 @@ const steps: Record<WalletRecoveryView['phase'], string> = {
   preparing_sign_in: 'Preparing to sign in. This can take up to a minute…',
   ready_to_sign_in: 'Your replacement passkey is ready. Sign in with it.', expired: 'This unfinished recovery expired. Its replacement passkey is not active.',
 };
+const chainStates: Record<WalletRecoveryView['chains'][number]['state'], string> = {
+  review: 'Waiting for your approval', approved: 'Waiting for Base', submitted: 'Updating', updated: 'Updated', failed: 'Not updated',
+};
+/** "Base", "Base and Optimism", "Base, Optimism and Arbitrum". */
+const listed = (names: string[]) => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 // While work is in flight the status line's mark spins (Croptop's text ticker) instead of showing the lightning.
 // A native prompt waiting on the person is not work in flight; the mark holds still for it.
 const polling = () => view?.phase === 'rotating' || view?.phase === 'preparing_sign_in';
@@ -80,7 +89,9 @@ function accept(result: { view: WalletRecoveryView | null; csrfToken?: string })
       || !isAddress(value.walletAddress) || !isAddress(value.recoveryOwner) || !isAddress(value.priorSigner) || !word.test(value.initializerHash)
       || !Number.isSafeInteger(value.expiresAtMs) || !Number.isSafeInteger(value.proofExpiresAtMs)
       || (selectedWallet && !sameAddress(value.walletAddress, selectedWallet)) || (view && view.id !== value.id)
-      || !Array.isArray(value.transactionHashes) || value.transactionHashes.length > 2 || value.transactionHashes.some(value => !word.test(value))) invalid();
+      || !Array.isArray(value.transactionHashes) || value.transactionHashes.length > 2 || value.transactionHashes.some(value => !word.test(value))
+      || !Array.isArray(value.chains ??= []) || value.chains.length > 8 || value.chains.some(chain => !Number.isSafeInteger(chain?.chainId)
+        || chain.chainId === SIGNA_HOME_CHAIN_ID || !Object.hasOwn(chainStates, chain.state))) invalid();
     kitMatches(value); selectedWallet = getAddress(value.walletAddress);
     // A public locator helps resume after cookie loss. It never authorizes recovery.
     sessionStorage.setItem(locatorKey, value.id); reference.value = value.id;
@@ -108,6 +119,9 @@ function render() {
   el('recovery-owner').textContent = view?.recoveryOwner ?? ''; el('recovery-prior').textContent = view?.priorSigner ?? '';
   el('recovery-replacement').textContent = view?.replacementSigner ?? 'Not created yet';
   el('recovery-review').hidden = !rotation;
+  const chains = view?.chains ?? [];
+  el('recovery-chains-box').hidden = !chains.length;
+  el('recovery-chains').textContent = chains.map(chain => `${signaChainName(chain.chainId)}: ${chainStates[chain.state]}`).join(', ');
   const label = view?.phase === 'awaiting_registration' ? 'Create replacement passkey' : view?.phase === 'awaiting_possession' ? 'Verify both owners'
     : view?.phase === 'awaiting_rotation_approval' ? rotation ? 'Approve passkey replacement' : 'Review passkey replacement'
     : view?.phase === 'awaiting_activation' ? 'Continue' : null;
@@ -221,14 +235,26 @@ async function advance() {
   } else if (view.phase === 'awaiting_rotation_approval') {
     if (!view.replacementSigner || !view.candidateDigest || !view.rotationContext) invalid();
     const selected = { ...view, replacementSigner: view.replacementSigner, candidateDigest: view.candidateDigest, rotationContext: view.rotationContext };
+    // One review covers Base and every other chain the account is on: the same swap, each for its own chain and Safe nonce.
+    const documents = (value: Review) => {
+      if (!value || !Array.isArray(value.chains) || value.chains.length > 7) invalid();
+      const chains = value.chains.map(item => { fields(item, ['review', 'document']); return { chainId: item.review.chainId, document: assertWalletRecoveryRotationReview(item, selected) }; });
+      if (chains.some(item => item.chainId === undefined) || new Set(chains.map(item => item.chainId)).size !== chains.length) invalid();
+      return { base: assertWalletRecoveryRotationReview({ review: value.review, document: value.document }, selected), chains };
+    };
     if (!rotation) {
-      const result = await request('rotation/review', {}); assertWalletRecoveryRotationReview(result, selected); rotation = result;
+      const result: Review = await request('rotation/review', {});
+      fields(result, ['review', 'document', 'chains']); const checked = documents(result); rotation = result;
+      el('recovery-scope').textContent = listed([signaChainName(SIGNA_HOME_CHAIN_ID), ...checked.chains.map(item => signaChainName(item.chainId!))]);
       el('recovery-nonce').textContent = result.review.safeNonce; el('recovery-factory').textContent = result.review.createSigner.to;
-      el('recovery-calls').textContent = JSON.stringify({ createSigner: result.review.createSigner, swapOwner: result.review.swapOwner }, null, 2);
-      message('Review the account and both exact calls below, then approve the replacement with your backup.');
+      el('recovery-calls').textContent = JSON.stringify({ createSigner: result.review.createSigner, swapOwner: result.review.swapOwner,
+        ...(result.chains.length ? { otherNetworks: result.chains.map(item => ({ chainId: item.review.chainId, safeNonce: item.review.safeNonce, swapOwner: item.review.swapOwner })) } : {}) }, null, 2);
+      message('Review the account and the exact calls below, then approve the replacement with your backup.');
     } else {
-      const document = assertWalletRecoveryRotationReview(rotation, selected), backupSignature = await signBackup(document, view.recoveryOwner);
-      await send('rotation/approve', { backupSignature }); rotation = null;
+      const checked = documents(rotation), backupSignature = await signBackup(checked.base, view.recoveryOwner);
+      const chainSignatures = [];
+      for (const item of checked.chains) chainSignatures.push({ chainId: item.chainId!, signature: await signBackup(item.document, view.recoveryOwner) });
+      await send('rotation/approve', { backupSignature, chainSignatures }); rotation = null;
     }
   } else if (view.phase === 'awaiting_activation') {
     // The replacement passkey and the recovery owner already signed this recovery; Center binds
