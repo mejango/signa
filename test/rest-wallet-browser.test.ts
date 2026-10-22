@@ -241,6 +241,11 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
       if (onramp && path === "/wallet/onramp") return json({ applePay: true });
+      if (onramp && path === "/wallet/networks") return json({ offered: [], pending: [], networks: [
+        { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" },
+        { chainId: 10, name: "Optimism", state: "deployed", txHash: null, owners: "diverged" },
+        { chainId: 42161, name: "Arbitrum", state: "deployed", txHash: null, owners: "unknown" },
+        { chainId: 84532, name: "Base Sepolia", state: "pending", txHash: null }] });
       if (onramp && path === "/wallet/balances") return json({ ethUsd: "250000000000", totalUsdCents: "251234", complete: false, chains: [
         { chainId: 8453, name: "Base", testnet: false, eth: "1000000000000000000", usdc: "0" },
         { chainId: 10, name: "Optimism", testnet: false, eth: "0", usdc: "12345678" },
@@ -441,6 +446,15 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(await page.locator("#wallet-balance-chains li").allTextContents()).toEqual([
       "Base: 1 ETH", "Optimism: 12.34 USDC", "Base Sepolia (testnet): 5 USDC", "Couldn't check Arbitrum."]);
     expect(await page.locator("#wallet-funds-open").isVisible()).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("lists each deployed network as up to date only when its owners match Base", async () => {
+    onramp = true;
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toBe("Base: Up to date, Optimism: Needs update, Arbitrum: Couldn't check, "
+      + "Base Sepolia (deploying…). Actions on a network that needs an update wait until its owners match Base.");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]);
   });

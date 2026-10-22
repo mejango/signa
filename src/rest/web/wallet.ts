@@ -15,7 +15,7 @@ type Completion = { loginId: string; assertion: { credentialId: string; userHand
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = element("wallet-status"), account = element("wallet-account"), address = element("wallet-address"), passkey = element("wallet-passkey"), passkeyLabel = element("wallet-passkey-label");
 // The account on more chains: a list, an "Add more" text button, a chain picker, one quote and one passkey approval.
-type NetworksView = { networks: { chainId: number; name: string; state: string; txHash: string | null }[];
+type NetworksView = { networks: { chainId: number; name: string; state: string; txHash: string | null; owners: string | undefined }[];
   offered: { chainId: number; name: string; family: string; centerPays: boolean }[]; pending: { id: string; state: string; chainIds: number[] }[] };
 const networksList = element("wallet-networks"), networksAdd = element<HTMLButtonElement>("wallet-networks-add"), networksForm = element<HTMLFormElement>("wallet-networks-form");
 let networksView: NetworksView | null = null, networksQuote: { bundleId: string; challenge: string } | null = null, networksTimer: ReturnType<typeof setInterval> | null = null, networksOpen = false, networksPolls = 0;
@@ -366,7 +366,9 @@ async function logout() {
 function networkView(value: Json): NetworksView {
   const v = record(value);
   const list = (items: unknown, keys: string[]) => (Array.isArray(items) ? items : []).map(item => { const r = record(item); for (const key of keys) if (!(key in r)) throw new InvalidResponse(); return r; });
-  return { networks: list(v.networks, ["chainId", "name", "state"]).map(r => ({ chainId: Number(r.chainId), name: string(r.name, 40), state: string(r.state, 20), txHash: typeof r.txHash === "string" ? r.txHash : null })),
+  return { networks: list(v.networks, ["chainId", "name", "state"]).map(r => ({ chainId: Number(r.chainId), name: string(r.name, 40), state: string(r.state, 20), txHash: typeof r.txHash === "string" ? r.txHash : null,
+      // A view read without owners (an approval's) keeps the last ones read.
+      owners: typeof r.owners === "string" ? string(r.owners, 20) : networksView?.networks.find(n => n.chainId === Number(r.chainId))?.owners })),
     offered: list(v.offered, ["chainId", "name", "family", "centerPays"]).map(r => ({ chainId: Number(r.chainId), name: string(r.name, 40), family: string(r.family, 10), centerPays: r.centerPays === true })),
     pending: list(v.pending, ["id", "state", "chainIds"]).map(r => ({ id: string(r.id, 36), state: string(r.state, 20), chainIds: (r.chainIds as unknown[]).map(Number) })) };
 }
@@ -375,7 +377,10 @@ function renderNetworks() {
   const view = session ? networksView : null;
   // The list shows where the account is and where it is arriving; quotes and failures stay out of it.
   const shown = view ? view.networks.filter(item => item.state === "deployed" || item.state === "pending") : [];
-  networksList.textContent = view ? shown.map(item => item.state === "deployed" ? item.name : `${item.name} (deploying…)`).join(", ") : "Base";
+  // Only a chain read as carrying Base's owners is up to date; an unread one never is.
+  const owners = (item: { owners: string | undefined }) => item.owners === "consistent" ? ": Up to date" : item.owners === "diverged" ? ": Needs update" : item.owners ? ": Couldn't check" : "";
+  networksList.textContent = view ? shown.map(item => item.state === "deployed" ? `${item.name}${owners(item)}` : `${item.name} (deploying…)`).join(", ")
+    + (shown.some(item => item.owners === "diverged") ? ". Actions on a network that needs an update wait until its owners match Base." : "") : "Base";
   networksAdd.hidden = !view || !view.offered.length || networksOpen || busy || fundsPage;
   networksForm.hidden = !view || !networksOpen;
   element<HTMLButtonElement>("wallet-networks-deploy").disabled = busy;

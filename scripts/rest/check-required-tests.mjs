@@ -14,6 +14,8 @@ export const requiredVitestSuites = [
   "test/rest-smart-accounts-postgres.integration.test.ts",
   "test/rest-transactions-postgres.integration.test.ts",
   "test/rest-user-operations-postgres.integration.test.ts",
+  "test/rest-wallet-owner-state.test.ts",
+  "test/rest-wallet-owner-state-postgres.integration.test.ts",
   "test/rest-sponsorship-postgres.integration.test.ts",
   "test/rest-sessions-postgres.integration.test.ts",
   "test/rest-smart-account-onboarding-store.integration.test.ts",

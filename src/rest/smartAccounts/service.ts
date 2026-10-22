@@ -37,7 +37,7 @@ import type {
 } from "./types.js";
 import { walletPasskeyConsentBinding } from "../wallet/bindingConsent.js";
 
-const safeAbi = parseAbi([
+export const safeAbi = parseAbi([
   "function VERSION() view returns (string)",
   "function getOwners() view returns (address[])",
   "function getThreshold() view returns (uint256)",
