@@ -462,8 +462,13 @@ async function signNetworkOwners(plan: Json, words: string | null, chainIds: num
   const signatures = [], wallet = words ? null : injectedWallet();
   if (!words && !wallet) { setStatus("ready", backupNeededText); return null; }
   for (const chain of chains) {
-    let signed: string[];
-    const expected = { walletAddress: session!.walletAddress, chainIds, homeOwners };
+    let signed: string[], destination: Awaited<ReturnType<typeof kit.readChainSafe>>;
+    const chainId = Number(record(chain).chainId), name = signaChains.find(item => item.chainId === chainId)?.name;
+    if (!name || !chainIds.includes(chainId)) throw new InvalidResponse();
+    // The network's own owners and nonce, read here too: a signature never waits for a nonce the network has not reached.
+    try { destination = await kit.readChainSafe(session!.walletAddress, chainId); }
+    catch { setStatus("ready", `Couldn't read this account's owners on ${name}. Try again.`); return null; }
+    const expected = { walletAddress: session!.walletAddress, chainIds, homeOwners, destination }, hexChain = `0x${chainId.toString(16)}`;
     if (wallet) {
       let checked: ReturnType<typeof kit.walletOwnerUpdateDocuments>;
       try { checked = kit.walletOwnerUpdateDocuments(chain, expected); } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); return null; }
@@ -472,9 +477,13 @@ async function signNetworkOwners(plan: Json, words: string | null, chainIds: num
         if (!Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== checked.recoveryOwner.toLowerCase()) {
           setStatus("ready", "Select the wallet you chose at signup, then try again."); return null;
         }
+        // A wallet signs typed data only for its current network, so it is switched to this update's first.
+        await wallet.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexChain }] });
+        if (await wallet.request({ method: "eth_chainId" }) !== hexChain) { setStatus("ready", `Switch your wallet to ${name}, then try again.`); return null; }
         signed = [];
         for (const document of checked.documents) signed.push(string(await wallet.request({ method: "eth_signTypedData_v4", params: [checked.recoveryOwner,
-          JSON.stringify(document, (_key, value) => typeof value === "bigint" ? value.toString() : value)] }), 132));
+          JSON.stringify({ ...document, types: { EIP712Domain: [{ name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }], ...document.types } },
+            (_key, value) => typeof value === "bigint" ? value.toString() : value)] }), 132));
       } catch (error) {
         if ((error as { code?: unknown })?.code === 4001) { setStatus("ready", "Nothing was signed."); return null; }
         throw error;

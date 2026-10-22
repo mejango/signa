@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mnemonicToAccount } from 'viem/accounts';
-import { createWalletRecoverySecret, readHomeOwners, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
+import { createWalletRecoverySecret, readChainSafe, readHomeOwners, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
 import { encodeFunctionData, getAddress, hashTypedData, parseAbi, recoverAddress, type Address } from 'viem';
 import { walletOwnerChangeSafeTx, walletOwnerPlan } from '../src/rest/web/walletRecoveryReview.js';
 
@@ -47,15 +47,17 @@ describe('a network owner update signed with the backup', () => {
   const wallet = identity.walletAddress, abi = parseAbi(['function addOwnerWithThreshold(address owner,uint256 _threshold)', 'function removeOwner(address prevOwner,address owner,uint256 _threshold)']);
   const update = (steps = walletOwnerPlan([p0, account.address], [d1, p1, account.address]).steps, owners = [d1, p1, account.address]) =>
     ({ chainId: 10, walletAddress: wallet, recoveryOwner: account.address, from: [p0, account.address], owners, safeNonce: '4', steps });
+  // Optimism as its public RPC reports it: the original owners, at nonce 4.
+  const destination = { deployed: true, owners: [p0, account.address], threshold: 1n, nonce: 4n };
   it('signs each owner call for its chain at consecutive nonces once the calls lead to the owners shown', async () => {
-    const value = update(), signatures = await signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10], homeOwners: [d1, p1, account.address] });
+    const value = update(), signatures = await signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10], homeOwners: [d1, p1, account.address], destination });
     expect(signatures).toHaveLength(2);
     for (const [index, signature] of signatures.entries())
       expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(wallet, value.steps[index]!, String(4 + index), 10)), signature })).toBe(account.address);
   });
   it('refuses calls that differ from what the page can check', async () => {
     const sign = (value: unknown, chainIds = [10], walletAddress: string = wallet) => signWalletOwnerUpdate(phrase, value, { walletAddress, chainIds,
-      homeOwners: (value as { owners: Address[] }).owners });
+      homeOwners: (value as { owners: Address[] }).owners, destination });
     await expect(sign(update(), [42161])).rejects.toThrow();
     await expect(sign(update(), [10], `0x${'33'.repeat(20)}`)).rejects.toThrow();
     await expect(sign(update(undefined, [p1, account.address]))).rejects.toThrow();
@@ -67,25 +69,48 @@ describe('a network owner update signed with the backup', () => {
   });
   it('refuses owners from the server that Base does not hold, extra or substituted', async () => {
     const attacker = getAddress(`0x${'e1'.repeat(20)}`), base = [d1, p1, account.address];
-    const sign = (owners: Address[]) => signWalletOwnerUpdate(phrase, update(walletOwnerPlan([p0, account.address], owners).steps, owners), { walletAddress: wallet, chainIds: [10], homeOwners: base });
+    const sign = (owners: Address[]) => signWalletOwnerUpdate(phrase, update(walletOwnerPlan([p0, account.address], owners).steps, owners), { walletAddress: wallet, chainIds: [10], homeOwners: base, destination });
     await expect(sign([d1, p1, attacker, account.address])).rejects.toThrow();
     await expect(sign([attacker, p1, account.address])).rejects.toThrow();
     await expect(sign([p1, account.address])).rejects.toThrow();
     expect(await sign([p1, account.address, d1])).toHaveLength(2);
   });
+  it('refuses a starting point the network does not hold, so no signature waits for a later nonce', async () => {
+    const owners = [p0, account.address], sign = (value: ReturnType<typeof update>, there: typeof destination = destination) =>
+      signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10], homeOwners: owners, destination: there });
+    // The server claims only the backup is there, at a nonce ahead of the network's: signing would let it restore p0 later.
+    const ahead = { ...update(walletOwnerPlan([account.address], owners).steps, owners), from: [account.address], safeNonce: '5' };
+    await expect(sign(ahead)).rejects.toThrow();
+    await expect(sign({ ...ahead, safeNonce: '4' })).rejects.toThrow();
+    const real = update(walletOwnerPlan([p0, account.address], [d1, account.address]).steps, [d1, account.address]);
+    const signReal = (there: typeof destination) => signWalletOwnerUpdate(phrase, real, { walletAddress: wallet, chainIds: [10], homeOwners: [d1, account.address], destination: there });
+    expect(await signReal(destination)).toHaveLength(1);
+    await expect(signReal({ ...destination, nonce: 5n })).rejects.toThrow();
+    await expect(signReal({ ...destination, owners: [account.address, p0] })).rejects.toThrow();
+    await expect(signReal({ ...destination, threshold: 2n })).rejects.toThrow();
+    // A network not deployed yet starts from its creation, at nonce 0.
+    const fresh = { deployed: false, owners: [], threshold: 0n, nonce: 0n };
+    await expect(signReal(fresh)).rejects.toThrow();
+    expect(await signWalletOwnerUpdate(phrase, { ...real, safeNonce: '0' }, { walletAddress: wallet, chainIds: [10], homeOwners: [d1, account.address], destination: fresh })).toHaveLength(1);
+  });
 });
 
-describe("the account's owners read from Base's public RPC", () => {
+describe("the account's Safe read from each chain's public RPC", () => {
   const wallet = identity.walletAddress, owners = [getAddress(`0x${'a1'.repeat(20)}`), account.address];
   const word = (value: bigint | string) => BigInt(value).toString(16).padStart(64, '0');
-  const answer = (overrides: Record<number, unknown> = {}) => vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([2, 0, 1].map(id => ({ jsonrpc: '2.0', id,
-    result: id in overrides ? overrides[id] : [ '0x2105', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`][id] }))))));
+  const answer = (overrides: Record<number, unknown> = {}) => vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([2, 0, 4, 1, 3].map(id => ({ jsonrpc: '2.0', id,
+    result: id in overrides ? overrides[id] : ['0x2105', '0x6080', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`, `0x${word(7n)}`][id] }))))));
   afterEach(() => { vi.unstubAllGlobals(); });
-  it('reads the owners Base holds, and refuses another chain, another threshold or a malformed answer', async () => {
+  it('reads the owners, threshold and nonce a chain holds, and refuses another chain or a malformed answer', async () => {
     answer(); expect(await readHomeOwners(wallet)).toEqual(owners);
+    answer(); expect(await readChainSafe(wallet, 8453)).toEqual({ deployed: true, owners, threshold: 1n, nonce: 7n });
+    answer({ 1: '0x' }); expect(await readChainSafe(wallet, 8453)).toMatchObject({ deployed: false });
+    answer({ 1: '0x' }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer(); await expect(readChainSafe(wallet, 10)).rejects.toThrow();
     answer({ 0: '0xa' }); await expect(readHomeOwners(wallet)).rejects.toThrow();
-    answer({ 2: `0x${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
-    answer({ 1: `0x${word(64n)}${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
-    answer({ 1: null }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer({ 3: `0x${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer({ 2: `0x${word(64n)}${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer({ 2: null }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer({ 4: null }); await expect(readHomeOwners(wallet)).rejects.toThrow();
   });
 });

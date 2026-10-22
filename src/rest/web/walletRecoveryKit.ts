@@ -101,9 +101,11 @@ export async function readHomeOwners(walletAddress: string): Promise<Address[]> 
 }
 /** One network's update to Base's owners, checked before anything signs it: the calls must be exactly the ones that take `from` to `owners`
  * (`walletOwnerPlan`: owner calls on this account only, a threshold of one, no owner added on the way that is not in
- * `owners`), on a chain the person chose, with the backup kept as an owner, and `owners` must be exactly the owners
- * this page read from Base itself (`readHomeOwners`). Returns the backup's address and each call's SafeTx, in order from the update's Safe nonce. */
-export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[] }) {
+ * `owners`), on a chain the person chose, with the backup kept as an owner. `owners` must be exactly the owners this page
+ * read from Base itself (`readHomeOwners`). On a deployed network, `from`, its order and the Safe nonce must be exactly what
+ * this page read there (`readChainSafe`), so no signature waits for a later nonce; an undeployed one starts at nonce 0.
+ * Returns the backup's address and each call's SafeTx, in order. */
+export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[]; destination: WalletChainSafe }) {
   const update = input as { chainId: number; walletAddress: Address; recoveryOwner: Address; from: Address[]; owners: Address[]; safeNonce: string; steps: Hex[] };
   const owners = (value: unknown) => { if (!Array.isArray(value) || !value.length || value.length > 16) invalid(); for (const item of value) address(item); return (value as Address[]).map(item => getAddress(item)); };
   if (!update || typeof update !== 'object' || !expected.chainIds.includes(update.chainId) || !Array.isArray(update.steps) || !update.steps.length) invalid();
@@ -112,12 +114,15 @@ export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAdd
   const backup = getAddress(update.recoveryOwner), from = owners(update.from), target = owners(update.owners);
   if (new Set(target).size !== target.length || !from.includes(backup) || !target.includes(backup)
     || target.length !== expected.homeOwners.length || target.some(owner => !expected.homeOwners.some(item => getAddress(item) === owner))) invalid();
+  const there = expected.destination;
+  if (there.deployed ? there.threshold !== 1n || BigInt(update.safeNonce) !== there.nonce || from.length !== there.owners.length
+    || from.some((owner, index) => owner !== there.owners[index]) : update.safeNonce !== '0') invalid();
   const plan = walletOwnerPlan(from, target);
   if (plan.steps.length !== update.steps.length || plan.steps.some((step, index) => step !== update.steps[index])) invalid();
   return { recoveryOwner: backup, documents: plan.steps.map((step, index) => walletOwnerChangeSafeTx(update.walletAddress, step, String(BigInt(update.safeNonce) + BigInt(index)), update.chainId)) };
 }
 /** The backup file or password signs one checked network update (`walletOwnerUpdateDocuments`). */
-export async function signWalletOwnerUpdate(mnemonic: string, input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[] }): Promise<Hex[]> {
+export async function signWalletOwnerUpdate(mnemonic: string, input: unknown, expected: Parameters<typeof walletOwnerUpdateDocuments>[1]): Promise<Hex[]> {
   const { recoveryOwner, documents } = walletOwnerUpdateDocuments(input, expected), backup = recoveryAccountFromPhrase(mnemonic, recoveryOwner);
   return Promise.all(documents.map(document => backup.signTypedData(document)));
 }

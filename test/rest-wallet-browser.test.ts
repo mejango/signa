@@ -150,6 +150,17 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   const backupWords = generateMnemonic(english, 256), backupOwner = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }).address;
   const ownerAbi = parseAbi(["function swapOwner(address prevOwner,address oldOwner,address newOwner)", "function removeOwner(address prevOwner,address owner,uint256 _threshold)"]);
   const [oldPasskey, newPasskey] = [getAddress(`0x${"a0".repeat(20)}`), getAddress(`0x${"a1".repeat(20)}`)];
+  /** One chain's public RPC as the page reads it: the account's Safe deployed there with these owners, threshold one, at this nonce. Returns the request bodies. */
+  async function chainRpc(target: Page, url: string, chainId: number, owners: string[], nonce: bigint) {
+    const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0"), reads: string[] = [];
+    const results = [`0x${chainId.toString(16)}`, "0x6080", `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join("")}`, `0x${word(1n)}`, `0x${word(nonce)}`];
+    await target.route(`${url}/**`, async route => {
+      reads.push(route.request().postData() ?? "");
+      await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify(results.map((result, id) => ({ jsonrpc: "2.0", id, result }))) });
+    });
+    return reads;
+  }
   const csrf = encode(Buffer.alloc(32, 9)), intentId = encode(Buffer.alloc(32, 10));
   const state = encode(Buffer.alloc(32, 11)), code = encode(Buffer.alloc(32, 12));
   const challenge = encode(Buffer.alloc(32, 13)), handle = encode(Buffer.alloc(32, 14));
@@ -483,14 +494,10 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     const sentinel = "0x0000000000000000000000000000000000000001";
     // An update that would remove the backup is refused before anything is signed or sent.
     ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "removeOwner", args: [oldPasskey, backupOwner, 1n] })] };
-    // Base's public RPC, as the page reads it itself: the current passkey and the backup, threshold one.
-    const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0"), baseReads: string[] = [];
-    await page.route("https://mainnet.base.org/**", async route => {
-      baseReads.push(route.request().postData() ?? "");
-      const owners = `0x${word(32n)}${word(2n)}${word(newPasskey)}${word(backupOwner)}`;
-      await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
-        body: JSON.stringify([{ jsonrpc: "2.0", id: 0, result: "0x2105" }, { jsonrpc: "2.0", id: 1, result: owners }, { jsonrpc: "2.0", id: 2, result: `0x${word(1n)}` }]) });
-    });
+    // The chains' public RPCs, as the page reads them itself: Base holds the current passkey and the backup; Optimism
+    // still the old passkey and the backup, at nonce 3.
+    const baseReads = await chainRpc(page, "https://mainnet.base.org", 8453, [newPasskey, backupOwner], 9n);
+    await chainRpc(page, "https://mainnet.optimism.io", 10, [oldPasskey, backupOwner], 3n);
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
     await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
     await page.locator("#wallet-networks-update").click();
@@ -525,18 +532,21 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   });
 
   it("updates an out-of-date network with the backup wallet chosen at signup when no backup file or password is given", async () => {
-    const sentinel = "0x0000000000000000000000000000000000000001", word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0");
+    const sentinel = "0x0000000000000000000000000000000000000001";
     ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
-    await page.route("https://mainnet.base.org/**", route => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
-      body: JSON.stringify([{ jsonrpc: "2.0", id: 0, result: "0x2105" }, { jsonrpc: "2.0", id: 1, result: `0x${word(32n)}${word(2n)}${word(newPasskey)}${word(backupOwner)}` },
-        { jsonrpc: "2.0", id: 2, result: `0x${word(1n)}` }]) }));
-    // The signup wallet, injected: it holds the backup key and signs what the page asks.
+    await chainRpc(page, "https://mainnet.base.org", 8453, [newPasskey, backupOwner], 9n);
+    await chainRpc(page, "https://mainnet.optimism.io", 10, [oldPasskey, backupOwner], 3n);
+    // The signup wallet, injected: it holds the backup key, starts on Base, and signs what the page asks.
     const backup = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }), asked: string[] = [];
+    let walletChain = "0x2105", domainTypes: unknown = null;
     await page.exposeFunction("backupWallet", async (method: string, params: unknown[]) => {
       asked.push(method);
       if (method === "eth_requestAccounts") return [backup.address];
-      const document = JSON.parse(params[1] as string);
-      return backup.signTypedData({ ...document, message: { ...document.message, nonce: BigInt(document.message.nonce), value: 0n, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n } });
+      if (method === "wallet_switchEthereumChain") { walletChain = (params[0] as { chainId: string }).chainId; return null; }
+      if (method === "eth_chainId") return walletChain;
+      const { types: { EIP712Domain, ...types }, ...document } = JSON.parse(params[1] as string);
+      domainTypes = EIP712Domain;
+      return backup.signTypedData({ ...document, types, message: { ...document.message, nonce: BigInt(document.message.nonce), value: 0n, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n } });
     });
     await page.addInitScript(() => { (window as unknown as { ethereum: unknown }).ethereum = { request: ({ method, params }: { method: string; params?: unknown[] }) =>
       (window as unknown as { backupWallet(method: string, params: unknown[]): Promise<unknown> }).backupWallet(method, params ?? []) }; });
@@ -546,7 +556,9 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(await page.locator("#wallet-networks-backup").textContent()).toContain("your wallet asks to sign");
     await page.locator("#wallet-networks-deploy").click();
     await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
-    expect(asked).toEqual(["eth_requestAccounts", "eth_signTypedData_v4"]);
+    expect(asked).toEqual(["eth_requestAccounts", "wallet_switchEthereumChain", "eth_chainId", "eth_signTypedData_v4"]);
+    expect(walletChain).toBe("0xa");
+    expect(domainTypes).toEqual([{ name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }]);
     const [signature] = requests.filter(item => item.path === "/wallet/networks/owners")[0]!.body.signatures[0].signatures as Hex[];
     expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(walletAddress as Hex, ownerUpdate.steps[0]!, "3", 10)), signature: signature! })).toBe(backupOwner);
     expect(errors).toEqual([]);
