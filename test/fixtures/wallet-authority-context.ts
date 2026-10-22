@@ -10,12 +10,12 @@ import { createRegistration, enrollmentBackupAccount, enrollmentManifest, signBa
  * This fixture proves neither database admission nor canonical deployment or live setup possession. */
 /** The primary passkey's signing material for the most recent fixture, for tests that must sign as it. */
 export let lastFixturePrimary: { credentialId: string; key: import("node:crypto").KeyObject; publicKey: { x: Hex; y: Hex }; userHandle: string } | null = null;
-export async function createWalletAuthorityContextFixture(now = 1_800_000_120_000): Promise<WalletAuthorityContext> {
+export async function createWalletAuthorityContextFixture(now = 1_800_000_120_000, manifest = enrollmentManifest): Promise<WalletAuthorityContext> {
   const hash = (byte: string): Hex => `0x${byte.repeat(64)}`;
   const block = () => ({ chainId: 8453, blockNumber: "100", blockHash: hash("a"), timestamp: String(Math.floor(now / 1000)), source: "onchain" as const });
   const issued = now - 120_000;
   const issuedSeconds = Math.floor(issued / 1000);
-  const intent = createWalletEnrollmentIntent({ manifest: enrollmentManifest, rpId: "juicebox.center", origin: "https://juicebox.center",
+  const intent = createWalletEnrollmentIntent({ manifest, rpId: "juicebox.center", origin: "https://juicebox.center",
     recoveryOwner: enrollmentBackupAccount.address, expiresAt: issued + 60000 });
   const empty: WalletEnrollment = { intent, createdAt: issued, state: "awaiting_registration", candidate: null,
     candidateDigest: null, creation: null, possession: null, receipt: null };

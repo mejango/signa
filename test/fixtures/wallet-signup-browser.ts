@@ -26,6 +26,7 @@ import { exerciseRecoveryBrowser } from './wallet-recovery-browser.js';
 import { createWalletSite } from '../../src/rest/wallet/site.js';
 import { walletSignupCookie } from '../../src/rest/wallet/http.js';
 import { enrollmentBackupAccount } from './wallet-enrollment-crypto.js';
+import { signaChains } from '../../src/rest/wallet/chains.js';
 import type { startWalletDeploymentAnvil } from './wallet-deployment-anvil.js';
 
 /** Real browser, HTTP handlers, PostgreSQL and unforked EVM. Only the hardware
@@ -123,6 +124,14 @@ export async function exerciseSignupBrowser(options: Omit<LocalWalletSignupDepen
   const page = await context.newPage(), errors: string[] = [];
   page.on('pageerror', error => errors.push(error.name));
   page.setDefaultTimeout(15000);
+  // Base's public RPC, which the recovery page reads before the backup signs, is this local chain.
+  const base = signaChains.find(chain => chain.chainId === 8453)!.publicRpc;
+  await page.route(url => url.href.replace(/\/$/, '') === base, async route => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const response = await fetch(options.fixture.endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: route.request().postData()! });
+    return route.fulfill({ status: response.status, headers: { ...cors, 'content-type': 'application/json' }, body: await response.text() });
+  });
   await page.exposeFunction('recoveryTestRequest', async (input: { method: string; params?: unknown[] }) => {
     if (kitMode) throw new Error('First-time signup must not request an external wallet.');
     if (input.method === 'eth_requestAccounts') return [enrollmentBackupAccount.address];

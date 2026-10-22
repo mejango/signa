@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { RestError } from '../core.js';
 import { validateWalletRpConfiguration } from './webauthn.js';
+import { signaChains } from './chains.js';
 import type { WalletAssertion } from './webauthn.js';
 
 export const walletSessionCookie = '__Host-center-wallet';
@@ -13,9 +14,10 @@ export const walletLaunchCookie = '__Host-center-wallet-launch';
 export type WalletCookieName = typeof walletSessionCookie | typeof walletFlowCookie | typeof walletSignupCookie | typeof walletSignupResumeCookie
   | typeof walletRecoveryCookie | typeof walletRecoveryResumeCookie | typeof walletLaunchCookie;
 
-/** Every page that can ask for a passkey: no frame of any other origin and no payment API. */
+/** Every page that can ask for a passkey: no frame of any other origin and no payment API. The chains' public RPCs are
+ * the only other origins it reads, so it can check owners without Signa's server. */
 export const walletSigningPageHeaders = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+  'Content-Security-Policy': `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' ${signaChains.map(chain => new URL(chain.publicRpc).origin).join(' ')}; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`,
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY', 'Permissions-Policy': 'publickey-credentials-get=(self), publickey-credentials-create=(self), payment=()',
 };

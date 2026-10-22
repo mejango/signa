@@ -1,12 +1,12 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
 import { defaultPasskeyName } from './passkeyName.js';
 import { base } from './walletBase.js';
-import { getAddress, hashTypedData, isAddress, type Address, type TypedDataDefinition } from 'viem';
+import { getAddress, hashTypedData, isAddress, type Address, type Hex, type TypedDataDefinition } from 'viem';
 import type { WalletRecoveryView } from '../wallet/recoveryService.js';
 import type { WalletRecoveryRotation } from '../wallet/recoveryRotation.js';
 import type { WalletRecoveryKit, WalletRecoverySecret } from './walletRecoveryKit.js';
 import { loadRecoveryKit as loadKit, preloadRecoveryKit } from './walletRecoveryKitLoader.js';
-import { assertWalletRecoveryRotationReview } from './walletRecoveryReview.js';
+import { assertWalletRecoveryRotationReview, walletPasskeyPublicKey, walletPasskeySigner } from './walletRecoveryReview.js';
 import { SIGNA_HOME_CHAIN_ID, signaChainName } from '../wallet/chains.js';
 
 type Ethereum = { request(input: { method: string; params?: unknown[] }): Promise<unknown> };
@@ -109,6 +109,8 @@ function accept(result: { view: WalletRecoveryView | null; csrfToken?: string })
   if (value?.phase === 'ready_to_sign_in' && !left.length) {
     secret = null; kit = null; words().value = ''; el<HTMLInputElement>('recovery-file').value = ''; sessionStorage.removeItem('center:recovery:browser:' + value.id);
   }
+  // The passkey key stays until every chain shows it: a chain that fails later is repaired with it.
+  if (value?.phase === 'ready_to_sign_in' && value.chains.every(chain => chain.state === 'updated')) { try { localStorage.removeItem(passkeyKey(value.id)); } catch { /* Nothing kept. */ } }
   if (left.length) message(`${listed(left.map(chain => signaChainName(chain.chainId)))} still ${left.length > 1 ? 'accept' : 'accepts'} the old passkey. Open your backup and review the update.`);
   else message(value ? steps[value.phase] : reference.value ? 'Resume the original recovery with its replacement passkey and your backup.' : 'Open your backup file, or choose another way in below.');
 }
@@ -205,6 +207,32 @@ async function signBackup(document: TypedDataDefinition, owner: string) {
   if (typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature)) throw new Error('The recovery owner signature is unavailable.');
   return signature;
 }
+/** The replacement passkey's public key, kept by the browser that created it; its signer is derived here, never taken from the server. */
+const passkeyKey = (id: string) => 'center:recovery:passkey:' + id;
+function ownPasskey() {
+  if (!view) invalid();
+  let stored: unknown = null;
+  try { stored = JSON.parse(localStorage.getItem(passkeyKey(view.id)) ?? 'null'); } catch { /* Absent below. */ }
+  if (!stored) throw new Error('Continue this recovery in the browser where you created its replacement passkey.');
+  const own = walletPasskeySigner(stored as { x: Hex; y: Hex }), context = view.rotationContext;
+  if (!sameAddress(view.replacementSigner, own.replacementSigner) || !context || context.publicKey.x !== own.rotationContext.publicKey.x
+    || context.publicKey.y !== own.rotationContext.publicKey.y || !sameAddress(context.signerFactory, own.rotationContext.signerFactory)
+    || !/^0x[0-9a-fA-F]{1,64}$/.test(context.verifiers) || BigInt(context.verifiers) !== BigInt(own.rotationContext.verifiers)) invalid();
+  return own;
+}
+/** Each swap is checked against its own chain, read by this page through the chain's public RPC at one block: the old
+ * passkey is a current owner, the link before it and the Safe nonce are what was signed, and nothing else is assumed. */
+async function checkChains(items: { chainId: number; review: WalletRecoveryRotation }[], replacementSigner: Address) {
+  const kit = await loadKit();
+  await Promise.all(items.map(async ({ chainId, review }) => {
+    let safe: Awaited<ReturnType<typeof kit.readChainSafe>>;
+    try { safe = await kit.readChainSafe(view!.walletAddress, chainId); }
+    catch { throw new Error(`${signaChainName(chainId)} could not be read, so nothing was signed. Try again shortly.`); }
+    const at = safe.owners.findIndex(owner => sameAddress(owner, view!.priorSigner));
+    if (!safe.deployed || safe.threshold !== 1n || at < 0 || sameAddress(view!.priorSigner, view!.recoveryOwner) || safe.owners.some(owner => sameAddress(owner, replacementSigner))
+      || !sameAddress(review.previousOwner, at ? safe.owners[at - 1] : '0x0000000000000000000000000000000000000001') || BigInt(review.safeNonce) !== safe.nonce) invalid();
+  }));
+}
 async function assertion(challenge: string, rpId: string) {
   if (rpId !== location.hostname || !window.isSecureContext) throw new Error('Open the original secure account page.');
   native = new AbortController(); render();
@@ -216,6 +244,7 @@ async function assertion(challenge: string, rpId: string) {
 }
 function possessionDocument() {
   if (!view?.possession || !view.replacementSigner) invalid();
+  const own = ownPasskey();
   const document = view.possession.document as unknown as TypedDocument, value = document.message;
   schema(document, 'WalletRecovery', [['purpose','string'],['recoveryId','string'],['accountId','string'],['enrollmentId','string'],['enrollmentDigest','bytes32'],
     ['priorCredentialDigest','bytes32'],['priorBindingDigest','bytes32'],['initializerHash','bytes32'],['manifestCommitment','bytes32'],['priorSigner','address'],
@@ -224,7 +253,7 @@ function possessionDocument() {
   if (document.domain.name !== 'Juicebox Center Wallet Recovery' || document.domain.version !== '1' || document.domain.chainId !== 8453
     || !sameAddress(document.domain.verifyingContract, view.walletAddress) || value.purpose !== 'replace-passkey' || value.recoveryId !== view.id
     || value.accountId !== 'eip155:8453:' + view.walletAddress.toLowerCase() || value.origin !== location.origin || value.rpId !== location.hostname
-    || value.initializerHash !== view.initializerHash || !sameAddress(value.priorSigner, view.priorSigner) || !sameAddress(value.replacementSigner, view.replacementSigner)
+    || value.initializerHash !== view.initializerHash || !sameAddress(value.priorSigner, view.priorSigner) || !sameAddress(value.replacementSigner, own.replacementSigner)
     || !sameAddress(value.recoveryOwner, view.recoveryOwner) || BigInt(value.expiresAtMs) !== BigInt(view.proofExpiresAtMs)
     || BigInt(value.expiresAtMs) <= BigInt(Date.now()) || BigInt(value.issuedAtMs) > BigInt(Date.now() + 30000)
     || BigInt(value.expiresAtMs) > BigInt(value.issuedAtMs) + 300000n || hash(document) !== view.possession.challenge) invalid();
@@ -240,6 +269,8 @@ async function advance() {
       authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' }, attestation: 'none', timeout: 90000 }, signal: native.signal });
     if (!(value instanceof PublicKeyCredential) || !(value.response instanceof AuthenticatorAttestationResponse)) throw new Error('The passkey response is unavailable.');
     native = null;
+    try { localStorage.setItem(passkeyKey(view.id), JSON.stringify(walletPasskeyPublicKey(value.response.getPublicKey(), value.response.getPublicKeyAlgorithm()))); }
+    catch (error) { throw error instanceof Error && error.message.startsWith('The recovery') ? error : new Error('Allow this site to store data, then create the replacement passkey again.'); }
     await send('register', { type: 'public-key', credentialId: encode(value.rawId), rawId: encode(value.rawId),
       clientDataJSON: encode(value.response.clientDataJSON), attestationObject: encode(value.response.attestationObject) });
   } else if (view.phase === 'awaiting_possession' && view.possession) {
@@ -250,7 +281,7 @@ async function advance() {
     // After activation Base is done; the review then holds only the chains still on the old passkey.
     const repair = view.phase !== 'awaiting_rotation_approval', scope = new Set(unfinished().map(chain => chain.chainId));
     if (!view.replacementSigner || !view.candidateDigest || !view.rotationContext) invalid();
-    const selected = { ...view, replacementSigner: view.replacementSigner, candidateDigest: view.candidateDigest, rotationContext: view.rotationContext };
+    const own = ownPasskey(), selected = { ...view, replacementSigner: own.replacementSigner, candidateDigest: view.candidateDigest, rotationContext: own.rotationContext };
     // One review covers Base and every other chain the account is on: the same swap, each for its own chain and Safe nonce.
     const documents = (value: Review) => {
       if (!value || (repair ? value.review !== null || value.document !== null : !value.review || value.review.chainId !== undefined)
@@ -272,7 +303,10 @@ async function advance() {
         ...(result.chains.length ? { otherNetworks: result.chains.map(item => ({ chainId: item.review.chainId, safeNonce: item.review.safeNonce, swapOwner: item.review.swapOwner })) } : {}) }, null, 2);
       message('Review the account and the exact calls below, then approve the replacement with your backup.');
     } else {
-      const checked = documents(rotation), backupSignature = checked.base ? await signBackup(checked.base, view.recoveryOwner) : null;
+      const checked = documents(rotation);
+      await checkChains([...(rotation.review ? [{ chainId: SIGNA_HOME_CHAIN_ID, review: rotation.review }] : []),
+        ...rotation.chains.map(item => ({ chainId: item.review.chainId!, review: item.review }))], own.replacementSigner);
+      const backupSignature = checked.base ? await signBackup(checked.base, view.recoveryOwner) : null;
       const chainSignatures = [];
       for (const item of checked.chains) chainSignatures.push({ chainId: item.chainId!, signature: await signBackup(item.document, view.recoveryOwner) });
       await send('rotation/approve', backupSignature ? { backupSignature, chainSignatures } : { chainSignatures });

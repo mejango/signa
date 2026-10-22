@@ -4,7 +4,10 @@ import { createWalletAuthorityContextFixture } from './fixtures/wallet-authority
 import { createRegistration } from './fixtures/wallet-enrollment-crypto.js';
 import { createWalletRecoveryIntent, prepareWalletRecoveryCandidate, type WalletRecoveryCandidate } from '../src/rest/wallet/recovery.js';
 import { prepareWalletRecoveryRotation, walletRecoveryRotationDocument } from '../src/rest/wallet/recoveryRotation.js';
-import { assertWalletRecoveryRotationReview, type WalletRecoveryReviewSelection } from '../src/rest/web/walletRecoveryReview.js';
+import { assertWalletRecoveryRotationReview, WALLET_PASSKEY_PROFILE, walletPasskeyPublicKey, walletPasskeySigner, type WalletRecoveryReviewSelection } from '../src/rest/web/walletRecoveryReview.js';
+import { generateKeyPairSync } from 'node:crypto';
+import { preparePasskeyDependencyDeployment } from '../src/rest/smartAccounts/passkeyProfile.js';
+import { predictPasskeySignerAddress } from '../src/rest/smartAccounts/passkeyCreation.js';
 
 let candidate: WalletRecoveryCandidate;
 beforeAll(async () => {
@@ -77,5 +80,18 @@ describe('browser recovery rotation review', () => {
     Object.defineProperty(response.review, 'candidateDigest', { get() { invoked = true; return selected.candidateDigest; }, enumerable: true });
     expect(() => assertWalletRecoveryRotationReview(response, selected)).toThrow(); expect(invoked).toBe(false);
     expect(() => assertWalletRecoveryRotationReview({ ...fixture().response, extra: 'x'.repeat(20000) }, selected)).toThrow();
+  });
+});
+
+describe('browser passkey signer', () => {
+  it('derives the same signer as the server from the built-in profile and a new passkey key', async () => {
+    const { profile } = await preparePasskeyDependencyDeployment();
+    expect(WALLET_PASSKEY_PROFILE).toEqual({ signerFactory: profile.signerFactory.address, signerSingleton: profile.signerSingleton.address, p256Verifier: profile.p256Verifier.address });
+    const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' }), spki = publicKey.export({ format: 'der', type: 'spki' });
+    const key = walletPasskeyPublicKey(spki.buffer.slice(spki.byteOffset, spki.byteOffset + spki.length) as ArrayBuffer, -7), jwk = publicKey.export({ format: 'jwk' });
+    expect(key).toEqual({ x: `0x${Buffer.from(jwk.x!, 'base64url').toString('hex')}`, y: `0x${Buffer.from(jwk.y!, 'base64url').toString('hex')}` });
+    expect(walletPasskeySigner(key).replacementSigner).toBe(predictPasskeySignerAddress({ manifest: { ...candidate.intent.manifest, ownerProfile: profile }, publicKey: key }));
+    expect(() => walletPasskeyPublicKey(spki.buffer as ArrayBuffer, -257)).toThrow();
+    expect(() => walletPasskeySigner({ x: key.x, y: `0x${'00'.repeat(32)}` })).toThrow();
   });
 });
