@@ -33,10 +33,10 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
   const safe = (candidate: WalletRecoveryCandidate) => getAddress(candidate.intent.accountId.slice(`eip155:${SIGNA_HOME_CHAIN_ID}:`.length));
   const read = (candidate: WalletRecoveryCandidate, chainId: number, signal?: AbortSignal) => readWalletSafe({ account: safe(candidate), chainId, rpc, now, ...(signal ? { signal } : {}) });
   const rotated = (owners: readonly Address[], candidate: WalletRecoveryCandidate) => same(owners, candidate.signerAddress) && !same(owners, candidate.intent.priorSigner);
-  /** The chains to update. A deployment still settling could already be on chain, so it holds the review until it settles. */
+  /** The chains to update. A deployment with a signed payment could already be on chain, so it holds the review until it settles. */
   async function deployed(candidate: WalletRecoveryCandidate) {
-    const networks = (await networkRows.listNetworks(candidate.intent.accountId)).filter(row => row.chainId !== SIGNA_HOME_CHAIN_ID);
-    if (networks.some(row => row.state === "pending")) throw new RestError(503, "WALLET_RECOVERY_CHAIN_UNAVAILABLE", "A network is still being added to this account. Try again shortly.");
+    const accountId = candidate.intent.accountId, networks = (await networkRows.listNetworks(accountId)).filter(row => row.chainId !== SIGNA_HOME_CHAIN_ID);
+    if (networks.some(row => row.state === "pending") || (await networkRows.listBundles(accountId)).some(bundle => !bundle.purpose && bundle.state === "paying")) throw new RestError(503, "WALLET_RECOVERY_CHAIN_UNAVAILABLE", "A network is still being added to this account. Try again shortly.");
     return networks.filter(row => row.state === "deployed").map(row => row.chainId);
   }
   async function set(id: string, chainId: number, from: WalletRecoveryChainState[], state: WalletRecoveryChainState, reason: string | null) {
@@ -59,19 +59,21 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
     const states = await Promise.all(open.map(row => read(candidate, Number(row.chain_id), signal).catch(() => null)));
     // A bundle that failed before any payment was signed for it costs no attempt.
     const resend: Row[] = [], unpaid = new Set<number>();
+    // The signed swap still applies only while the old passkey is an owner and the Safe nonce is the one signed.
+    const live = open.map((row, index) => !!states[index] && same(states[index].owners, candidate.intent.priorSigner) && states[index].nonce.toString() === row.review!.safeNonce);
+    const payable = (bundleId: string) => open.every((row, index) => row.bundle_id !== bundleId || live[index]);
     for (const [index, row] of open.entries()) {
-      const chainId = Number(row.chain_id), state = states[index];
-      if (!state) continue;
+      const chainId = Number(row.chain_id), state = states[index], outcome = row.state === "submitted" ? outcomes.get(row.bundle_id!) : undefined;
+      // A chain stays open while its payment is unsettled or unread, so the payment keeps being reconciled.
+      if (!state || (row.state === "submitted" && (!outcome || outcome.state === "paying"))) continue;
       if (rotated(state.owners, candidate)) { await set(id, chainId, ["approved", "submitted"], "updated", null); continue; }
-      // The signed swap still applies only while the old passkey is an owner and the Safe nonce is the one signed.
-      const live = same(state.owners, candidate.intent.priorSigner) && state.nonce.toString() === row.review!.safeNonce;
-      if (row.state === "submitted") {
-        const outcome = outcomes.get(row.bundle_id!);
-        if (outcome?.state === "quoted") { await options.networks!.payOwnerCalls(candidate.intent.accountId, row.bundle_id!).catch(() => undefined); continue; }
-        if (!outcome || (outcome.state !== "failed" && !outcome.failed.includes(chainId))) { if (!live) await set(id, chainId, ["submitted"], "failed", "approval-stale"); continue; }
+      if (outcome) {
+        // A quote is funded only while every swap it carries still applies; otherwise its live chains are quoted again.
+        if (outcome.state === "quoted" && payable(row.bundle_id!)) { await options.networks!.payOwnerCalls(candidate.intent.accountId, row.bundle_id!).catch(() => undefined); continue; }
+        if (outcome.state !== "quoted" && outcome.state !== "failed" && !outcome.failed.includes(chainId)) { if (!live[index]) await set(id, chainId, ["submitted"], "failed", "approval-stale"); continue; }
         if (!outcome.paid) unpaid.add(chainId);
       }
-      if (!live) { await set(id, chainId, ["approved", "submitted"], "failed", "approval-stale"); continue; }
+      if (!live[index]) { await set(id, chainId, ["approved", "submitted"], "failed", "approval-stale"); continue; }
       if (row.attempts >= maximumAttempts && !unpaid.has(chainId)) { await set(id, chainId, ["approved", "submitted"], "failed", "attempts-exhausted"); continue; }
       resend.push(row);
     }
