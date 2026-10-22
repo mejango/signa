@@ -238,10 +238,14 @@ suite('durable recovery browser continuation (genuine crypto, modeled canonical 
       if (functionName === 'nonce') return encodeFunctionResult({ abi: safeAbi, functionName, result: chain.nonce });
       throw Error(`unexpected ${method}`);
     } };
-    const deploy = (chainId: number) => pool.query("INSERT INTO rest_wallet_networks(account_id,chain_id,state,bundle_id,tx_hash,updated_at_ms) VALUES($1,$2,'deployed',NULL,NULL,1)", [accountId, chainId]);
+    const deploy = (chainId: number, state = 'deployed') => pool.query(`INSERT INTO rest_wallet_networks(account_id,chain_id,state,bundle_id,tx_hash,updated_at_ms) VALUES($1,$2,$3,NULL,NULL,1)
+      ON CONFLICT(account_id,chain_id) DO UPDATE SET state=EXCLUDED.state`, [accountId, chainId, state]);
     const chains = createWalletRecoveryChains({ pool, rpc }), sign = (review: Parameters<typeof walletRecoveryRotationDocument>[0], account = enrollmentBackupAccount) => account.signTypedData(walletRecoveryRotationDocument(review));
     // An account on Base only needs no other approval.
     expect(await chains.prepare(candidate)).toEqual([]); await chains.approve(candidate, []);
+    // A deployment still settling may already be on chain: the review waits for it.
+    await deploy(10, 'pending');
+    await expect(chains.prepare(candidate)).rejects.toMatchObject({ status: 503, code: 'WALLET_RECOVERY_CHAIN_UNAVAILABLE' });
     await deploy(10);
     // A chain deployed after the review sends the user back to it.
     await expect(chains.approve(candidate, [])).rejects.toMatchObject({ status: 409, code: 'WALLET_RECOVERY_CHAINS_CHANGED' });

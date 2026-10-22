@@ -33,8 +33,11 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
   const safe = (candidate: WalletRecoveryCandidate) => getAddress(candidate.intent.accountId.slice(`eip155:${SIGNA_HOME_CHAIN_ID}:`.length));
   const read = (candidate: WalletRecoveryCandidate, chainId: number, signal?: AbortSignal) => readWalletSafe({ account: safe(candidate), chainId, rpc, now, ...(signal ? { signal } : {}) });
   const rotated = (owners: readonly Address[], candidate: WalletRecoveryCandidate) => same(owners, candidate.signerAddress) && !same(owners, candidate.intent.priorSigner);
+  /** The chains to update. A deployment still settling could already be on chain, so it holds the review until it settles. */
   async function deployed(candidate: WalletRecoveryCandidate) {
-    return (await networkRows.listNetworks(candidate.intent.accountId)).filter(row => row.state === "deployed" && row.chainId !== SIGNA_HOME_CHAIN_ID).map(row => row.chainId);
+    const networks = (await networkRows.listNetworks(candidate.intent.accountId)).filter(row => row.chainId !== SIGNA_HOME_CHAIN_ID);
+    if (networks.some(row => row.state === "pending")) throw new RestError(503, "WALLET_RECOVERY_CHAIN_UNAVAILABLE", "A network is still being added to this account. Try again shortly.");
+    return networks.filter(row => row.state === "deployed").map(row => row.chainId);
   }
   async function set(id: string, chainId: number, from: WalletRecoveryChainState[], state: WalletRecoveryChainState, reason: string | null) {
     await pool.query("UPDATE rest_wallet_recovery_chains SET state=$3,reason=$4,updated_at_ms=$5 WHERE recovery_id=$1 AND chain_id=$2 AND state=ANY($6)",
@@ -47,6 +50,10 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
     await pool.query("UPDATE rest_wallet_recovery_chains SET checked_at_ms=$2 WHERE recovery_id=$1 AND state IN ('approved','submitted')", [id, now()]);
     const open = (await rows(id)).filter(row => row.state === "approved" || row.state === "submitted");
     if (!candidate || !open.length) return;
+    // A signed payment is sent or settled before anything else is read, so it never holds the payer's nonce.
+    const outcomes = new Map<string, Awaited<ReturnType<NonNullable<typeof options.networks>["ownerCallsStatus"]>> | null>();
+    for (const bundleId of new Set(open.flatMap(row => row.state === "submitted" ? [row.bundle_id!] : [])))
+      outcomes.set(bundleId, await options.networks?.ownerCallsStatus(candidate.intent.accountId, bundleId).catch(() => null) ?? null);
     // Every other chain follows Base: nothing is sent until Base's own swap is on chain.
     if (!rotated((await read(candidate, SIGNA_HOME_CHAIN_ID, signal)).owners, candidate)) return;
     const states = await Promise.all(open.map(row => read(candidate, Number(row.chain_id), signal).catch(() => null)));
@@ -59,7 +66,7 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
       // The signed swap still applies only while the old passkey is an owner and the Safe nonce is the one signed.
       const live = same(state.owners, candidate.intent.priorSigner) && state.nonce.toString() === row.review!.safeNonce;
       if (row.state === "submitted") {
-        const outcome = await options.networks?.ownerCallsStatus(candidate.intent.accountId, row.bundle_id!).catch(() => null);
+        const outcome = outcomes.get(row.bundle_id!);
         if (outcome?.state === "quoted") { await options.networks!.payOwnerCalls(candidate.intent.accountId, row.bundle_id!).catch(() => undefined); continue; }
         if (!outcome || (outcome.state !== "failed" && !outcome.failed.includes(chainId))) { if (!live) await set(id, chainId, ["submitted"], "failed", "approval-stale"); continue; }
         if (!outcome.paid) unpaid.add(chainId);
@@ -72,9 +79,9 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
     for (const family of ["mainnet", "testnet"] as const) {
       const batch = resend.filter(row => signaChains.find(chain => chain.chainId === Number(row.chain_id))?.family === family);
       if (!batch.length) continue;
-      if (!options.networks) { for (const row of batch) await set(id, Number(row.chain_id), ["approved", "submitted"], "failed", "no-relay"); continue; }
       let bundleId: string;
       try {
+        if (!options.networks) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network funding is not configured.");
         bundleId = await options.networks.quoteOwnerCalls({ accountId: candidate.intent.accountId, recoveryId: id,
           calls: batch.flatMap(row => [{ chainId: Number(row.chain_id), ...row.approval!.createSigner }, { chainId: Number(row.chain_id), ...row.approval!.ownerChange }]) });
       } catch (error) {
@@ -83,10 +90,20 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
         for (const row of batch) await pool.query("UPDATE rest_wallet_recovery_chains SET reason=$3 WHERE recovery_id=$1 AND chain_id=$2", [id, row.chain_id, reason]);
         continue;
       }
-      // The bundle is on record against its chains before any payment is signed for it.
-      for (const row of batch) await pool.query(`UPDATE rest_wallet_recovery_chains SET state='submitted',bundle_id=$3,attempts=attempts+$6,reason=NULL,updated_at_ms=$4
-        WHERE recovery_id=$1 AND chain_id=$2 AND state IN ('approved','submitted') AND attempts=$5`, [id, row.chain_id, bundleId, now(), row.attempts, unpaid.has(Number(row.chain_id)) ? 0 : 1]);
-      await options.networks.payOwnerCalls(candidate.intent.accountId, bundleId).catch(() => undefined);
+      // The bundle is on record against every one of its chains before any payment is signed for it. A row another
+      // worker moved since this pass read it leaves the bundle unpaid.
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        for (const row of batch) {
+          const written = await client.query(`UPDATE rest_wallet_recovery_chains SET state='submitted',bundle_id=$3,attempts=attempts+$7,reason=NULL,updated_at_ms=$4
+            WHERE recovery_id=$1 AND chain_id=$2 AND state=$5 AND bundle_id IS NOT DISTINCT FROM $6 AND attempts=$8`,
+            [id, row.chain_id, bundleId, now(), row.state, row.bundle_id, unpaid.has(Number(row.chain_id)) ? 0 : 1, row.attempts]);
+          if (written.rowCount !== 1) throw new Error("recovery chain moved");
+        }
+        await client.query("COMMIT");
+      } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+      await options.networks!.payOwnerCalls(candidate.intent.accountId, bundleId).catch(() => undefined);
     }
   }
 

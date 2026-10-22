@@ -237,7 +237,7 @@ async function advance() {
     const selected = { ...view, replacementSigner: view.replacementSigner, candidateDigest: view.candidateDigest, rotationContext: view.rotationContext };
     // One review covers Base and every other chain the account is on: the same swap, each for its own chain and Safe nonce.
     const documents = (value: Review) => {
-      if (!value || !Array.isArray(value.chains) || value.chains.length > 7) invalid();
+      if (!value || value.review?.chainId !== undefined || !Array.isArray(value.chains) || value.chains.length > 7) invalid();
       const chains = value.chains.map(item => { fields(item, ['review', 'document']); return { chainId: item.review.chainId, document: assertWalletRecoveryRotationReview(item, selected) }; });
       if (chains.some(item => item.chainId === undefined) || new Set(chains.map(item => item.chainId)).size !== chains.length) invalid();
       return { base: assertWalletRecoveryRotationReview({ review: value.review, document: value.document }, selected), chains };
