@@ -75,9 +75,11 @@ export async function readChainSafe(walletAddress: string, chainId: number): Pro
     const replies = await response.json() as { id: number; result?: unknown }[];
     return calls.map((_, id) => Array.isArray(replies) ? replies.find(reply => reply?.id === id)?.result : undefined);
   };
-  // Every read is at one block, so the owners and the nonce describe the same state.
-  const [chain, block] = await batch([['eth_chainId', []], ['eth_blockNumber', []]]);
-  if (chain !== `0x${chainId.toString(16)}` || typeof block !== 'string' || !/^0x[0-9a-fA-F]{1,16}$/.test(block)) invalid();
+  // Every read is at one block, named by its hash and required to be canonical, so the owners and the nonce describe the same state.
+  const [chain, head] = await batch([['eth_chainId', []], ['eth_getBlockByNumber', ['latest', false]]]);
+  const hash = (head as { hash?: unknown } | null)?.hash;
+  if (chain !== `0x${chainId.toString(16)}` || typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash)) invalid();
+  const block = { blockHash: hash, requireCanonical: true };
   const call = (data: string) => ['eth_call', [{ to: walletAddress, data }, block]] as const;
   const [code, owners, threshold, nonce] = await batch([['eth_getCode', [walletAddress, block]], call('0xa0e67e2b'), call('0xe75235b8'), call('0xaffed0e0')]);
   const word = (value: unknown) => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value) ? BigInt(value) : invalid();

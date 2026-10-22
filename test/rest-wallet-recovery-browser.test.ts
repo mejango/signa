@@ -199,11 +199,11 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       initializerHash: intent.initializerHash, priorSigner: intent.priorSigner, replacementSigner: from.signerAddress, candidateDigest: (from === candidate ? home : review(8453, from)).candidateDigest,
       rotationContext: { publicKey: from.credential.publicKey, signerFactory: WALLET_PASSKEY_PROFILE.signerFactory, verifiers: WALLET_PASSKEY_PROFILE.p256Verifier },
       phase, registration: null, possession: null, transactionHashes: [], chains });
-    const reads: { chainId: number; method: string; block?: unknown }[] = [];
+    const reads: { chainId: number; method: string; block?: unknown }[] = [], blockHash = `0x${'5a'.repeat(32)}`;
     /** Each chain's public RPC as the page reaches it; a chain marked down does not answer. */
     async function open(keep = true) {
       const context = await browser.newContext(), page = await context.newPage();
-      if (keep) await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [`center:recovery:passkey:${intent.id}`, JSON.stringify(candidate.credential.publicKey)] as const);
+      if (keep) await page.addInitScript(([key, value]) => localStorage.setItem(key, value), [`center:recovery:passkey:${intent.id}`, JSON.stringify({ ...candidate.credential.publicKey, walletAddress: home.walletAddress, recoveryOwner: secret.recoveryOwner })] as const);
       await page.addInitScript(() => { (window as unknown as { prompts: number }).prompts = 0;
         navigator.credentials.get = async () => { (window as unknown as { prompts: number }).prompts++; throw new DOMException('No prompt expected', 'NotAllowedError'); }; });
       await page.route(url => signaChains.some(chain => url.href.replace(/\/$/, '') === chain.publicRpc), async route => {
@@ -214,7 +214,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
         const word = (value: bigint) => `0x${value.toString(16).padStart(64, '0')}`;
         const replies = (JSON.parse(route.request().postData()!) as { id: number; method: string; params: any[] }[]).map(({ id, method, params }) => {
           reads.push({ chainId, method, block: method === 'eth_getCode' || method === 'eth_call' ? params[1] : undefined });
-          const result = method === 'eth_chainId' ? `0x${chainId.toString(16)}` : method === 'eth_blockNumber' ? '0x10' : method === 'eth_getCode' ? '0x6001'
+          const result = method === 'eth_chainId' ? `0x${chainId.toString(16)}` : method === 'eth_getBlockByNumber' ? { number: '0x10', hash: blockHash } : method === 'eth_getCode' ? '0x6001'
             : params[0].data === '0xa0e67e2b' ? encodeAbiParameters([{ type: 'address[]' }], [safe.owners]) : params[0].data === '0xe75235b8' ? word(1n) : word(safe.nonce);
           return { jsonrpc: '2.0', id, result };
         });
@@ -222,7 +222,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       });
       return { context, page };
     }
-    return { secret, intent, candidate, passkey, safes, review, shaped, view, reads, open };
+    return { secret, intent, candidate, passkey, safes, review, shaped, view, reads, open, blockHash };
   }
   type RotationModel = Awaited<ReturnType<typeof rotationModel>>;
   /** The page's own files and the modeled recovery API. */
@@ -277,16 +277,17 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
         expect((await recoverTypedDataAddress({ ...document, signature })).toLowerCase()).toBe(secret.recoveryOwner.toLowerCase());
         expect(hashTypedData(document)).not.toBe(hashTypedData(walletRecoveryRotationDocument(reviews[(index + 1) % 3]!)));
       }
-      // Each chain was read by the page itself, every read pinned to the one block it first asked for.
+      // Each chain was read by the page itself, every read pinned by hash to the one canonical block it first asked for.
       expect(new Set(model.reads.map(read => read.chainId))).toEqual(new Set([8453, 10, 42161]));
-      expect(model.reads.filter(read => read.method === 'eth_call' || read.method === 'eth_getCode').every(read => read.block === '0x10')).toBe(true);
+      expect(model.reads.filter(read => read.method === 'eth_call' || read.method === 'eth_getCode').map(read => read.block))
+        .toEqual(Array(12).fill({ blockHash: model.blockHash, requireCanonical: true }));
       expect(await page.locator('#recovery-chains').textContent()).toBe('Optimism: Waiting for Base, Arbitrum: Waiting for Base');
       expect(JSON.stringify(approvals)).not.toContain(secret.mnemonic);
     } finally { await context.close(); }
   }, 30000);
 
   it('signs nothing when the server substitutes the replacement signer, a nonce or the old passkey, or a chain cannot be read', async () => {
-    type Arranged = { from?: RotationModel['candidate']; keep?: boolean; reviews?: ReturnType<RotationModel['review']>[] };
+    type Arranged = { from?: RotationModel['candidate']; keep?: boolean; reviews?: ReturnType<RotationModel['review']>[]; walletAddress?: Address };
     const cases: [string, (model: RotationModel) => Arranged, string][] = [
       // The server names its own signer, with reviews and context that are consistent with it.
       ['signer', model => { const from = model.passkey(); return { from, reviews: [8453, 10, 42161].map(chainId => model.review(chainId, from)) }; }, 'The recovery review changed'],
@@ -297,11 +298,14 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
         model.safes[10] = { owners: [`0x${'ab'.repeat(20)}`, model.intent.recoveryOwner], nonce: 0n }; return { reviews }; }, 'The recovery review changed'],
       ['unread', model => { model.safes[42161]!.down = true; return {}; }, 'Arbitrum could not be read, so nothing was signed'],
       ['other browser', () => ({ keep: false }), 'Continue this recovery in the browser where you created its replacement passkey'],
+      // After a reload the server points the same recovery at another account the backup also controls.
+      ['account', () => ({ walletAddress: `0x${'cd'.repeat(20)}` }), 'The recovery review changed'],
     ];
     for (const [name, arrange, text] of cases) {
       const model = await rotationModel(), setup = arrange(model), from = setup.from ?? model.candidate;
       const reviews = setup.reviews ?? [8453, 10, 42161].map(chainId => model.review(chainId));
-      const view = model.view('awaiting_rotation_approval', [{ chainId: 10, name: 'Optimism', state: 'review' }, { chainId: 42161, name: 'Arbitrum', state: 'review' }], from);
+      const view = { ...model.view('awaiting_rotation_approval', [{ chainId: 10, name: 'Optimism', state: 'review' }, { chainId: 42161, name: 'Arbitrum', state: 'review' }], from),
+        ...(setup.walletAddress ? { walletAddress: setup.walletAddress } : {}) };
       const approvals: unknown[] = [], { context, page } = await model.open(setup.keep ?? true);
       await serve(page, (path, body) => {
         if (path.endsWith('/state')) return { view, csrfToken };

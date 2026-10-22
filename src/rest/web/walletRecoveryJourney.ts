@@ -109,8 +109,6 @@ function accept(result: { view: WalletRecoveryView | null; csrfToken?: string })
   if (value?.phase === 'ready_to_sign_in' && !left.length) {
     secret = null; kit = null; words().value = ''; el<HTMLInputElement>('recovery-file').value = ''; sessionStorage.removeItem('center:recovery:browser:' + value.id);
   }
-  // The passkey key stays until every chain shows it: a chain that fails later is repaired with it.
-  if (value?.phase === 'ready_to_sign_in' && value.chains.every(chain => chain.state === 'updated')) { try { localStorage.removeItem(passkeyKey(value.id)); } catch { /* Nothing kept. */ } }
   if (left.length) message(`${listed(left.map(chain => signaChainName(chain.chainId)))} still ${left.length > 1 ? 'accept' : 'accepts'} the old passkey. Open your backup and review the update.`);
   else message(value ? steps[value.phase] : reference.value ? 'Resume the original recovery with its replacement passkey and your backup.' : 'Open your backup file, or choose another way in below.');
 }
@@ -207,15 +205,17 @@ async function signBackup(document: TypedDataDefinition, owner: string) {
   if (typeof signature !== 'string' || !/^0x[0-9a-fA-F]{130}$/.test(signature)) throw new Error('The recovery owner signature is unavailable.');
   return signature;
 }
-/** The replacement passkey's public key, kept by the browser that created it; its signer is derived here, never taken from the server. */
+/** The replacement passkey's public key and the account it was created for, kept by the browser that created it: the signer is
+ * derived here, never taken from the server. It is public and stays, so a network found later can still be repaired. */
 const passkeyKey = (id: string) => 'center:recovery:passkey:' + id;
 function ownPasskey() {
   if (!view) invalid();
   let stored: unknown = null;
   try { stored = JSON.parse(localStorage.getItem(passkeyKey(view.id)) ?? 'null'); } catch { /* Absent below. */ }
   if (!stored) throw new Error('Continue this recovery in the browser where you created its replacement passkey.');
-  const own = walletPasskeySigner(stored as { x: Hex; y: Hex }), context = view.rotationContext;
-  if (!sameAddress(view.replacementSigner, own.replacementSigner) || !context || context.publicKey.x !== own.rotationContext.publicKey.x
+  const kept = stored as { x: Hex; y: Hex; walletAddress: string; recoveryOwner: string };
+  const own = walletPasskeySigner({ x: kept.x, y: kept.y }), context = view.rotationContext;
+  if (!sameAddress(kept.walletAddress, view.walletAddress) || !sameAddress(kept.recoveryOwner, view.recoveryOwner) || !sameAddress(view.replacementSigner, own.replacementSigner) || !context || context.publicKey.x !== own.rotationContext.publicKey.x
     || context.publicKey.y !== own.rotationContext.publicKey.y || !sameAddress(context.signerFactory, own.rotationContext.signerFactory)
     || !/^0x[0-9a-fA-F]{1,64}$/.test(context.verifiers) || BigInt(context.verifiers) !== BigInt(own.rotationContext.verifiers)) invalid();
   return own;
@@ -269,7 +269,8 @@ async function advance() {
       authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' }, attestation: 'none', timeout: 90000 }, signal: native.signal });
     if (!(value instanceof PublicKeyCredential) || !(value.response instanceof AuthenticatorAttestationResponse)) throw new Error('The passkey response is unavailable.');
     native = null;
-    try { localStorage.setItem(passkeyKey(view.id), JSON.stringify(walletPasskeyPublicKey(value.response.getPublicKey(), value.response.getPublicKeyAlgorithm()))); }
+    try { localStorage.setItem(passkeyKey(view.id), JSON.stringify({ ...walletPasskeyPublicKey(value.response.getPublicKey(), value.response.getPublicKeyAlgorithm()),
+      walletAddress: view.walletAddress, recoveryOwner: view.recoveryOwner })); }
     catch (error) { throw error instanceof Error && error.message.startsWith('The recovery') ? error : new Error('Allow this site to store data, then create the replacement passkey again.'); }
     await send('register', { type: 'public-key', credentialId: encode(value.rawId), rawId: encode(value.rawId),
       clientDataJSON: encode(value.response.clientDataJSON), attestationObject: encode(value.response.attestationObject) });
