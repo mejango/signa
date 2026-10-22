@@ -4,11 +4,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basePaymentConfiguration } from "../../src/rest/wallet/productionStack.ts";
 import { hashedAssetName } from "../../src/rest/web/assets.ts";
-import { walletCss } from "../../src/rest/web/walletPage.ts";
-import { walletPaymentCss } from "../../src/rest/web/walletPaymentPage.ts";
-import { walletRecoveryCss } from "../../src/rest/web/walletRecoveryPage.ts";
-import { walletSignupCss } from "../../src/rest/web/walletSignupPage.ts";
-import { walletDeviceCss } from "../../src/rest/web/walletDevicePage.ts";
+import { walletCss, walletPage } from "../../src/rest/web/walletPage.ts";
+import { walletPaymentCss, walletPaymentPage } from "../../src/rest/web/walletPaymentPage.ts";
+import { walletRecoveryCss, walletRecoveryPage } from "../../src/rest/web/walletRecoveryPage.ts";
+import { walletSignupCss, walletSignupPage } from "../../src/rest/web/walletSignupPage.ts";
+import { walletDeviceCss, walletDevicePage } from "../../src/rest/web/walletDevicePage.ts";
 
 /** The browser bundles Center serves; test/rest-web-bundle-budget.test.ts holds their size budgets. */
 export const webBuildOptions = {
@@ -40,9 +40,10 @@ export const webBuildOptions = {
 
 const sha256 = (body) => createHash("sha256").update(body).digest("hex");
 
-/** Every script and stylesheet the Signa origin serves, by the content-hashed path its pages name, to the
- * sha256 of the body. `bundle(name)` is an entry point's built text; scripts/rest/verify-served-build.mjs
- * compares a live origin against this. */
+/** Every page, script and stylesheet the Signa origin serves to a browser outside a frame, with signup,
+ * recovery, devices, payments and funds configured as in production, by path to the sha256 of the body.
+ * `bundle(name)` is an entry point's built text; scripts/rest/verify-served-build.mjs compares a live
+ * origin against this, and test/rest-build.test.ts holds it to what the wallet site renders and serves. */
 export function webManifest(bundle) {
   const files = {
     "wallet.js": bundle("wallet"), "wallet.css": walletCss(), "wallet-qr.js": bundle("wallet-qr"),
@@ -52,7 +53,12 @@ export function webManifest(bundle) {
     "wallet-recovery-kit.js": bundle("wallet-recovery-kit"),
     "wallet-device.js": bundle("wallet-device"), "wallet-device.css": walletDeviceCss(),
   };
-  return Object.fromEntries(Object.entries(files).map(([file, body]) => [`/assets/${hashedAssetName(file, body)}`, sha256(body)]));
+  const assets = Object.fromEntries(Object.entries(files).map(([file, body]) => [file, hashedAssetName(file, body)]));
+  const account = walletPage(true, true, "", false, assets);
+  const pages = { "/": account, "/funds": account, "/create": walletSignupPage({ base: "", assets }),
+    "/payment": walletPaymentPage("", assets), "/recover": walletRecoveryPage({ base: "", assets }), "/add": walletDevicePage({ base: "", assets }) };
+  return Object.fromEntries([...Object.entries(pages),
+    ...Object.entries(files).map(([file, body]) => [`/assets/${assets[file]}`, body])].map(([path, body]) => [path, sha256(body)]));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

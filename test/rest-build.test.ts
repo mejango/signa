@@ -80,7 +80,7 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
   } finally { await rm(directory, { recursive: true, force: true }); }
 }, 200_000);
 
-it("the web manifest covers every served script and stylesheet", async () => {
+it("the web manifest covers every served page, script and stylesheet", async () => {
   const { outputFiles } = await build({ ...webBuildOptions, write: false });
   const bundle = (name: string) => outputFiles!.find(file => file.path.endsWith(`/${name}.js`))!.text;
   const manifest: Record<string, string> = webManifest(bundle);
@@ -90,13 +90,15 @@ it("the web manifest covers every served script and stylesheet", async () => {
     payments: {} as never, paymentBrowserScript: bundle("wallet-payment"),
     signup: {} as never, signupBrowserScript: bundle("wallet-signup"),
     recovery: {} as never, recoveryBrowserScript: bundle("wallet-recovery"),
-    devices: {} as never, deviceBrowserScript: bundle("wallet-device"),
+    devices: {} as never, deviceBrowserScript: bundle("wallet-device"), onramp: {} as never,
     login: {} as never, handoff: {} as never, policy: {} as never, refresh: { request: async () => {}, tick: async () => {} } });
+  const sha256 = async (response: Response) => createHash("sha256").update(Buffer.from(await response.arrayBuffer())).digest("hex");
+  const pages = Object.keys(manifest).filter(path => !path.startsWith("/assets/"));
+  expect(pages.sort()).toEqual(["/", "/add", "/create", "/funds", "/payment", "/recover"]);
   const named = new Set<string>();
-  for (const page of ["/", "/create", "/payment", "/recover", "/add"]) {
-    const response = await app.request(`https://signa.center${page}`);
-    expect(response.status, page).toBe(200);
-    const html = await response.text();
+  for (const page of pages) {
+    const html = await (await app.request(`https://signa.center${page}`)).text();
+    expect(createHash("sha256").update(html).digest("hex"), page).toBe(manifest[page]);
     const references = [...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g), ...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g),
       ...html.matchAll(/<meta name="module:[^"]+" content="([^"]+)"/g)].map(match => match[1]!);
     expect(references.length, page).toBeGreaterThan(1);
@@ -105,9 +107,6 @@ it("the web manifest covers every served script and stylesheet", async () => {
       named.add(path);
     }
   }
-  expect([...named].sort()).toEqual(Object.keys(manifest).sort());
-  for (const [path, hash] of Object.entries(manifest)) {
-    const served = await app.request(`https://signa.center${path}`);
-    expect(createHash("sha256").update(Buffer.from(await served.arrayBuffer())).digest("hex"), path).toBe(hash);
-  }
+  expect([...named].sort()).toEqual(Object.keys(manifest).filter(path => path.startsWith("/assets/")).sort());
+  for (const path of named) expect(await sha256(await app.request(`https://signa.center${path}`)), path).toBe(manifest[path]);
 }, 60_000);
