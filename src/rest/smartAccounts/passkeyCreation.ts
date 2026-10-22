@@ -4,6 +4,7 @@ import {
 } from "viem";
 import { RestError } from "../core.js";
 import type { SmartAccountManifest } from "./types.js";
+import { SAFE_141_MULTI_SEND } from "./safeCode.js";
 
 /** Exact safe-modules dfd3b05966e727dbb7a2fdeef52e4b230f63304e creation code.
  * A checked-in constant keeps deterministic prediction available in browsers without RPC or Node. */
@@ -24,7 +25,7 @@ export function validatePasskeyCreationManifest(manifest: SmartAccountManifest):
     !owner || owner.version !== "center-passkey-v1" || manifest.safeVersion !== "1.4.1" ||
     manifest.smartSessions.generation !== "legacy-validator" ||
     manifest.safe7579.source.commit !== "f22a194148ff087f0c16125e530512e59794e188" ||
-    !pin || !isAddress(pin.address) || !same(pin.address, "0x38869bf66a61cF6bDB996A6aE40D5853Fd43B526") ||
+    !pin || !isAddress(pin.address) || !same(pin.address, SAFE_141_MULTI_SEND) ||
     !same(pin.runtimeCodeHash, "0x0e4f7fc66550a322d1e7688e181b75e217e662a4f3f4d6a29b22bc61217c4b77") ||
     pin.source?.repository !== "https://github.com/safe-global/safe-contracts" ||
     pin.source.commit !== "bf943f80fec5ac647159d26161446ac5d716a294" ||
