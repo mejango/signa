@@ -829,11 +829,11 @@ async function deviceApproveNow() {
     name: signaChains.find(item => item.chainId === Number(chain.chainId))?.name ?? `Chain ${Number(chain.chainId)}`, challenge: string(chain.challenge, 66) }))];
   // Each prompt signs the addition this page rebuilds from the account and the device it shows, never a hash as given.
   const kit = await loadRecoveryKit(), signer = device.view.deviceSigner ?? "", reviews = [record(prepared.review), ...chains.map(chain => record(chain.review))];
-  for (const [index, step] of steps.entries()) {
-    const chainId = "chainId" in step ? step.chainId : 8453;
-    if ((index && reviews[index]!.chainId !== chainId) || step.challenge.toLowerCase() !== kit.walletDeviceAdditionChallenge(session!.walletAddress, signer, reviews[index]!.safeNonce, chainId))
-      throw new InvalidResponse();
-  }
+  if (steps.some((step, index) => index && reviews[index]!.chainId !== (step as { chainId: number }).chainId)) throw new InvalidResponse();
+  // Each chain is read here first, so the nonce and owners each prompt signs for are the chain's own, never only the server's.
+  const expected = await kit.walletDeviceAdditionChallenges(session!.walletAddress, signer,
+    steps.map((step, index) => ({ chainId: "chainId" in step ? step.chainId : 8453, safeNonce: reviews[index]!.safeNonce }))).catch(() => { throw new InvalidResponse(); });
+  if (steps.some((step, index) => step.challenge.toLowerCase() !== expected[index])) throw new InvalidResponse();
   for (const [index, step] of steps.entries()) {
     if (deviceConfirmed.has(step.challenge)) continue;
     nativePrompt = new AbortController();

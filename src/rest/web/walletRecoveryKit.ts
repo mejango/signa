@@ -152,3 +152,17 @@ export function walletDeviceAdditionChallenge(walletAddress: string, deviceSigne
   const data = `0x0d582f13${deviceSigner.slice(2).toLowerCase().padStart(64, '0')}${'1'.padStart(64, '0')}` as Hex; // addOwnerWithThreshold(device, 1)
   return hashTypedData(walletOwnerChangeSafeTx(getAddress(walletAddress), data, safeNonce, chainId));
 }
+/** The challenges the primary passkey signs to add the device, one per chain, Base first. Each chain is read by this page
+ * (`readChainSafe`) before any prompt: deployed, a threshold of one, Base's owners, the device not yet among them, and the
+ * server's nonce exactly the chain's, so no signature waits for a later nonce to re-add a device removed meanwhile. */
+export async function walletDeviceAdditionChallenges(walletAddress: string, deviceSigner: string, reviews: { chainId: number; safeNonce: unknown }[]): Promise<Hex[]> {
+  address(deviceSigner);
+  if (reviews[0]?.chainId !== 8453 || new Set(reviews.map(review => review.chainId)).size !== reviews.length) invalid();
+  const safes = await Promise.all(reviews.map(review => readChainSafe(walletAddress, review.chainId))), home = safes[0]!, device = getAddress(deviceSigner);
+  return reviews.map((review, index) => {
+    const safe = safes[index]!, challenge = walletDeviceAdditionChallenge(walletAddress, device, review.safeNonce, review.chainId);
+    if (!safe.deployed || safe.threshold !== 1n || BigInt(review.safeNonce as string) !== safe.nonce || safe.owners.includes(device)
+      || safe.owners.length !== home.owners.length || safe.owners.some(owner => !home.owners.includes(owner))) invalid();
+    return challenge;
+  });
+}

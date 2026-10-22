@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page } from "playwright";
 import { hashTypedData } from "viem";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { signaChains } from "../src/rest/wallet/chains.js";
 import { walletDeviceAdditionChallenge } from "../src/rest/web/walletRecoveryKit.js";
 
 /** Both pages of adding a device, in Chromium, against a modeled Center: the account page begins
@@ -18,9 +19,9 @@ describe("served device pages", () => {
   const possessionDocument = { domain: { name: "Juicebox Center Wallet Device", version: "1", chainId: 8453, verifyingContract: walletAddress as `0x${string}` },
     types: { WalletDevice: [{ name: "purpose", type: "string" }] }, primaryType: "WalletDevice", message: { purpose: "add-device" } } as const;
   const requests: { path: string; body: any }[] = [];
-  let phase = "awaiting_registration", approvals = 0, activations = 0, otherChains = false, tampered = false, kitScript = "";
+  let phase = "awaiting_registration", approvals = 0, activations = 0, otherChains = false, tampered = false, skewed = false, kitScript = "";
   // The account page rebuilds each addition it signs from the account and the device signer it shows.
-  const deviceSigner = `0x${"05".repeat(20)}`, challengeOn = (chainId: number) => walletDeviceAdditionChallenge(walletAddress, deviceSigner, "0", chainId);
+  const deviceSigner = `0x${"05".repeat(20)}`, challengeOn = (chainId: number, nonce = "0") => walletDeviceAdditionChallenge(walletAddress, deviceSigner, nonce, chainId);
   const view = () => ({ id: "11111111-1111-4111-8111-111111111111", passkeyName: "Test phone", rpId: "localhost", origin, expiresAtMs: Date.now() + 300_000,
     walletAddress, primarySigner: `0x${"04".repeat(20)}`, deviceSigner: phase === "awaiting_registration" ? null : `0x${"05".repeat(20)}`, phase, transactionHashes: [],
     registration: phase === "awaiting_registration" ? { challenge: encode(Buffer.alloc(32, 13)), userHandle: encode(Buffer.alloc(32, 14)), excludeCredentialIds: [encode(Buffer.alloc(16, 7))] } : null,
@@ -55,7 +56,7 @@ describe("served device pages", () => {
       if (path === "/wallet/devices/begin") return json({ view: view(), link: `${origin}/wallet/add#${link}` });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111") return json({ view: view() });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/review") return json({ review: { deviceId: "11111111-1111-4111-8111-111111111111", safeNonce: "0" }, document: {}, challenge: challengeOn(8453),
-        chains: otherChains ? [{ chainId: 10, review: { chainId: 10, safeNonce: "0" }, challenge: tampered ? `0x${"17".repeat(32)}` : challengeOn(10) },
+        chains: otherChains ? [{ chainId: 10, review: { chainId: 10, safeNonce: skewed ? "1" : "0" }, challenge: tampered ? `0x${"17".repeat(32)}` : challengeOn(10, skewed ? "1" : "0") },
           { chainId: 42161, review: { chainId: 42161, safeNonce: "0" }, challenge: challengeOn(42161) }] : [] });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/approve") { approvals++; phase = "adding"; setTimeout(() => { phase = "awaiting_activation"; }, 200); return json({ view: view() }); }
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/activate") { activations++; phase = "ready"; return json({ view: view() }); }
@@ -70,6 +71,20 @@ describe("served device pages", () => {
     browser = await chromium.launch();
   });
   afterAll(async () => { await browser?.close(); await new Promise<void>(resolve => server?.close(() => resolve())); });
+  /** Each chain's public RPC as the account page reads it: the account's one passkey signer owns it, at nonce 0. */
+  async function chainRpcs(context: BrowserContext) {
+    const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0"), reads: number[] = [];
+    await context.route(url => signaChains.some(chain => url.href.replace(/\/$/, "") === chain.publicRpc), async route => {
+      const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type" };
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
+      const chainId = signaChains.find(chain => route.request().url().replace(/\/$/, "") === chain.publicRpc)!.chainId; reads.push(chainId);
+      const calls: Record<string, string> = { "0xa0e67e2b": `0x${word(32n)}${word(1n)}${word(`0x${"04".repeat(20)}`)}`, "0xe75235b8": `0x${word(1n)}`, "0xaffed0e0": `0x${word(0n)}` };
+      const result = (request: { method: string; params: any[] }) => request.method === "eth_chainId" ? `0x${chainId.toString(16)}`
+        : request.method === "eth_getBlockByNumber" ? { hash: `0x${"ab".repeat(32)}` } : request.method === "eth_getCode" ? "0x6080" : calls[request.params[0].data];
+      return route.fulfill({ headers: cors, json: (JSON.parse(route.request().postData()!) as { id: number; method: string; params: any[] }[]).map(request => ({ jsonrpc: "2.0", id: request.id, result: result(request) })) });
+    });
+    return reads;
+  }
   async function withAuthenticator(context: BrowserContext, page: Page, seeded: boolean): Promise<CDPSession> {
     const cdp = await context.newCDPSession(page);
     await cdp.send("WebAuthn.enable");
@@ -94,6 +109,7 @@ describe("served device pages", () => {
 
   it("shows the link as a code on the account page, walks the other device through its passkey, and approves here", async () => {
     const account = await browser.newContext(), accountPage = await account.newPage();
+    await chainRpcs(account);
     await withAuthenticator(account, accountPage, true);
     const errors: string[] = []; accountPage.on("pageerror", error => errors.push(String(error)));
     await accountPage.goto(`${origin}/wallet`);
@@ -177,6 +193,7 @@ describe("served device pages", () => {
   it("adds the device on every network the account is on, one confirmation each, keeping those given when a prompt is dropped", async () => {
     phase = "awaiting_approval"; otherChains = true; approvals = 0; requests.length = 0;
     const account = await browser.newContext(), accountPage = await account.newPage();
+    const reads = await chainRpcs(account);
     await withAuthenticator(account, accountPage, true);
     const errors: string[] = []; accountPage.on("pageerror", error => errors.push(String(error)));
     // The second prompt is dropped once, as a browser that wants a fresh tap per prompt does.
@@ -204,6 +221,13 @@ describe("served device pages", () => {
     await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toContain("could not be verified");
     expect(await accountPage.evaluate(() => (window as any).prompts)).toEqual([]);
     tampered = false;
+    // So is an addition rebuilt as asked but at a nonce Optimism is not at: it could be held and run after the device is removed.
+    skewed = true; reads.length = 0;
+    await accountPage.locator("#wallet-device-approve").click();
+    await expect.poll(() => reads.includes(10)).toBe(true);
+    await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toContain("could not be verified");
+    expect(await accountPage.evaluate(() => (window as any).prompts)).toEqual([]);
+    skewed = false;
     await accountPage.locator("#wallet-device-approve").click();
     await expect.poll(() => accountPage.evaluate(() => (window as any).prompts.length)).toBe(2);
     await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible()).toBe(true);

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mnemonicToAccount } from 'viem/accounts';
-import { createWalletRecoverySecret, readChainSafe, readHomeOwners, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
+import { createWalletRecoverySecret, readChainSafe, walletDeviceAdditionChallenge, walletDeviceAdditionChallenges, readHomeOwners, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
 import { concatHex, encodeAbiParameters, encodeFunctionData, getAddress, getContractAddress, hashTypedData, keccak256, parseAbi, recoverAddress, zeroAddress, type Address, type Hex } from 'viem';
 import { SAFE_CREATION_ABI, SAFE_SETUP_ABI } from '../src/rest/smartAccounts/creation.js';
 import { SAFE_141_MULTI_SEND, SAFE_141_PROXY_CREATION_CODE } from '../src/rest/smartAccounts/safeCode.js';
 import { walletOwnerUpdateSafeTx } from '../src/rest/web/walletOwnerUpdate.js';
 import { walletOwnerPlan } from '../src/rest/web/walletRecoveryReview.js';
+import { signaChains } from '../src/rest/wallet/chains.js';
 
 // Public BIP39 test entropy; never used for real funds.
 const phrase = 'abandon '.repeat(23) + 'art';
@@ -129,26 +130,58 @@ describe("the account's Safe read from each chain's public RPC", () => {
   const wallet = identity.walletAddress, owners = [getAddress(`0x${'a1'.repeat(20)}`), account.address];
   const word = (value: bigint | string) => BigInt(value).toString(16).padStart(64, '0'), head = `0x${'ab'.repeat(32)}`;
   // Answers by what is asked: 0 chain, 1 code, 2 owners, 3 threshold, 4 nonce; every state read must name the head block by its hash, as canonical.
-  const answer = (overrides: Record<number, unknown> = {}) => vi.stubGlobal('fetch', vi.fn(async (_url: string, init: { body: string }) => {
-    const results = ['0x2105', '0x6080', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`, `0x${word(7n)}`];
+  // Each chain answers as itself; `overrides` may differ per chain, and `tip` is the block the chain names as its head.
+  const answer = (overrides: Record<number, unknown> | ((chainId: number) => Record<number, unknown>) = {}, tip: unknown = { hash: head }) => vi.stubGlobal('fetch', vi.fn(async (url: string, init: { body: string }) => {
+    const chainId = signaChains.find(chain => chain.publicRpc === url)!.chainId, given = typeof overrides === 'function' ? overrides(chainId) : overrides;
+    const results = [`0x${chainId.toString(16)}`, '0x6080', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`, `0x${word(7n)}`];
     const which = (request: { method: string; params: unknown[] }) => request.method === 'eth_chainId' ? 0 : request.method === 'eth_getCode' ? 1
       : ({ '0xa0e67e2b': 2, '0xe75235b8': 3, '0xaffed0e0': 4 } as Record<string, number>)[(request.params[0] as { data: string }).data]!;
     return new Response(JSON.stringify((JSON.parse(init.body) as { id: number; method: string; params: unknown[] }[]).reverse().map(request => ({ jsonrpc: '2.0', id: request.id,
-      result: request.method === 'eth_getBlockByNumber' ? { hash: head } : request.method !== 'eth_chainId'
+      result: request.method === 'eth_getBlockByNumber' ? tip : request.method !== 'eth_chainId'
         && JSON.stringify(request.params.at(-1)) !== JSON.stringify({ blockHash: head, requireCanonical: true }) ? null
-        : which(request) in overrides ? overrides[which(request)] : results[which(request)] }))));
+        : which(request) in given ? given[which(request)] : results[which(request)] }))));
   }));
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
   it('reads the owners, threshold and nonce a chain holds, and refuses another chain or a malformed answer', async () => {
     answer(); expect(await readHomeOwners(wallet)).toEqual(owners);
     answer(); expect(await readChainSafe(wallet, 8453)).toEqual({ deployed: true, owners, threshold: 1n, nonce: 7n });
     answer({ 1: '0x' }); expect(await readChainSafe(wallet, 8453)).toMatchObject({ deployed: false });
     answer({ 1: '0x' }); await expect(readHomeOwners(wallet)).rejects.toThrow();
-    answer(); await expect(readChainSafe(wallet, 10)).rejects.toThrow();
+    // Optimism's RPC answering as Base is refused.
+    answer({ 0: '0x2105' }); await expect(readChainSafe(wallet, 10)).rejects.toThrow();
     answer({ 0: '0xa' }); await expect(readHomeOwners(wallet)).rejects.toThrow();
     answer({ 3: `0x${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
     answer({ 2: `0x${word(64n)}${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
     answer({ 2: null }); await expect(readHomeOwners(wallet)).rejects.toThrow();
     answer({ 4: null }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+  });
+  it('refuses a chain that does not answer within ten seconds or names no canonical head block', async () => {
+    // The chain never answers: the read gives up when its ten-second signal fires, and nothing is assumed.
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => { expect(ms).toBe(10_000); return AbortSignal.abort(new DOMException('timed out', 'TimeoutError')); });
+    vi.stubGlobal('fetch', vi.fn((_url: string, init: { signal: AbortSignal }) => init.signal.aborted ? Promise.reject(init.signal.reason) : new Promise(() => {})));
+    await expect(readChainSafe(wallet, 8453)).rejects.toThrow('timed out');
+    vi.restoreAllMocks();
+    // No head hash, a malformed one, or a node that will not read at that block as canonical (an error, so no result).
+    answer({}, null); await expect(readChainSafe(wallet, 8453)).rejects.toThrow();
+    answer({}, { hash: '0x1234' }); await expect(readChainSafe(wallet, 8453)).rejects.toThrow();
+    answer({ 1: undefined, 2: undefined, 3: undefined, 4: undefined }); await expect(readChainSafe(wallet, 8453)).rejects.toThrow();
+  });
+  it('rebuilds each device addition only at the nonce and owners each chain reports, before any prompt', async () => {
+    const device = getAddress(`0x${'05'.repeat(20)}`), reviews = [{ chainId: 8453, safeNonce: '7' }, { chainId: 10, safeNonce: '7' }];
+    answer(); expect(await walletDeviceAdditionChallenges(wallet, device, reviews))
+      .toEqual([walletDeviceAdditionChallenge(wallet, device, '7', 8453), walletDeviceAdditionChallenge(wallet, device, '7', 10)]);
+    // A later nonce is a signature the server could hold and run after the device is removed.
+    answer(); await expect(walletDeviceAdditionChallenges(wallet, device, [reviews[0]!, { chainId: 10, safeNonce: '8' }])).rejects.toThrow();
+    // Optimism's owners are not Base's, or its threshold is not one.
+    answer(chainId => chainId === 10 ? { 2: `0x${word(32n)}${word(2n)}${word(owners[0]!)}${word(`0x${'cc'.repeat(20)}`)}` } : {});
+    await expect(walletDeviceAdditionChallenges(wallet, device, reviews)).rejects.toThrow();
+    answer(chainId => chainId === 10 ? { 3: `0x${word(2n)}` } : {}); await expect(walletDeviceAdditionChallenges(wallet, device, reviews)).rejects.toThrow();
+    // The device is already an owner, a chain is not deployed, Base is missing or first is not Base, or a chain appears twice.
+    answer(); await expect(walletDeviceAdditionChallenges(wallet, owners[0]!, reviews)).rejects.toThrow();
+    answer(chainId => chainId === 10 ? { 1: '0x' } : {}); await expect(walletDeviceAdditionChallenges(wallet, device, reviews)).rejects.toThrow();
+    answer(); await expect(walletDeviceAdditionChallenges(wallet, device, [reviews[1]!])).rejects.toThrow();
+    answer(); await expect(walletDeviceAdditionChallenges(wallet, device, [reviews[0]!, reviews[1]!, reviews[1]!])).rejects.toThrow();
+    // A chain that cannot be read signs nothing.
+    answer(chainId => chainId === 10 ? { 4: null } : {}); await expect(walletDeviceAdditionChallenges(wallet, device, reviews)).rejects.toThrow();
   });
 });
