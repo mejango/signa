@@ -145,7 +145,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   const csrf = encode(Buffer.alloc(32, 9)), intentId = encode(Buffer.alloc(32, 10));
   const state = encode(Buffer.alloc(32, 11)), code = encode(Buffer.alloc(32, 12));
   const challenge = encode(Buffer.alloc(32, 13)), handle = encode(Buffer.alloc(32, 14));
-  const walletAddress = `0x${"03".repeat(20)}`;
+  let walletAddress = `0x${"03".repeat(20)}`, networksDown = false;
   const requests: { path: string; body: any; headers: Record<string, string | string[] | undefined> }[] = [];
   let authenticated: boolean, unavailableSessions: number, unavailableCompletions: number, droppedCompletion: boolean;
   let unavailableIssues = 0;
@@ -241,6 +241,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
       if (onramp && path === "/wallet/onramp") return json({ applePay: true });
+      if (onramp && networksDown && path === "/wallet/networks") return json({ error: { code: "WALLET_NETWORKS_UNAVAILABLE", message: "unavailable" } }, 503);
       if (onramp && path === "/wallet/networks") return json({ offered: [], pending: [], networks: [
         { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" },
         { chainId: 10, name: "Optimism", state: "deployed", txHash: null, owners: "diverged" },
@@ -266,6 +267,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   }, 30_000);
 
   beforeEach(async () => {
+    walletAddress = `0x${"03".repeat(20)}`; networksDown = false;
     authenticated = false; landingWays = false; onramp = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
     redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0;
@@ -456,6 +458,19 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.locator("#wallet-networks").textContent()).toBe("Base: Up to date, Optimism: Needs update, Arbitrum: Couldn't check, "
       + "Base Sepolia (deploying…). Actions on a network that needs an update wait until its owners match Base.");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("drops one account's network labels when another account signs in and its read fails", async () => {
+    onramp = true;
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-logout").click(); await status("ready");
+    walletAddress = `0x${"04".repeat(20)}`; networksDown = true;
+    await page.locator("#wallet-signin").click(); await status("signed-in");
+    expect(await page.locator("#wallet-address").textContent()).toBe(walletAddress);
+    await expect.poll(() => requests.filter(item => item.path === "/wallet/networks").length).toBeGreaterThan(1);
+    expect(await page.locator("#wallet-networks").textContent()).toBe("Base");
     expect(errors).toEqual([]);
   });
 
