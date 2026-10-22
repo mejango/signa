@@ -19,23 +19,23 @@ a browser API key substitutes for either owner.
 The kit contains the words, recovery-owner address, original Safe address,
 initializer hash, explicit derivation path, `network: "base"` and `chainId: 8453`.
 The Safe cannot be reconstructed from these words alone; preserving its address
-is necessary. Before deployment review, the kit path requires downloading and
-reopening the saved file against that exact wallet. A kit from another wallet is
+is necessary. The browser offers to download, share or copy the kit and can reopen
+a saved file against the exact wallet to verify it. A kit from another wallet is
 rejected. Reloading requires restoring the kit or words; the phrase is never
-stored in localStorage, sessionStorage, a cookie, URL or server request. The only
-durable secret export is the user's explicit download. Anyone who has that file
-can control the wallet. Browser JavaScript cannot guarantee deterministic secret
-erasure; DOM text and references are cleared after verification and on pagehide.
-A kit for any other network is rejected.
+stored in localStorage, sessionStorage, a cookie, URL or server request. Anyone
+who has the kit can control the wallet. Browser JavaScript cannot guarantee
+deterministic secret erasure; the page clears what it can on pagehide. A kit for
+any other network is rejected.
 
 ## Sequence and recovery
 
 1. The server selects the RP, origin and pinned creation manifest. An enrollment
-   and hashed continuation token commit together. Registration expires in five
+   and hashed continuation token commit together. Registration expires in fifteen
    minutes by default; the continuation lasts thirty minutes.
-2. Native registration creates an unverified candidate. A fresh possession proof
-   and the EOA's typed enrollment signature verify that exact candidate and Safe.
-3. A separate passkey approval claims the exact deployment. The existing worker
+2. Native registration creates an unverified candidate. The EOA's typed enrollment
+   signature and the passkey's deployment assertion verify that exact candidate and
+   Safe.
+3. The deployment assertion claims the exact deployment. The existing worker
    preserves signed bytes, sender nonce, accounting reservation and settlement
    evidence across retries. Polling never creates a replacement transaction.
 4. Once the latest canonical observation proves creation and wallet readiness,
@@ -73,8 +73,8 @@ expiry during SQL rolls all mapping, grant and epoch changes back. Genesis remai
 The canonical observer rechecks the replacement account's original block anchor on
 every observation. A chain rollback makes the account unready and cannot undo
 credential supersession or revive previous sessions. Payment approval retains its
-existing proof format; the authority identity commits replacement lineage, and
-fresh approval must verify under the replacement key.
+existing proof format; the authority identity commits replacement lineage. Other
+device credentials already enrolled stay valid approvers.
 
 The recovery page imports a saved kit in browser memory or connects the
 original recovery wallet for typed-data signing. It creates a named replacement
@@ -140,13 +140,15 @@ only after both receipts are finalized. Setup and fresh login proceed once both
 receipts are canonical. `index.ts` mounts it, and device addition on the same relay,
 from `WALLET_RECOVERY_SIGNER_KEY`, `WALLET_RECOVERY_MAX_OPERATIONS` and
 `WALLET_RECOVERY_MAX_COST_WEI`; operators must keep the relay key different from the
-creation treasury. Production startup never constructs either signer
-from an environment flag or request field. Recovery has distinct HttpOnly cookies,
+creation treasury. Signers come from the explicit host key settings; no request
+field can choose signer authority. Recovery has distinct HttpOnly cookies,
 cookie-bound CSRF, exact Host/Origin checks and no trusted-app CORS access.
 
 Signup uses distinct `__Host-` HttpOnly, Secure, SameSite cookies. Central POSTs
 require exact Host/Origin, the wallet request header and cookie-bound CSRF for
-existing flows. Bodies, credentials, row admission, cleanup and worker passes are
+existing flows. Signup inside an admitted app's frame instead carries its
+continuation token in the request body and checks the admitted app launch, with no
+cookie. Bodies, credentials, row admission, cleanup and worker passes are
 bounded. Trusted-app CORS does not confer central cookie access. Public responses
 contain explicit journey views, never storage rows or signed treasury bytes.
 
