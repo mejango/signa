@@ -19,8 +19,9 @@ a browser API key substitutes for either owner.
 The kit contains the words, recovery-owner address, original Safe address,
 initializer hash, explicit derivation path, `network: "base"` and `chainId: 8453`.
 The Safe cannot be reconstructed from these words alone; preserving its address
-is necessary. The browser offers to download, share or copy the kit and can reopen
-a saved file against the exact wallet to verify it. A kit from another wallet is
+is necessary. The browser offers to download or share the kit file, or to copy the
+recovery words alone (the copy omits the address and initializer hash), and can
+reopen a saved file against the exact wallet to verify it. A kit from another wallet is
 rejected. Reloading requires restoring the kit or words; the phrase is never
 stored in localStorage, sessionStorage, a cookie, URL or server request. Anyone
 who has the kit can control the wallet. Browser JavaScript cannot guarantee
@@ -73,8 +74,9 @@ expiry during SQL rolls all mapping, grant and epoch changes back. Genesis remai
 The canonical observer rechecks the replacement account's original block anchor on
 every observation. A chain rollback makes the account unready and cannot undo
 credential supersession or revive previous sessions. Payment approval retains its
-existing proof format; the authority identity commits replacement lineage. Other
-device credentials already enrolled stay valid approvers.
+existing proof format; the authority identity commits replacement lineage. Added
+devices cannot yet approve hosted payments: the payment review exposes only the
+primary credential and the payment page rejects others.
 
 The recovery page imports a saved kit in browser memory or connects the
 original recovery wallet for typed-data signing. It creates a named replacement
