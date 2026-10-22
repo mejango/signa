@@ -296,7 +296,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       expect(Object.keys(approval!)).toEqual(['chainSignatures']);
       expect(approval!.chainSignatures.map(item => item.chainId)).toEqual([42161]);
       expect((await recoverTypedDataAddress({ ...walletRecoveryRotationDocument(arbitrum), signature: approval!.chainSignatures[0]!.signature })).toLowerCase()).toBe(secret.recoveryOwner.toLowerCase());
-      await expect.poll(() => page.locator('#recovery-chains').textContent()).toBe('Optimism: Updated, Arbitrum: Waiting for Base');
+      await expect.poll(() => page.locator('#recovery-chains').textContent()).toBe('Optimism: Updated, Arbitrum: Waiting to update');
       expect(await page.evaluate(() => (window as unknown as { prompts: number }).prompts)).toBe(0);
     } finally { await context.close(); }
   }, 30000);

@@ -104,7 +104,9 @@ function accept(result: { view: WalletRecoveryView | null; csrfToken?: string })
   if (!value || value.phase !== view?.phase) { rotation = null; pollCount = 0; }
   view = value; known = true;
   const left = unfinished(value);
-  if (value?.phase === 'ready_to_sign_in' && !left.length) { secret = null; kit = null; sessionStorage.removeItem('center:recovery:browser:' + value.id); }
+  if (value?.phase === 'ready_to_sign_in' && !left.length) {
+    secret = null; kit = null; words().value = ''; el<HTMLInputElement>('recovery-file').value = ''; sessionStorage.removeItem('center:recovery:browser:' + value.id);
+  }
   if (left.length) message(`${listed(left.map(chain => signaChainName(chain.chainId)))} still ${left.length > 1 ? 'accept' : 'accepts'} the old passkey. Open your backup and review the update.`);
   else message(value ? steps[value.phase] : reference.value ? 'Resume the original recovery with its replacement passkey and your backup.' : 'Open your backup file, or choose another way in below.');
 }
@@ -127,7 +129,8 @@ function render() {
   el('recovery-review').hidden = !rotation;
   const chains = view?.chains ?? [];
   el('recovery-chains-box').hidden = !chains.length;
-  el('recovery-chains').textContent = chains.map(chain => `${signaChainName(chain.chainId)}: ${chainStates[chain.state]}`).join(', ');
+  const activated = view?.phase === 'preparing_sign_in' || view?.phase === 'ready_to_sign_in';
+  el('recovery-chains').textContent = chains.map(chain => `${signaChainName(chain.chainId)}: ${activated && chain.state === 'approved' ? 'Waiting to update' : chainStates[chain.state]}`).join(', ');
   const label = unfinished().length ? rotation ? 'Approve network updates' : 'Review network updates'
     : view?.phase === 'awaiting_registration' ? 'Create replacement passkey' : view?.phase === 'awaiting_possession' ? 'Verify both owners'
     : view?.phase === 'awaiting_rotation_approval' ? rotation ? 'Approve passkey replacement' : 'Review passkey replacement'
@@ -268,7 +271,7 @@ async function advance() {
       const checked = documents(rotation), backupSignature = checked.base ? await signBackup(checked.base, view.recoveryOwner) : null;
       const chainSignatures = [];
       for (const item of checked.chains) chainSignatures.push({ chainId: item.chainId!, signature: await signBackup(item.document, view.recoveryOwner) });
-      await send('rotation/approve', backupSignature ? { backupSignature, chainSignatures } : { chainSignatures }); rotation = null;
+      await send('rotation/approve', backupSignature ? { backupSignature, chainSignatures } : { chainSignatures }); rotation = null; pollCount = 0;
     }
   } else if (view.phase === 'awaiting_activation') {
     // The replacement passkey and the recovery owner already signed this recovery; Center binds

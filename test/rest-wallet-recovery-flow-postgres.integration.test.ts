@@ -280,5 +280,12 @@ suite('durable recovery browser continuation (genuine crypto, modeled canonical 
     safes[42161] = { owners: [`0x${'ab'.repeat(20)}`, recoveryOwner], nonce: 0n }; await deploy(42161);
     expect(await chains.prepare(candidate)).toEqual([fresh]);
     expect(await chains.status(value.flow.id)).toEqual([{ chainId: 10, name: 'Optimism', state: 'approved' }, { chainId: 42161, name: 'Arbitrum', state: 'failed' }]);
+    // A repair after activation reviews only what is not approved yet, and keeps the approval it already has.
+    safes[42161] = { owners: [priorSigner, recoveryOwner], nonce: 9n };
+    const repairs = await chains.prepare(candidate, true);
+    expect(repairs.map(item => item!.chainId)).toEqual([42161]);
+    await chains.approve(candidate, [{ chainId: 42161, signature: await sign(repairs[0]!) }], true);
+    expect(await chains.status(value.flow.id)).toEqual([{ chainId: 10, name: 'Optimism', state: 'approved' }, { chainId: 42161, name: 'Arbitrum', state: 'approved' }]);
+    expect((await pool.query('SELECT approval FROM rest_wallet_recovery_chains WHERE recovery_id=$1 AND chain_id=10', [value.flow.id])).rows[0]).toEqual({ approval: kept.approval });
   });
 });

@@ -115,7 +115,7 @@ export function createLocalWalletRecovery(options: LocalWalletRecoveryDependenci
   async function prepareRotation(flowToken: string) {
     const active = await activeChains(flowToken);
     if (active) return { review: null, document: null,
-      chains: (await active.chains.prepare(active.record.candidate!)).map(item => ({ review: item, document: walletRecoveryRotationDocument(item) })) };
+      chains: (await active.chains.prepare(active.record.candidate!, true)).map(item => ({ review: item, document: walletRecoveryRotationDocument(item) })) };
     const { record } = await context(flowToken);
     if (!record.proof) state();
     const review = await rotation.prepare(record.intent.id), chains = await options.chains?.prepare(record.candidate!) ?? [];
@@ -127,7 +127,7 @@ export function createLocalWalletRecovery(options: LocalWalletRecoveryDependenci
     const active = await activeChains(flowToken);
     if (active) {
       // A repeated approval with nothing left to review is answered with the current state.
-      if ((await active.chains.status(active.record.intent.id)).some(chain => chain.state === 'review')) await active.chains.approve(active.record.candidate!, chainSignatures);
+      if ((await active.chains.status(active.record.intent.id)).some(chain => chain.state === 'review')) await active.chains.approve(active.record.candidate!, chainSignatures, true);
       return status(flowToken);
     }
     const { record } = await context(flowToken);

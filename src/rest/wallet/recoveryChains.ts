@@ -112,7 +112,7 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
   return {
     /** Reads every other deployed chain and returns the swaps the recovery owner signs with Base's. A chain
      * already showing the new passkey is updated; one whose owners are not the account's original pair fails. */
-    async prepare(candidate: WalletRecoveryCandidate): Promise<WalletRecoveryRotation[]> {
+    async prepare(candidate: WalletRecoveryCandidate, repair = false): Promise<WalletRecoveryRotation[]> {
       const id = candidate.intent.id, known = await rows(id);
       // A chain that failed is read again too: where the old passkey still holds it, the user can approve a fresh swap.
       const fresh = (await deployed(candidate)).filter(chainId => ["review", "failed"].includes(known.find(row => Number(row.chain_id) === chainId)?.state ?? "review"));
@@ -132,12 +132,13 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
             approval=NULL,bundle_id=NULL,attempts=0
           WHERE rest_wallet_recovery_chains.state IN ('review','failed')`, [id, chainId, next, review, next === "failed" ? "owners-differ" : null, now()]);
       }
-      return (await rows(id)).filter(row => row.state === "review" || row.state === "approved").map(row => row.review!);
+      // A repair after activation leaves chains already approved to the worker.
+      return (await rows(id)).filter(row => row.state === "review" || (!repair && row.state === "approved")).map(row => row.review!);
     },
     /** Records the recovery owner's signature for every chain under review, all or none. Each is checked
      * against the stored swap before it is kept; a chain deployed since the review sends the user back to it. */
-    async approve(candidate: WalletRecoveryCandidate, input: unknown): Promise<void> {
-      const id = candidate.intent.id, known = await rows(id), open = known.filter(row => row.state === "review" || row.state === "approved");
+    async approve(candidate: WalletRecoveryCandidate, input: unknown, repair = false): Promise<void> {
+      const id = candidate.intent.id, known = await rows(id), open = known.filter(row => row.state === "review" || (!repair && row.state === "approved"));
       if ((await deployed(candidate)).some(chainId => !known.some(row => Number(row.chain_id) === chainId))) changed();
       if (!Array.isArray(input) || input.length !== open.length) changed();
       const signatures = new Map<number, Hex>();
