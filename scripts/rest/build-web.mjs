@@ -1,6 +1,14 @@
 import { build } from "esbuild";
+import { createHash } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { basePaymentConfiguration } from "../../src/rest/wallet/productionStack.ts";
+import { hashedAssetName } from "../../src/rest/web/assets.ts";
+import { walletCss } from "../../src/rest/web/walletPage.ts";
+import { walletPaymentCss } from "../../src/rest/web/walletPaymentPage.ts";
+import { walletRecoveryCss } from "../../src/rest/web/walletRecoveryPage.ts";
+import { walletSignupCss } from "../../src/rest/web/walletSignupPage.ts";
+import { walletDeviceCss } from "../../src/rest/web/walletDevicePage.ts";
 
 /** The browser bundles Center serves; test/rest-web-bundle-budget.test.ts holds their size budgets. */
 export const webBuildOptions = {
@@ -30,4 +38,27 @@ export const webBuildOptions = {
   define: { __SIGNA_PAYMENT_PIN__: JSON.stringify(basePaymentConfiguration()) },
 };
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) await build(webBuildOptions);
+const sha256 = (body) => createHash("sha256").update(body).digest("hex");
+
+/** Every script and stylesheet the Signa origin serves, by the content-hashed path its pages name, to the
+ * sha256 of the body. `bundle(name)` is an entry point's built text; scripts/rest/verify-served-build.mjs
+ * compares a live origin against this. */
+export function webManifest(bundle) {
+  const files = {
+    "wallet.js": bundle("wallet"), "wallet.css": walletCss(), "wallet-qr.js": bundle("wallet-qr"),
+    "wallet-payment.js": bundle("wallet-payment"), "wallet-payment.css": walletPaymentCss(),
+    "wallet-signup.js": bundle("wallet-signup"), "wallet-signup.css": walletSignupCss(),
+    "wallet-recovery.js": bundle("wallet-recovery"), "wallet-recovery.css": walletRecoveryCss(),
+    "wallet-recovery-kit.js": bundle("wallet-recovery-kit"),
+    "wallet-device.js": bundle("wallet-device"), "wallet-device.css": walletDeviceCss(),
+  };
+  return Object.fromEntries(Object.entries(files).map(([file, body]) => [`/assets/${hashedAssetName(file, body)}`, sha256(body)]));
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  await build(webBuildOptions);
+  const outdir = new URL("../../.generated/rest/", import.meta.url);
+  const bundles = new Map(await Promise.all(Object.keys(webBuildOptions.entryPoints).map(async name =>
+    [name, await readFile(new URL(`${name}.js`, outdir), "utf8")])));
+  await writeFile(new URL("web-manifest.json", outdir), `${JSON.stringify(webManifest(name => bundles.get(name)), null, 2)}\n`);
+}

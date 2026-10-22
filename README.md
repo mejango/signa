@@ -69,6 +69,12 @@ deployment manifest. The repository leaves health check settings to the service
 so a later deployment cannot restore the dormant liveness probe. A successful
 build or liveness probe does not establish wallet readiness.
 
+`/healthz` on the API host also names the build: `commit` is the `SIGNA_BUILD_COMMIT`
+Docker build argument (null when the build did not pass one) and `web` is the sha256 of
+the image's web manifest. `node scripts/rest/verify-served-build.mjs https://signa.center
+<commit>` rebuilds that commit's browser scripts and stylesheets and exits 1 when any
+asset the origin serves differs.
+
 Configure a fresh `DATABASE_URL`, `DWELLIR_API_KEY`, the two origins and a new random
 `MCP_PLAN_SECRET` of at least 32 bytes before activation. Keep that plan secret stable
 across Signa restarts and replicas. `MCP_*` settings configure retained protocol

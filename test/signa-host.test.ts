@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 import type { HttpBindings } from '@hono/node-server';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { request as nodeRequest } from 'node:http';
 import { connect, type Socket } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -69,6 +71,21 @@ describe('Signa HTTP boundary', () => {
     const unavailable = await app.request('http://private.railway.internal/readyz');
     expect(unavailable.status).toBe(503);
     expect(await unavailable.text()).not.toContain('private database detail');
+  });
+
+  it('healthz reports the build commit and web manifest hash', async () => {
+    const commit = 'ab'.repeat(20);
+    const manifest = await readFile(new URL('../.generated/rest/web-manifest.json', import.meta.url)).catch(() => undefined);
+    const web = manifest ? createHash('sha256').update(manifest).digest('hex') : null;
+    vi.stubEnv('SIGNA_BUILD_COMMIT', commit);
+    try {
+      for (const host of ['private.railway.internal', 'api.signa.center'])
+        expect(await (await fixture({ currentRuntime: () => undefined }).app.request(`http://${host}/healthz`)).json()).toEqual({ ok: true, commit, web });
+      for (const unset of ['', 'main', commit.slice(0, 12), commit.toUpperCase()]) {
+        vi.stubEnv('SIGNA_BUILD_COMMIT', unset);
+        expect(await (await fixture().app.request('http://private.railway.internal/healthz')).json()).toEqual({ ok: true, commit: null, web });
+      }
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('contains every credential-host path in the wallet app and exposes only the API site on its own host', async () => {

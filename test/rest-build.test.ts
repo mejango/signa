@@ -1,10 +1,15 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { build } from "esbuild";
 import { expect, it } from "vitest";
+// @ts-expect-error The build script is plain ESM without declarations.
+import { webBuildOptions, webManifest } from "../scripts/rest/build-web.mjs";
+import { createWalletSite } from "../src/rest/wallet/site.js";
 
 const execute = promisify(execFile);
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -26,7 +31,7 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
     await writeFile(join(directory, ".generated/rest/removed-client.tgz"), "obsolete");
     await writeFile(join(directory, ".generated/checks/retained.json"), "{}");
 
-    await execute("npm", ["run", "build"], { cwd: directory, timeout: 110_000, maxBuffer: 1024 * 1024 });
+    await execute("npm", ["run", "build"], { cwd: directory, timeout: 170_000, maxBuffer: 1024 * 1024 });
 
     for (const name of ["dist/src/removed.js", "dist/src/db/migrations/999_removed.sql", ".generated/rest/removed-client.tgz",
       "dist/.generated/rest/removed-client.tgz", "dist/test", "dist/scripts"])
@@ -41,7 +46,10 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
     // Load the real emitted asset reader and public package; no server or upstream is started.
     const smoke = await execute(process.execPath, ["--input-type=module", "--eval", `
       import assert from 'node:assert/strict';
+      import { createHash } from 'node:crypto';
+      import { readFile } from 'node:fs/promises';
       import { readRestAssets } from './dist/src/rest/site.js';
+      import { createSignaApp } from './dist/src/signaApp.js';
       import { CenterClient } from './.generated/rest/client/index.js';
       import { connect } from './.generated/rest/client/node.js';
       import { createCenterWalletClient } from './.generated/rest/wallet-client/index.js';
@@ -59,10 +67,47 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
       // /core re-exports the root entry instead of bundling a second copy.
       assert.equal(core.createCenterWalletClient, createCenterWalletClient);
       for (const value of [core.passkeyOption, centerAccountConnector, JBConnectModal]) assert.equal(typeof value, 'function');
+      // The image's liveness names the commit it was built from and the manifest it serves.
+      const health = await (await createSignaApp({ apiAudience: 'https://api.signa.center', walletOrigin: 'https://signa.center',
+        currentRuntime: () => undefined }).request('http://api.signa.center/healthz')).json();
+      assert.deepEqual(health, { ok: true, commit: process.env.SIGNA_BUILD_COMMIT,
+        web: createHash('sha256').update(await readFile('./dist/.generated/rest/web-manifest.json')).digest('hex') });
       console.log('assets and client ready');
-    `], { cwd: directory, timeout: 15_000, maxBuffer: 1024 * 1024 });
+    `], { cwd: directory, timeout: 15_000, maxBuffer: 1024 * 1024, env: { ...process.env, SIGNA_BUILD_COMMIT: "cd".repeat(20) } });
     expect(smoke.stdout.trim()).toBe("assets and client ready");
     const cli = await execute(process.execPath, [".generated/rest/client/cli.mjs", "--help"], { cwd: directory, timeout: 15_000 });
     expect(cli.stdout).toContain("Install the Center client package");
   } finally { await rm(directory, { recursive: true, force: true }); }
-}, 150_000);
+}, 200_000);
+
+it("the web manifest covers every served script and stylesheet", async () => {
+  const { outputFiles } = await build({ ...webBuildOptions, write: false });
+  const bundle = (name: string) => outputFiles!.find(file => file.path.endsWith(`/${name}.js`))!.text;
+  const manifest: Record<string, string> = webManifest(bundle);
+  // Production's wallet host serves these pages at the origin root (src/index.ts); no handler reads a service here.
+  const app = createWalletSite({ origin: "https://signa.center", audience: "https://api.signa.center", basePath: "",
+    browserScript: bundle("wallet"), qrScript: bundle("wallet-qr"), recoveryKitScript: bundle("wallet-recovery-kit"),
+    payments: {} as never, paymentBrowserScript: bundle("wallet-payment"),
+    signup: {} as never, signupBrowserScript: bundle("wallet-signup"),
+    recovery: {} as never, recoveryBrowserScript: bundle("wallet-recovery"),
+    devices: {} as never, deviceBrowserScript: bundle("wallet-device"),
+    login: {} as never, handoff: {} as never, policy: {} as never, refresh: { request: async () => {}, tick: async () => {} } });
+  const named = new Set<string>();
+  for (const page of ["/", "/create", "/payment", "/recover", "/add"]) {
+    const response = await app.request(`https://signa.center${page}`);
+    expect(response.status, page).toBe(200);
+    const html = await response.text();
+    const references = [...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g), ...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g),
+      ...html.matchAll(/<meta name="module:[^"]+" content="([^"]+)"/g)].map(match => match[1]!);
+    expect(references.length, page).toBeGreaterThan(1);
+    for (const path of references) {
+      expect(manifest, `${page} names ${path}`).toHaveProperty([path]);
+      named.add(path);
+    }
+  }
+  expect([...named].sort()).toEqual(Object.keys(manifest).sort());
+  for (const [path, hash] of Object.entries(manifest)) {
+    const served = await app.request(`https://signa.center${path}`);
+    expect(createHash("sha256").update(Buffer.from(await served.arrayBuffer())).digest("hex"), path).toBe(hash);
+  }
+}, 60_000);

@@ -1,0 +1,15 @@
+# W4 operator steps
+
+Steps the W4 hardening changes need outside the repository. Each names its PR and what stays degraded until it is done.
+
+## Signa build commit on Railway (verifiable build)
+
+The Dockerfile takes the source commit as the plain build argument `SIGNA_BUILD_COMMIT`; CI passes `${{ github.sha }}`. Railway builds from the Dockerfile and passes a service variable to a build argument of the same name, so the Signa service needs:
+
+- Variable `SIGNA_BUILD_COMMIT` = `${{RAILWAY_GIT_COMMIT_SHA}}` (a Railway reference to the deployed commit).
+
+Until it is set, `GET https://api.signa.center/healthz` reports `"commit": null`. The `web` manifest hash and `scripts/rest/verify-served-build.mjs` work without it.
+
+Anything other than a full 40-hex commit (an unresolved reference included) is reported as null, never echoed. Check after the next deploy: `curl -s https://api.signa.center/healthz` shows the deployed 40-hex commit, then `node scripts/rest/verify-served-build.mjs https://signa.center <that commit>` exits 0.
+
+On GCP, pass the same build argument from the build trigger (for Cloud Build, `--build-arg SIGNA_BUILD_COMMIT=$COMMIT_SHA`).

@@ -1,5 +1,7 @@
 import type { HttpBindings } from '@hono/node-server';
 import { Hono } from 'hono';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { applePayDomainAssociation } from './applePayDomainAssociation.js';
 
 interface FetchApp {
@@ -31,12 +33,23 @@ function exactOrigin(value: string): URL {
 const apiAsset = /^\/assets\/(?:accounts\.(?:[0-9a-f]{12}\.)?(?:css|js)|accounts-signed-in\.(?:[0-9a-f]{12}\.)?js|docs\.(?:[0-9a-f]{12}\.)?js|api\.(?:[0-9a-f]{12}\.)?css|accounts-icon\.svg)$/;
 const apiPath = (path: string) => path === '/api' || path.startsWith('/api/') || path === '/accounts' || apiAsset.test(path);
 
+/** The build this process serves: its source commit (the SIGNA_BUILD_COMMIT build argument, null when
+ * absent) and the sha256 of its web manifest (scripts/rest/build-web.mjs, null when not built). */
+function servedBuild() {
+  const commit = process.env.SIGNA_BUILD_COMMIT ?? '';
+  let web: string | null = null;
+  try { web = createHash('sha256').update(readFileSync(new URL('../.generated/rest/web-manifest.json', import.meta.url))).digest('hex'); }
+  catch { /* An unbuilt source tree has no manifest. */ }
+  return { commit: /^[0-9a-f]{40}$/.test(commit) ? commit : null, web };
+}
+
 /** Credential pages and the public signed API have separate, exact HTTP hosts. */
 export function createSignaApp(options: SignaAppOptions) {
   const audience = exactOrigin(options.apiAudience);
   const wallet = exactOrigin(options.walletOrigin);
   if (wallet.host === audience.host)
     throw new Error('Signa wallet host must be distinct from the API audience');
+  const build = servedBuild();
   const app = new Hono<{ Bindings: HttpBindings }>();
   app.onError((_error, c) => c.json({ error: { code: 'SIGNA_UNAVAILABLE', message: 'Signa is temporarily unavailable' } }, 503));
   app.use('*', async c => {
@@ -46,7 +59,7 @@ export function createSignaApp(options: SignaAppOptions) {
     // X-Forwarded-Host nor browser Origin can choose a credential or API host.
     const host = request.headers.get('host') ?? new URL(request.url).host;
     const walletHost = host === wallet.host;
-    if (!walletHost && c.req.method === 'GET' && c.req.path === '/healthz') return c.json({ ok: true });
+    if (!walletHost && c.req.method === 'GET' && c.req.path === '/healthz') return c.json({ ok: true, ...build });
     if (walletHost && c.req.method === 'GET' && c.req.path === '/.well-known/apple-developer-merchantid-domain-association.txt')
       return c.text(applePayDomainAssociation);
     const runtime = options.currentRuntime();
