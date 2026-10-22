@@ -31,11 +31,30 @@ const DEV_APPLICATIONS = applications([
   "http://127.0.0.1:8787",
 ]);
 
+const HOSTING_NAMES = {
+  environment: ["SIGNA_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME"],
+  replicaId: ["SIGNA_REPLICA_ID", "RAILWAY_REPLICA_ID"],
+  replicaRegion: ["SIGNA_REPLICA_REGION", "RAILWAY_REPLICA_REGION"],
+} as const;
+
+/** One read of a hosting-neutral setting: the SIGNA_* name, else the Railway name. */
+export function hostingSetting(
+  name: keyof typeof HOSTING_NAMES,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const [neutral, railway] = HOSTING_NAMES[name];
+  return env[neutral] || env[railway] || undefined;
+}
+
+export function environmentName(env: Record<string, string | undefined> = process.env): string | undefined {
+  return hostingSetting("environment", env);
+}
+
 /** The shared trusted configuration. Empty callbacks admit no wallet handoff. */
-export function firstPartyForEnvironment(environment = process.env.RAILWAY_ENVIRONMENT_NAME): readonly FirstPartyApplication[] {
+export function firstPartyForEnvironment(environment = environmentName()): readonly FirstPartyApplication[] {
   return environment === "dev" ? DEV_APPLICATIONS : PRODUCTION_APPLICATIONS;
 }
 
-export function originsForEnvironment(environment = process.env.RAILWAY_ENVIRONMENT_NAME): readonly string[] {
+export function originsForEnvironment(environment = environmentName()): readonly string[] {
   return firstPartyForEnvironment(environment).map(application => application.origin);
 }

@@ -21,3 +21,7 @@ The publish workflow authenticates with GitHub OIDC (npm 11.21.1, pinned) and no
 1. On npmjs.com, open `@me.jango/signa`, Settings, Trusted Publisher, add GitHub Actions: owner `mejango`, repository `signa`, workflow `publish.yml` (no environment), and enable "Allow npm publish" (the default may be staging-only).
 2. Merge the PR that removes the token only after step 1.
 3. After the first OIDC publish (Task 19 version bump; the OIDC setup is only proven by a real publish of a new version) shows provenance with no token, delete the `NPM_TOKEN` repository secret and revoke the token on npmjs.com.
+
+## Hosting-neutral environment names
+
+Signa reads `SIGNA_ENVIRONMENT` (`dev` or `production`, default production), `SIGNA_REPLICA_ID` and `SIGNA_REPLICA_REGION`, and falls back to `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_REPLICA_ID` and `RAILWAY_REPLICA_REGION`. Today's deploy needs no change. Set the three `SIGNA_*` names on each service (the dev service gets `SIGNA_ENVIRONMENT=dev`) before leaving Railway; a later PR removes the fallback.

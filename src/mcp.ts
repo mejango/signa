@@ -13,6 +13,7 @@ import {
 } from "@juicebox/mcp/host";
 import { getAddress } from "viem";
 import { originsForEnvironment } from "./app.js";
+import { environmentName } from "./firstParty.js";
 import { isIpfsCid, type PinningService } from "./ipfs.js";
 import {
   parseRpcRequest,
@@ -535,7 +536,7 @@ export function createCenterMcp(
   const env = options.env ?? process.env;
   const publicOrigin = env.MCP_PUBLIC_ORIGIN ?? "https://juicebox.center";
   const allowedOrigins = [
-    ...originsForEnvironment(env.RAILWAY_ENVIRONMENT_NAME),
+    ...originsForEnvironment(environmentName(env)),
     ...(env.MCP_ALLOWED_ORIGINS?.split(",")
       .map((value) => value.trim())
       .filter(Boolean) ?? []),

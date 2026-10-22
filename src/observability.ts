@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
+import { hostingSetting } from "./firstParty.js";
 import type { JbcenterEnv } from "./types.js";
 
 type RecoveryTask = "nonce_cleanup" | "rate_limit_cleanup" | "transactions" | "user_operations";
@@ -86,8 +87,8 @@ export class Metrics {
               durationMs: Math.round(elapsed * 100) / 100,
               ...(c.get("authMs") !== undefined ? { authMs: c.get("authMs") } : {}),
               client: c.get("client") ?? null,
-              region: process.env.RAILWAY_REPLICA_REGION ?? null,
-              replica: process.env.RAILWAY_REPLICA_ID ?? null,
+              region: hostingSetting("replicaRegion") ?? null,
+              replica: hostingSetting("replicaId") ?? null,
             }),
           );
         }

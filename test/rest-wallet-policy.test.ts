@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { firstPartyForEnvironment, originsForEnvironment } from "../src/firstParty.js";
+import { environmentName, firstPartyForEnvironment, originsForEnvironment } from "../src/firstParty.js";
 import { canonicalJson } from "../src/intent.js";
 import type { Json } from "../src/types.js";
 import {
@@ -29,6 +29,14 @@ describe("one first-party configuration", () => {
     expect(originsForEnvironment("preview")).toEqual(originsForEnvironment("production"));
     expect(originsForEnvironment("production")).not.toContain("https://juicebox.center");
     expect(originsForEnvironment("dev")).not.toContain("https://dev.juicebox.center");
+  });
+  it("selects dev first-party apps from SIGNA_ENVIRONMENT, ahead of the Railway name", () => {
+    vi.stubEnv("RAILWAY_ENVIRONMENT_NAME", "production");
+    vi.stubEnv("SIGNA_ENVIRONMENT", "dev");
+    expect(originsForEnvironment()).toEqual(originsForEnvironment("dev"));
+    expect(environmentName({ SIGNA_ENVIRONMENT: "dev" })).toBe("dev");
+    expect(environmentName({ RAILWAY_ENVIRONMENT_NAME: "dev" })).toBe("dev");
+    expect(environmentName({})).toBeUndefined();
   });
   it("retains the existing environment default and enables no return handlers", () => {
     vi.stubEnv("RAILWAY_ENVIRONMENT_NAME", "dev");
