@@ -13,6 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Require the tested commit to be the default branch head
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ]; then echo "CI passed on $HEAD_SHA but the branch head is $GITHUB_SHA; provenance would name the wrong commit"; exit 1; fi
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -28,5 +33,6 @@ jobs:
         run: |
           name=$(node -p "require('./package.json').name")
           version=$(node -p "require('./package.json').version")
-          if npm view "$name@$version" version >/dev/null 2>&1; then echo "$name@$version is already published"; exit 0; fi
+          if out=$(npm view "$name@$version" version 2>&1); then echo "$name@$version is already published"; exit 0; fi
+          case "$out" in *E404*) ;; *) echo "$out"; exit 1 ;; esac
           npx --yes npm@11.21.1 publish --access public --provenance
