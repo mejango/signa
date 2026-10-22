@@ -146,7 +146,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   // Onramp routes answer only in the funds test; elsewhere they 404 and the link stays hidden.
   let onramp = false;
   // Owner-update routes answer only in the backup update test.
-  let ownerUpdate: { steps: Hex[] } | null = null, kitScript = "";
+  let ownerUpdate: { steps: Hex[]; owners?: Hex[] } | null = null, kitScript = "";
   const backupWords = generateMnemonic(english, 256), backupOwner = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }).address;
   const ownerAbi = parseAbi(["function swapOwner(address prevOwner,address oldOwner,address newOwner)", "function removeOwner(address prevOwner,address owner,uint256 _threshold)"]);
   const [oldPasskey, newPasskey] = [getAddress(`0x${"a0".repeat(20)}`), getAddress(`0x${"a1".repeat(20)}`)];
@@ -257,7 +257,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       if (ownerUpdate && path === "/wallet/networks") return json(updateView("diverged"));
       if (ownerUpdate && path === "/wallet/networks/quote") return json({ bundle: null, challenge: null, view: updateView("diverged"), owners: { changeId: "33333333-3333-4333-8333-333333333333",
         recoveryOwner: backupOwner, chains: [{ version: "center-wallet-network-owners-v1", chainId: 10, walletAddress, recoveryOwner: backupOwner,
-          from: [oldPasskey, backupOwner], owners: [newPasskey, backupOwner], safeNonce: "3", steps: ownerUpdate.steps, createSigners: [] }] } });
+          from: [oldPasskey, backupOwner], owners: ownerUpdate.owners ?? [newPasskey, backupOwner], safeNonce: "3", steps: ownerUpdate.steps, createSigners: [] }] } });
       if (ownerUpdate && path === "/wallet/networks/owners") return json({ view: updateView("updating") });
       if (onramp && networksDown && path === "/wallet/networks") return json({ error: { code: "WALLET_NETWORKS_UNAVAILABLE", message: "unavailable" } }, 503);
       if (onramp && path === "/wallet/networks") return json({ offered: [], pending: [], networks: [
@@ -483,6 +483,14 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     const sentinel = "0x0000000000000000000000000000000000000001";
     // An update that would remove the backup is refused before anything is signed or sent.
     ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "removeOwner", args: [oldPasskey, backupOwner, 1n] })] };
+    // Base's public RPC, as the page reads it itself: the current passkey and the backup, threshold one.
+    const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0"), baseReads: string[] = [];
+    await page.route("https://mainnet.base.org/**", async route => {
+      baseReads.push(route.request().postData() ?? "");
+      const owners = `0x${word(32n)}${word(2n)}${word(newPasskey)}${word(backupOwner)}`;
+      await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify([{ jsonrpc: "2.0", id: 0, result: "0x2105" }, { jsonrpc: "2.0", id: 1, result: owners }, { jsonrpc: "2.0", id: 2, result: `0x${word(1n)}` }]) });
+    });
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
     await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
     await page.locator("#wallet-networks-update").click();
@@ -493,6 +501,14 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("That backup does not match this account");
     expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(0);
     expect(await page.locator("#wallet-networks-words").inputValue()).toBe("");
+    // The server names an owner Base does not hold, with calls that lead exactly there: refused, nothing signed.
+    const attacker = getAddress(`0x${"e1".repeat(20)}`);
+    ownerUpdate = { owners: [attacker, backupOwner], steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, attacker] })] };
+    await page.locator("#wallet-networks-words").fill(backupWords);
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => baseReads.length).toBe(2);
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("That backup does not match this account");
+    expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(0);
     // The real update: one swap of the old passkey for the current one, signed by the backup for Optimism at its nonce.
     ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
     await page.locator("#wallet-networks-words").fill(backupWords);
@@ -505,6 +521,34 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(sent[0]!.body.signatures[0].chainId).toBe(10);
     expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(walletAddress as Hex, ownerUpdate.steps[0]!, "3", 10)), signature: signature! })).toBe(backupOwner);
     expect(await page.locator("#wallet-networks-form").isHidden()).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("updates an out-of-date network with the backup wallet chosen at signup when no backup file or password is given", async () => {
+    const sentinel = "0x0000000000000000000000000000000000000001", word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0");
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
+    await page.route("https://mainnet.base.org/**", route => route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+      body: JSON.stringify([{ jsonrpc: "2.0", id: 0, result: "0x2105" }, { jsonrpc: "2.0", id: 1, result: `0x${word(32n)}${word(2n)}${word(newPasskey)}${word(backupOwner)}` },
+        { jsonrpc: "2.0", id: 2, result: `0x${word(1n)}` }]) }));
+    // The signup wallet, injected: it holds the backup key and signs what the page asks.
+    const backup = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }), asked: string[] = [];
+    await page.exposeFunction("backupWallet", async (method: string, params: unknown[]) => {
+      asked.push(method);
+      if (method === "eth_requestAccounts") return [backup.address];
+      const document = JSON.parse(params[1] as string);
+      return backup.signTypedData({ ...document, message: { ...document.message, nonce: BigInt(document.message.nonce), value: 0n, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n } });
+    });
+    await page.addInitScript(() => { (window as unknown as { ethereum: unknown }).ethereum = { request: ({ method, params }: { method: string; params?: unknown[] }) =>
+      (window as unknown as { backupWallet(method: string, params: unknown[]): Promise<unknown> }).backupWallet(method, params ?? []) }; });
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-networks-update").click();
+    expect(await page.locator("#wallet-networks-backup").textContent()).toContain("your wallet asks to sign");
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
+    expect(asked).toEqual(["eth_requestAccounts", "eth_signTypedData_v4"]);
+    const [signature] = requests.filter(item => item.path === "/wallet/networks/owners")[0]!.body.signatures[0].signatures as Hex[];
+    expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(walletAddress as Hex, ownerUpdate.steps[0]!, "3", 10)), signature: signature! })).toBe(backupOwner);
     expect(errors).toEqual([]);
   });
 

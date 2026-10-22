@@ -447,14 +447,39 @@ function networksBackup(): string | null {
   const field = element<HTMLInputElement>("wallet-networks-words"), words = field.value.trim(); field.value = "";
   return words || networksBackupWords;
 }
-/** The backup signs each network's owner calls after the kit checks them against this account and the chosen networks. */
-async function signNetworkOwners(plan: Json, words: string, chainIds: number[]) {
+type Ethereum = { request(input: { method: string; params?: unknown[] }): Promise<unknown> };
+const injectedWallet = () => (window as unknown as { ethereum?: Ethereum }).ethereum?.request ? (window as unknown as { ethereum: Ethereum }).ethereum : null;
+const backupNeededText = "Open your backup file or password, or open this page in the browser with the wallet you chose at signup.";
+/** The backup signs each network's owner calls after the kit checks them against this account, the chosen networks and
+ * Base's owners: the backup file or password in this tab, or else the wallet chosen at signup, once per network. */
+async function signNetworkOwners(plan: Json, words: string | null, chainIds: number[]) {
   const kit = await loadRecoveryKit(), chains = Array.isArray(plan.chains) ? plan.chains : [];
   if (!chains.length || chains.length > 8) throw new InvalidResponse();
-  const signatures = [];
+  // The owners each update brings are checked against Base's, as this page reads them from Base itself.
+  let homeOwners: Awaited<ReturnType<typeof kit.readHomeOwners>>;
+  try { homeOwners = await kit.readHomeOwners(session!.walletAddress); }
+  catch { setStatus("ready", "Couldn't read this account's owners on Base. Try again."); return null; }
+  const signatures = [], wallet = words ? null : injectedWallet();
+  if (!words && !wallet) { setStatus("ready", backupNeededText); return null; }
   for (const chain of chains) {
     let signed: string[];
-    try { signed = await kit.signWalletOwnerUpdate(words, chain, { walletAddress: session!.walletAddress, chainIds }); }
+    const expected = { walletAddress: session!.walletAddress, chainIds, homeOwners };
+    if (wallet) {
+      let checked: ReturnType<typeof kit.walletOwnerUpdateDocuments>;
+      try { checked = kit.walletOwnerUpdateDocuments(chain, expected); } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); return null; }
+      try {
+        const accounts = await wallet.request({ method: "eth_requestAccounts" });
+        if (!Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== checked.recoveryOwner.toLowerCase()) {
+          setStatus("ready", "Select the wallet you chose at signup, then try again."); return null;
+        }
+        signed = [];
+        for (const document of checked.documents) signed.push(string(await wallet.request({ method: "eth_signTypedData_v4", params: [checked.recoveryOwner,
+          JSON.stringify(document, (_key, value) => typeof value === "bigint" ? value.toString() : value)] }), 132));
+      } catch (error) {
+        if ((error as { code?: unknown })?.code === 4001) { setStatus("ready", "Nothing was signed."); return null; }
+        throw error;
+      }
+    } else try { signed = await kit.signWalletOwnerUpdate(words!, chain, expected); }
     catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); return null; }
     signatures.push({ chainId: Number(record(chain).chainId), signatures: signed });
   }
@@ -481,13 +506,13 @@ async function networksDeploy() {
   const families = new Set([...element("wallet-networks-choices").querySelectorAll<HTMLInputElement>("input:checked")].map(input => input.dataset.family));
   if (!networksUpdating && families.size > 1) { setStatus("ready", "Choose mainnets or testnets, not both at once."); return; }
   const words = networksBackup();
-  if ((networksUpdating || networksView?.backup === "needed") && !words) { setStatus("ready", "Open your backup to set the account's current owners there."); return; }
+  if ((networksUpdating || networksView?.backup === "needed") && !words && !injectedWallet()) { setStatus("ready", backupNeededText); return; }
   setStatus("checking", networksUpdating ? "Preparing the update…" : "Preparing the deployments…");
   const quoted = record(await request(`${base}/networks/quote`, { chainIds }, csrf, 60_000));
   networksView = networkView(quoted.view as Json);
   let owners: Awaited<ReturnType<typeof signNetworkOwners>> = null;
   if (quoted.owners) {
-    if (!words) { networksBackupNeeded = true; render(); setStatus("ready", "Open your backup to set the account's current owners there."); return; }
+    if (!words && !injectedWallet()) { networksBackupNeeded = true; render(); setStatus("ready", backupNeededText); return; }
     owners = await signNetworkOwners(record(quoted.owners), words, chainIds);
     if (!owners) return;
   }

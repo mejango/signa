@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mnemonicToAccount } from 'viem/accounts';
-import { createWalletRecoverySecret, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
+import { createWalletRecoverySecret, readHomeOwners, readWalletRecoveryKit, recoveryAccountFromPhrase, serializeWalletRecoveryKit, signWalletOwnerUpdate } from '../src/rest/web/walletRecoveryKit.js';
 import { encodeFunctionData, getAddress, hashTypedData, parseAbi, recoverAddress, type Address } from 'viem';
 import { walletOwnerChangeSafeTx, walletOwnerPlan } from '../src/rest/web/walletRecoveryReview.js';
 
@@ -48,13 +48,14 @@ describe('a network owner update signed with the backup', () => {
   const update = (steps = walletOwnerPlan([p0, account.address], [d1, p1, account.address]).steps, owners = [d1, p1, account.address]) =>
     ({ chainId: 10, walletAddress: wallet, recoveryOwner: account.address, from: [p0, account.address], owners, safeNonce: '4', steps });
   it('signs each owner call for its chain at consecutive nonces once the calls lead to the owners shown', async () => {
-    const value = update(), signatures = await signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10] });
+    const value = update(), signatures = await signWalletOwnerUpdate(phrase, value, { walletAddress: wallet, chainIds: [10], homeOwners: [d1, p1, account.address] });
     expect(signatures).toHaveLength(2);
     for (const [index, signature] of signatures.entries())
       expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(wallet, value.steps[index]!, String(4 + index), 10)), signature })).toBe(account.address);
   });
   it('refuses calls that differ from what the page can check', async () => {
-    const sign = (value: unknown, chainIds = [10], walletAddress: string = wallet) => signWalletOwnerUpdate(phrase, value, { walletAddress, chainIds });
+    const sign = (value: unknown, chainIds = [10], walletAddress: string = wallet) => signWalletOwnerUpdate(phrase, value, { walletAddress, chainIds,
+      homeOwners: (value as { owners: Address[] }).owners });
     await expect(sign(update(), [42161])).rejects.toThrow();
     await expect(sign(update(), [10], `0x${'33'.repeat(20)}`)).rejects.toThrow();
     await expect(sign(update(undefined, [p1, account.address]))).rejects.toThrow();
@@ -63,5 +64,28 @@ describe('a network owner update signed with the backup', () => {
     await expect(sign(update([encodeFunctionData({ abi, functionName: 'removeOwner', args: [p1, p0, 1n] })], [account.address]))).rejects.toThrow();
     await expect(sign(update([`0x6a761202${'00'.repeat(64)}`], [p0, account.address]))).rejects.toThrow();
     expect(await sign(update([encodeFunctionData({ abi, functionName: 'removeOwner', args: ['0x0000000000000000000000000000000000000001', p0, 1n] })], [account.address]))).toHaveLength(1);
+  });
+  it('refuses owners from the server that Base does not hold, extra or substituted', async () => {
+    const attacker = getAddress(`0x${'e1'.repeat(20)}`), base = [d1, p1, account.address];
+    const sign = (owners: Address[]) => signWalletOwnerUpdate(phrase, update(walletOwnerPlan([p0, account.address], owners).steps, owners), { walletAddress: wallet, chainIds: [10], homeOwners: base });
+    await expect(sign([d1, p1, attacker, account.address])).rejects.toThrow();
+    await expect(sign([attacker, p1, account.address])).rejects.toThrow();
+    await expect(sign([p1, account.address])).rejects.toThrow();
+    expect(await sign([p1, account.address, d1])).toHaveLength(2);
+  });
+});
+
+describe("the account's owners read from Base's public RPC", () => {
+  const wallet = identity.walletAddress, owners = [getAddress(`0x${'a1'.repeat(20)}`), account.address];
+  const word = (value: bigint | string) => BigInt(value).toString(16).padStart(64, '0');
+  const answer = (overrides: Record<number, unknown> = {}) => vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify([2, 0, 1].map(id => ({ jsonrpc: '2.0', id,
+    result: id in overrides ? overrides[id] : [ '0x2105', `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join('')}`, `0x${word(1n)}`][id] }))))));
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it('reads the owners Base holds, and refuses another chain, another threshold or a malformed answer', async () => {
+    answer(); expect(await readHomeOwners(wallet)).toEqual(owners);
+    answer({ 0: '0xa' }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer({ 2: `0x${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer({ 1: `0x${word(64n)}${word(2n)}` }); await expect(readHomeOwners(wallet)).rejects.toThrow();
+    answer({ 1: null }); await expect(readHomeOwners(wallet)).rejects.toThrow();
   });
 });

@@ -384,7 +384,7 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
   }, 60_000);
 
   /** An account recovered on Base only, with the creation stack on Base and Arbitrum, and the networks service as the recovered account sees it. */
-  async function recoveredOnBase(creates = true) {
+  async function recoveredOnBase(creates = true, store = new PostgresWalletNetworksStore(pool)) {
     const { candidate, safe, accountId, context, key } = await account([8453]);
     const enrollment = context.enrollment, manifest = enrollment.intent.manifest, creation = enrollment.creation!;
     // The creation stack carries the same bytes on Base and Arbitrum; the factory answers with the account's address.
@@ -407,7 +407,7 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     const payer = privateKeyToAccount(`0x${"88".repeat(32)}`);
     await call(8453, "anvil_setBalance", [payer.address, toHex(10n ** 18n)]);
     const networks = createWalletNetworks({ enrollments: new PostgresWalletEnrollmentStore(pool), authority: { loadContext: async () => recovered },
-      store: new PostgresWalletNetworksStore(pool), provider, rpc, payer: { address: payer.address, signTransaction: transaction => payer.signTransaction(transaction) } });
+      store, provider, rpc, payer: { address: payer.address, signTransaction: transaction => payer.signTransaction(transaction) } });
     const owners = createWalletOwnerChains({ pool, rpc, networks, checkIntervalMs: 0 });
     const session = { id: randomUUID(), accountId, enrollmentId: enrollment.intent.id, rpId: policy.rpId, credentialId: candidate.credential.credentialId } as WalletCentralSession;
     return { candidate, safe, accountId, key, enrollment, creation, provider, networks, owners, session };
@@ -443,6 +443,21 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     expect(await canSign(42161, safe, candidate.intent.priorSigner)).toBe(false);
     expect(await canSign(42161, safe, candidate.signerAddress)).toBe(true);
     expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "consistent"]);
+  }, 60_000);
+
+  it("a new network is not paid for when its owner update fails while the payment waits for the payer", async () => {
+    // The update fails between the checks before the payer's lock and the payment inside it.
+    const store = new PostgresWalletNetworksStore(pool), withPayer = store.withPayer.bind(store);
+    store.withPayer = async (chainId, payer, run) => {
+      await pool.query("UPDATE rest_wallet_owner_chains SET state='failed',reason='base-changed' WHERE state='approved'");
+      return withPayer(chainId, payer, run);
+    };
+    const { safe, key, networks, session } = await recoveredOnBase(true, store);
+    const quoted = await networks.quote(session, { chainIds: [42161] }), update = quoted.owners!.chains[0]!;
+    const signatures = await Promise.all(update.steps.map((step, index) => enrollmentBackupAccount.signTypedData(walletOwnerChangeSafeTx(safe, step, String(index), 42161))));
+    await expect(networks.approve(session, { bundleId: quoted.bundle!.id, assertion: signGet({ ...key, ...policy, challenge: quoted.challenge! }),
+      owners: { changeId: quoted.owners!.changeId, signatures: [{ chainId: 42161, signatures }] } })).rejects.toMatchObject({ code: "WALLET_NETWORKS_STATE" });
+    expect((await pool.query("SELECT state FROM rest_wallet_network_bundles WHERE id=$1", [quoted.bundle!.id])).rows[0].state).toBe("quoted");
   }, 60_000);
 
   it("a network update stops when Base's owners move on before it is sent", async () => {

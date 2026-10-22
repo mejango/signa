@@ -22,7 +22,8 @@ export function walletPage(signup = false, recovery = false, base = '/wallet', f
 <fieldset id="wallet-networks-choices"></fieldset>
 <fieldset id="wallet-networks-backup" hidden><legend>Your backup sets the account's current owners there</legend>
 <label class="field">Backup file<input id="wallet-networks-file" type="file" accept="application/json,.json"></label>
-<label class="field">Or backup password<input id="wallet-networks-words" type="password" autocomplete="off" spellcheck="false"></label></fieldset>
+<label class="field">Or backup password<input id="wallet-networks-words" type="password" autocomplete="off" spellcheck="false"></label>
+<p>Chose a wallet as your backup? Leave these empty and your wallet asks to sign.</p></fieldset>
 <div class="actions"><button id="wallet-networks-deploy" type="submit">Deploy</button><button id="wallet-networks-cancel" class="link" type="button">Cancel</button></div></form>
 <p id="wallet-devices-row"><button id="wallet-device-add" class="link" type="button">Add a device</button></p>
 <section id="wallet-device" hidden aria-label="Add a device"><h2 id="wallet-device-title">Add a device</h2>

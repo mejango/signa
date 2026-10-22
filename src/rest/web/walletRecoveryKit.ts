@@ -1,7 +1,7 @@
 import { validateMnemonic } from '@scure/bip39';
 import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'viem';
-import { signaChains } from '../wallet/chains.js';
 import { walletOwnerChangeSafeTx, walletOwnerPlan } from './walletRecoveryReview.js';
+import { signaChains } from '../wallet/chains.js';
 import { wordlist as english } from '@scure/bip39/wordlists/english';
 import { generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 
@@ -93,21 +93,33 @@ export async function readChainSafe(walletAddress: string, chainId: number): Pro
   return { deployed: true, owners: words.slice(2).map(item => { if (!/^0{24}/.test(item)) invalid(); return getAddress(`0x${item.slice(24)}`); }),
     threshold: word(threshold), nonce: word(nonce) };
 }
-/** One network's update to Base's owners, checked as far as the page can: the calls must be exactly the ones that take
- * `from` to `owners` (`walletOwnerPlan`: owner calls on this account only, a threshold of one, no owner added on the way
- * that is not in `owners`), on a chain the person chose, with the backup kept as an owner. The owner sets come from
- * the server. Then the backup signs each call in order, from the update's Safe nonce. */
-export async function signWalletOwnerUpdate(mnemonic: string, input: unknown, expected: { walletAddress: string; chainIds: number[] }): Promise<Hex[]> {
+/** The account's owners on Base, as Base reports them, with a threshold of one. */
+export async function readHomeOwners(walletAddress: string): Promise<Address[]> {
+  const home = await readChainSafe(walletAddress, 8453);
+  if (!home.deployed || home.threshold !== 1n) invalid();
+  return home.owners;
+}
+/** One network's update to Base's owners, checked before anything signs it: the calls must be exactly the ones that take `from` to `owners`
+ * (`walletOwnerPlan`: owner calls on this account only, a threshold of one, no owner added on the way that is not in
+ * `owners`), on a chain the person chose, with the backup kept as an owner, and `owners` must be exactly the owners
+ * this page read from Base itself (`readHomeOwners`). Returns the backup's address and each call's SafeTx, in order from the update's Safe nonce. */
+export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[] }) {
   const update = input as { chainId: number; walletAddress: Address; recoveryOwner: Address; from: Address[]; owners: Address[]; safeNonce: string; steps: Hex[] };
   const owners = (value: unknown) => { if (!Array.isArray(value) || !value.length || value.length > 16) invalid(); for (const item of value) address(item); return (value as Address[]).map(item => getAddress(item)); };
   if (!update || typeof update !== 'object' || !expected.chainIds.includes(update.chainId) || !Array.isArray(update.steps) || !update.steps.length) invalid();
   address(update.walletAddress); address(update.recoveryOwner);
   if (getAddress(update.walletAddress) !== getAddress(expected.walletAddress) || typeof update.safeNonce !== 'string' || !/^(0|[1-9][0-9]{0,30})$/.test(update.safeNonce)) invalid();
-  const backup = recoveryAccountFromPhrase(mnemonic, update.recoveryOwner), from = owners(update.from), target = owners(update.owners);
-  if (new Set(target).size !== target.length || !from.includes(backup.address) || !target.includes(backup.address)) invalid();
+  const backup = getAddress(update.recoveryOwner), from = owners(update.from), target = owners(update.owners);
+  if (new Set(target).size !== target.length || !from.includes(backup) || !target.includes(backup)
+    || target.length !== expected.homeOwners.length || target.some(owner => !expected.homeOwners.some(item => getAddress(item) === owner))) invalid();
   const plan = walletOwnerPlan(from, target);
   if (plan.steps.length !== update.steps.length || plan.steps.some((step, index) => step !== update.steps[index])) invalid();
-  return Promise.all(plan.steps.map((step, index) => backup.signTypedData(walletOwnerChangeSafeTx(update.walletAddress, step, String(BigInt(update.safeNonce) + BigInt(index)), update.chainId))));
+  return { recoveryOwner: backup, documents: plan.steps.map((step, index) => walletOwnerChangeSafeTx(update.walletAddress, step, String(BigInt(update.safeNonce) + BigInt(index)), update.chainId)) };
+}
+/** The backup file or password signs one checked network update (`walletOwnerUpdateDocuments`). */
+export async function signWalletOwnerUpdate(mnemonic: string, input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[] }): Promise<Hex[]> {
+  const { recoveryOwner, documents } = walletOwnerUpdateDocuments(input, expected), backup = recoveryAccountFromPhrase(mnemonic, recoveryOwner);
+  return Promise.all(documents.map(document => backup.signTypedData(document)));
 }
 /** The SafeTx hash the primary passkey signs to add the device's signer on one chain, rebuilt from what this page shows
  * (the account and the device's signer), so a prompt never signs a hash the server chose. */
