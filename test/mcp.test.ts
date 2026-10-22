@@ -11,6 +11,7 @@ import {
   MCP_BACKEND_LIMITS,
 } from "../src/mcp.js";
 import { createApp } from "../src/app.js";
+import { originsForEnvironment } from "../src/firstParty.js";
 import { contentHash, signingMessage } from "../src/intent.js";
 import { readSponsorPolicy } from "../src/sponsor/policy.js";
 import { MemoryStore } from "./support/memoryStore.js";
@@ -717,6 +718,7 @@ describe("Center intent writes through the real app", () => {
     const sponsor = { policy: { ...readSponsorPolicy({}), paused: options.paused ?? false }, kick: vi.fn() };
     const app = createApp(store, {
       sponsor,
+      allowedOrigins: originsForEnvironment("production"),
       ...(options.publishPerIpPerHour === undefined
         ? {}
         : { publishPerIpPerHour: options.publishPerIpPerHour }),
