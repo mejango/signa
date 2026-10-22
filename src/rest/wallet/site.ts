@@ -14,7 +14,7 @@ import type { WalletCentralSession } from './login.js';
 import { verifyWalletHandoffLaunchSignature, type WalletHandoffExchangeInput, type WalletHandoffRequest } from './handoff.js';
 import { assertWalletHttpHost, assertWalletHttpRequest, assertWalletCsrf, readWalletCookie,
   readWalletLaunchForm, walletLaunchClaim, walletLaunchCookie,
-  readWalletJson, walletCookie, walletCsrfToken, walletFlowCookie, walletSessionCookie, walletSignupCookie, walletHttpAssertion as assertion, walletPageHeaders as pageHeaders } from './http.js';
+  readWalletJson, walletCookie, walletCsrfToken, walletFlowCookie, walletSessionCookie, walletSignupCookie, walletHttpAssertion as assertion, walletSigningPageHeaders as pageHeaders, walletFundsPageHeaders } from './http.js';
 import type { PostgresWalletLoginStore } from './loginPostgres.js';
 import type { PostgresWalletHandoffStore } from './handoffPostgres.js';
 import type { PostgresWalletPolicyStore } from './policyPostgres.js';
@@ -109,7 +109,7 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   });
   // The wallet's own paths under `base`. On the credential host nothing else may execute.
   const walletPrefixes = ['/assets/', '/authorize/', '/config', '/create', '/handoff/', '/launch', '/login/', '/logout', '/payment',
-    '/networks', '/onramp', '/balances', '/payment-reviews/', '/recover', '/recovery/', '/session', '/signup/', '/add', '/devices/'];
+    '/networks', '/onramp', '/funds', '/balances', '/payment-reviews/', '/recover', '/recovery/', '/session', '/signup/', '/add', '/devices/'];
   const applePayFile = '/.well-known/apple-developer-merchantid-domain-association';
   const isWalletPath = (path: string) => (path === applePayFile && !!options.applePayDomainFile) || path === (base || '/') || path === `${base}/` || walletPrefixes.some(prefix => path.startsWith(base + prefix));
   const legacyPrefix = '/wallet';
@@ -380,6 +380,13 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
     const token = readWalletCookie(c.req.raw, walletSessionCookie), session = token ? await viewFor(token) : null;
     if (!session) reject(403, 'WALLET_HTTP_SESSION');
     return c.json(await options.balances.read(address(session)));
+  });
+  // Adding funds is the one page that frames another origin (Coinbase's Apple Pay button), so it is a page
+  // of its own, apart from every page that signs, and a passkey cannot be used on it.
+  app.get(`${base}/funds`, c => {
+    onramp();
+    for (const [key, value] of Object.entries(walletFundsPageHeaders)) c.header(key, value);
+    return c.html(walletPage(!!options.signup, !!options.recovery, base, false, assets));
   });
   app.get(`${base}/onramp`, async c => {
     const service = onramp(), token = readWalletCookie(c.req.raw, walletSessionCookie), session = token ? await viewFor(token) : null;

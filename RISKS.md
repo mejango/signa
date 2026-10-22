@@ -20,6 +20,7 @@ Signa is a passkey smart-account wallet. Each account is a threshold-one Safe th
 - **The passkey signature is the approval.** The page at `signa.center` shows the review of one Base USDC payment and asks for a passkey assertion with user verification required. The page recomputes the signing digest from the returned operation and refuses a passkey challenge that differs from it.
 - **A review is a fixed operation.** It binds the plan commitment, the operation commitment and hash, the Safe and the app origin and callback. A review is `pending`, `approved` or `cancelled` and has an expiry.
 - **The page runs inside app frames and popups.** Only origins in `WALLET_FRAMEABLE_APP_ORIGINS` may frame it. Assertions and CSRF values stay in page memory and are not stored.
+- **Pages that sign frame no other origin.** The account, payment, signup, recovery and device pages send no `frame-src` and grant the Payment Request API to no one, so no third-party frame sits beside a passkey prompt. Coinbase's Apple Pay frame lives only on the funds page, whose `Permissions-Policy` turns passkeys off.
 
 ## Gas sponsorship
 

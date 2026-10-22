@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from
 import { build } from "esbuild";
 import { parseWalletRegistration, type WalletRegistrationCandidate } from "../src/rest/wallet/registration.js";
 import { verifyWalletAssertion, type WalletAssertion } from "../src/rest/wallet/webauthn.js";
-import { walletPageHeaders } from "../src/rest/wallet/http.js";
+import { walletFundsPageHeaders, walletSigningPageHeaders } from "../src/rest/wallet/http.js";
 
 const encode = (value: Uint8Array) => Buffer.from(value).toString("base64url");
 const decode = (value: string) => Buffer.from(value, "base64url");
@@ -179,8 +179,12 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       };
       if (path === "/wallet" || path === "/wallet/ways") {
         // /wallet/ways renders the landing with signup and recovery offered, as production does for an app intent.
-        response.writeHead(200, { "content-type": "text/html", "content-security-policy": walletPageHeaders["Content-Security-Policy"] });
+        response.writeHead(200, { "content-type": "text/html", "content-security-policy": walletSigningPageHeaders["Content-Security-Policy"] });
         response.end(path === "/wallet/ways" || landingWays ? productionWaysHtml : pageHtml); return;
+      }
+      if (path === "/wallet/funds") {
+        response.writeHead(200, { "content-type": "text/html", "content-security-policy": walletFundsPageHeaders["Content-Security-Policy"] });
+        response.end(pageHtml); return;
       }
       if (path === "/wallet/create") { response.writeHead(200, { "content-type": "text/html" }); response.end(signupHtml); return; }
       if (path === "/wallet/assets/wallet-signup.js" || path === "/wallet/assets/wallet-signup.css") {
@@ -441,13 +445,21 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(errors).toEqual([]);
   });
 
+  it("sends a signed-out visit to the funds page to the account page to sign in", async () => {
+    onramp = true;
+    await page.goto(`${origin}/wallet/funds`); await page.waitForURL(`${origin}/wallet`); await status("ready");
+    expect(errors).toEqual([]);
+  });
+
   it("adds funds with Apple Pay: Coinbase's frame asks for the contact details, this page never does", async () => {
     onramp = true;
     // The stand-in pay page reports an approved payment the way Coinbase's frame does.
     await page.context().route("https://pay.coinbase.com/**", route => route.fulfill({ contentType: "text/html",
       body: route.request().url().includes("apple-pay") ? `<script>parent.postMessage({ eventName: "onramp_api.commit_success" }, "*")</script>` : "<p>Coinbase</p>" }));
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
-    await page.locator("#wallet-funds-open").click();
+    // Add funds opens its own page: the account page, which signs, frames nothing.
+    await page.locator("#wallet-funds-open").click(); await page.waitForURL(`${origin}/wallet/funds`); await status("signed-in");
+    expect(await page.locator("#wallet-signin, #wallet-device-add, #wallet-networks-add").evaluateAll(items => items.every(item => (item as HTMLElement).hidden))).toBe(true);
     expect(await page.locator("#wallet-funds input[type=email], #wallet-funds input[type=tel]").count()).toBe(0);
     await page.locator("#wallet-funds-amount").fill("25");
     await page.locator("#wallet-funds-applepay").click();
@@ -485,13 +497,15 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await page.context().route("https://pay.coinbase.com/**", route => route.fulfill({ contentType: "text/html",
       body: `<script>for (const e of ${JSON.stringify(events)}) parent.postMessage(e, "*")</script>` }));
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
-    const pay = async () => {
-      await page.locator("#wallet-funds-open").click(); await page.locator("#wallet-funds-amount").fill("25");
+    await page.locator("#wallet-funds-open").click(); await page.waitForURL(`${origin}/wallet/funds`); await status("signed-in");
+    const pay = async (open = true) => {
+      if (open) await page.locator("#wallet-funds-open").click();
+      await page.locator("#wallet-funds-amount").fill("25");
       await page.locator("#wallet-funds-agree").check(); await page.locator("#wallet-funds-applepay").click();
     };
     const frame = page.locator("#wallet-funds-pay iframe");
     events = [{ eventName: "onramp_api.load_error", data: { errorCode: "ERROR_CODE_GUEST_APPLE_PAY_NOT_SUPPORTED", errorMessage: "x" } }];
-    await pay(); await expect.poll(() => frame.isVisible()).toBe(true);
+    await pay(false); await expect.poll(() => frame.isVisible()).toBe(true);
     await page.waitForTimeout(300); expect(await frame.isVisible()).toBe(true);
     events = [{ eventName: "onramp_api.validate_merchant_error", data: { errorCode: "ERROR_CODE_GUEST_APPLE_PAY_MERCHANT_VALIDATION_TIMEOUT", errorMessage: "Check your connection and try again." } },
       { eventName: "onramp_api.cancel" }];

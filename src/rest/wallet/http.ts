@@ -13,11 +13,16 @@ export const walletLaunchCookie = '__Host-center-wallet-launch';
 export type WalletCookieName = typeof walletSessionCookie | typeof walletFlowCookie | typeof walletSignupCookie | typeof walletSignupResumeCookie
   | typeof walletRecoveryCookie | typeof walletRecoveryResumeCookie | typeof walletLaunchCookie;
 
-/** Coinbase's Apple Pay button is the one frame the account page embeds; it needs the Payment Request API. */
-export const walletPageHeaders = {
-  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-src https://pay.coinbase.com; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+/** Every page that can ask for a passkey: no frame of any other origin and no payment API. */
+export const walletSigningPageHeaders = {
+  'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'",
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY', 'Permissions-Policy': 'publickey-credentials-get=(self), publickey-credentials-create=(self), payment=(self "https://pay.coinbase.com")',
+  'X-Frame-Options': 'DENY', 'Permissions-Policy': 'publickey-credentials-get=(self), publickey-credentials-create=(self)',
+};
+/** The funds page embeds Coinbase's Apple Pay button, which needs the Payment Request API; no passkey can be used there. */
+export const walletFundsPageHeaders = { ...walletSigningPageHeaders,
+  'Content-Security-Policy': walletSigningPageHeaders['Content-Security-Policy'].replace("img-src 'self';", "img-src 'self'; frame-src https://pay.coinbase.com;"),
+  'Permissions-Policy': 'publickey-credentials-get=(), publickey-credentials-create=(), payment=(self "https://pay.coinbase.com")',
 };
 
 function invalid(status = 400, code = 'WALLET_HTTP_INVALID'): never {

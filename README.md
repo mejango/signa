@@ -88,7 +88,8 @@ Purchases land as USDC or ETH on Base at the account's own address. Apple Pay us
 embedded checkout (needs Coinbase to enable it): Coinbase's frame asks for and verifies the email
 and phone, so Signa never sees them; the device keeps only Coinbase's returning-user token.
 `CDP_ONRAMP_SANDBOX=true` uses Coinbase's sandbox with the same key. The Apple Pay button embeds
-in the account page (the wallet host must be on the CDP Portal's Onramp domain allowlist); the
+in the funds page that "Add funds" opens, the one Signa page that frames another origin and the
+one on which no passkey can be used (the wallet host must be on the CDP Portal's Onramp domain allowlist); the
 file Coinbase issues for that domain goes in `CDP_APPLE_PAY_DOMAIN_FILE` and is served at
 `/.well-known/apple-developer-merchantid-domain-association`. Inside an app's frame the button
 opens in a window instead, since Apple checks the top page's domain.

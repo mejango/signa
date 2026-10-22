@@ -420,6 +420,30 @@ describe('sign-in framed by an admitted app',()=>{
       expect(gated.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");expect(gated.headers.get('x-frame-options')).toBe('DENY');
     }
   });
+  it('signing pages allow no third-party frame or payment API; only the funds page embeds Coinbase',async()=>{
+    const {handoff}=await framedSetup();
+    const payments={get:vi.fn(),approve:vi.fn(),cancel:vi.fn(),frameOrigin:vi.fn(async()=>appOrigin)};
+    const {app}=setup({handoff,frameableAppOrigins:[appOrigin],payments:payments as never,paymentBrowserScript:'/* payment */',
+      signup:{} as never,signupBrowserScript:'/* signup */',recovery:{} as never,recoveryBrowserScript:'/* recovery */',
+      devices:{} as never,deviceBrowserScript:'/* device */',onramp:{applePay:true} as never});
+    const signing=(response:Response)=>{
+      const csp=response.headers.get('content-security-policy')!;
+      expect(response.status).toBe(200);expect(csp).not.toContain('frame-src');expect(csp).not.toContain('coinbase');
+      expect(response.headers.get('permissions-policy')).toBe('publickey-credentials-get=(self), publickey-credentials-create=(self)');
+      return csp;
+    };
+    for(const path of ['/wallet','/wallet/payment','/wallet/create','/wallet/recover','/wallet/add'])
+      expect(signing(await app.fetch(new Request(origin+path)))).toContain("frame-ancestors 'none'");
+    for(const path of ['/wallet?intent='+flow,'/wallet/payment?review='+loginId,'/wallet/create?intent='+flow])
+      expect(signing(await app.fetch(new Request(origin+path,{headers:{'Sec-Fetch-Dest':'iframe'}})))).toContain(`frame-ancestors ${appOrigin};`);
+    // Adding funds is a page of its own: Coinbase's pay frame and the Payment Request API, and no passkey at all.
+    const funds=await app.fetch(new Request(origin+'/wallet/funds'));
+    expect(funds.status).toBe(200);
+    expect(funds.headers.get('content-security-policy')).toContain('frame-src https://pay.coinbase.com;');
+    expect(funds.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");expect(funds.headers.get('x-frame-options')).toBe('DENY');
+    expect(funds.headers.get('permissions-policy')).toBe('publickey-credentials-get=(), publickey-credentials-create=(), payment=(self "https://pay.coinbase.com")');
+    expect((await setup().app.fetch(new Request(origin+'/wallet/funds'))).status).toBe(503);
+  });
   it('keeps a framed launch\'s claim on the row instead of a cookie, for admitted apps only',async()=>{
     const {app,handoff,launchSignature}=await framedSetup();
     const body=new URLSearchParams({intentId:flow,signature:launchSignature}).toString();
@@ -491,13 +515,13 @@ describe('onramp HTTP boundary',()=>{
     expect((await app.fetch(request('/wallet/onramp/session',{destinationAddress:'0x00000000000000000000000000000000000000bb'},signedIn))).status).toBe(400);
     expect(service.session).toHaveBeenCalledTimes(1);
   });
-  it('serves Coinbase\'s Apple Pay domain file only when configured, and lets only pay.coinbase.com frame into the page',async()=>{
+  it('serves Coinbase\'s Apple Pay domain file only when configured, and lets only pay.coinbase.com frame into the funds page',async()=>{
     const path='/.well-known/apple-developer-merchantid-domain-association';
     const {app}=setup({onramp:onramp() as never,applePayDomainFile:'domain-file-contents'});
     const file=await app.fetch(new Request(origin+path));
     expect(file.status).toBe(200);expect(await file.text()).toBe('domain-file-contents');
     expect((await setup().app.fetch(new Request(origin+path))).status).toBe(404);
-    const page=await app.fetch(new Request(origin+'/wallet/onramp',{headers:{cookie:signedIn.cookie}}));
+    const page=await app.fetch(new Request(origin+'/wallet/funds'));
     expect(page.headers.get('content-security-policy')).toContain('frame-src https://pay.coinbase.com;');
     expect(page.headers.get('permissions-policy')).toContain('payment=(self "https://pay.coinbase.com")');
   });

@@ -8,7 +8,7 @@ import type { createLocalWalletSignup } from './signup.js';
 import type { WalletCeremonyOptions } from './webauthn.js';
 import { walletSignupPage, walletSignupCss } from '../web/walletSignupPage.js';
 import { assertWalletHttpHost, assertWalletHttpRequest, assertWalletCsrf, readWalletCookie, readWalletJson,
-  walletCookie, walletCsrfToken, walletSessionCookie, walletSignupCookie, walletSignupResumeCookie, walletHttpBytes, walletHttpAssertion, walletPageHeaders,
+  walletCookie, walletCsrfToken, walletSessionCookie, walletSignupCookie, walletSignupResumeCookie, walletHttpBytes, walletHttpAssertion, walletSigningPageHeaders,
   type WalletCookieName } from './http.js';
 
 export interface WalletSignupSiteOptions {
@@ -37,7 +37,7 @@ export function mountWalletSignup(app: Hono, options: WalletSignupSiteOptions) {
   const { signup, origin } = options;
   for (const path of [`${base}/create`, `${base}/signup/*`, `${base}/assets/wallet-signup.*`]) app.use(path, async (c, next) => {
     assertWalletHttpHost(c.req.raw, origin);
-    for (const [name, value] of Object.entries(walletPageHeaders)) c.header(name, value);
+    for (const [name, value] of Object.entries(walletSigningPageHeaders)) c.header(name, value);
     await next();
   });
   function cookie(c: Context, name: WalletCookieName) {
