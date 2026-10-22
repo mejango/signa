@@ -238,6 +238,69 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
     } finally { await context.close(); }
   }, 30000);
 
+  it('after activation, reviews only the chains still on the old passkey with the backup, across a reload', async () => {
+    const context = await browser.newContext(), page = await context.newPage(), secret = createWalletRecoverySecret();
+    const authority = await createWalletAuthorityContextFixture(Date.now());
+    const intent = createWalletRecoveryIntent(authority, { rpId: authority.credential.rpId, origin: authority.enrollment.intent.origin, nowMs: Date.now(), expiresAtMs: Date.now() + 120_000 });
+    const key = createRegistration({ rpId: intent.rpId, origin: intent.origin, userHandle: intent.userHandle, challenge: `0x${Buffer.from(intent.registration.challenge, 'base64url').toString('hex')}` });
+    const candidate = prepareWalletRecoveryCandidate(intent, key.response), owners = [intent.priorSigner, intent.recoveryOwner];
+    const optimism = prepareWalletRecoveryRotation(candidate, { owners, threshold: 1, safeNonce: '1' }, 10), arbitrum = prepareWalletRecoveryRotation(candidate, { owners, threshold: 1, safeNonce: '5' }, 42161);
+    const shaped = (review: typeof arbitrum) => JSON.parse(JSON.stringify({ review: { ...review, recoveryOwner: secret.recoveryOwner }, document: walletRecoveryRotationDocument(review) },
+      (_key, value) => typeof value === 'bigint' ? String(value) : value));
+    let view: Record<string, unknown> = { id: intent.id, passkeyName: 'Juicebox replacement', rpId: 'localhost', origin, expiresAtMs: Date.now() + 3600000,
+      proofExpiresAtMs: intent.expiresAtMs, walletAddress: arbitrum.walletAddress, recoveryOwner: secret.recoveryOwner, initializerHash: intent.initializerHash,
+      priorSigner: intent.priorSigner, replacementSigner: candidate.signerAddress, candidateDigest: arbitrum.candidateDigest,
+      rotationContext: { publicKey: candidate.credential.publicKey, signerFactory: intent.manifest.ownerProfile!.signerFactory.address, verifiers: intent.manifest.ownerProfile!.p256Verifier.address },
+      phase: 'ready_to_sign_in', registration: null, possession: null, transactionHashes: [],
+      chains: [{ chainId: 10, name: 'Optimism', state: 'updated' }, { chainId: 42161, name: 'Arbitrum', state: 'failed' }] };
+    const approvals: Record<string, unknown>[] = []; let reviews = 0;
+    await page.route(origin + '/**', async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (path === '/wallet/recover') return route.fulfill({ contentType: 'text/html', body: walletRecoveryPage() });
+      if (path.endsWith('wallet-recovery-kit.js')) return route.fulfill({ contentType: 'text/javascript', body: kitScript });
+      if (path.endsWith('.js')) return route.fulfill({ contentType: 'text/javascript', body: script });
+      if (path.endsWith('.css')) return route.fulfill({ contentType: 'text/css', body: walletRecoveryCss() });
+      if (path.endsWith('/state')) return route.fulfill({ json: { view, csrfToken: Buffer.alloc(32, 3).toString('base64url') } });
+      if (path.endsWith('/rotation/review')) {
+        view = { ...view, chains: [{ chainId: 10, name: 'Optimism', state: 'updated' }, { chainId: 42161, name: 'Arbitrum', state: 'review' }] };
+        // The first answer slips in a chain that is already updated; the page refuses to sign it.
+        return route.fulfill({ json: { review: null, document: null, chains: reviews++ ? [shaped(arbitrum)] : [shaped(optimism), shaped(arbitrum)] } });
+      }
+      if (path.endsWith('/rotation/approve')) {
+        approvals.push(JSON.parse(request.postData()!));
+        view = { ...view, chains: [{ chainId: 10, name: 'Optimism', state: 'updated' }, { chainId: 42161, name: 'Arbitrum', state: 'approved' }] };
+        return route.fulfill({ json: { view } });
+      }
+      throw new Error('Unexpected browser request: ' + path);
+    });
+    const contains = async (text: string) => expect.poll(() => page.locator('#wallet-status').textContent()).toContain(text);
+    try {
+      await page.addInitScript(() => { (window as unknown as { prompts: number }).prompts = 0;
+        navigator.credentials.get = async () => { (window as unknown as { prompts: number }).prompts++; throw new DOMException('No prompt expected', 'NotAllowedError'); }; });
+      await page.goto(origin + '/wallet/recover'); await contains('Arbitrum still accepts the old passkey');
+      await page.getByLabel('My backup password').check();
+      await page.getByLabel('Backup password', { exact: true }).fill(secret.mnemonic);
+      await page.getByRole('button', { name: 'Review network updates' }).click();
+      await contains('The recovery review changed');
+      // The review is kept on the server, so a reload picks it up where it was.
+      await page.reload(); await contains('Arbitrum still accepts the old passkey');
+      expect(await page.locator('#recovery-chains').textContent()).toBe('Optimism: Updated, Arbitrum: Waiting for your approval');
+      await page.getByLabel('My backup password').check();
+      await page.getByLabel('Backup password', { exact: true }).fill(secret.mnemonic);
+      await page.getByRole('button', { name: 'Review network updates' }).click();
+      await contains('Review the account and the exact calls');
+      expect(await page.locator('#recovery-scope').textContent()).toBe('Arbitrum');
+      await page.getByRole('button', { name: 'Approve network updates' }).click();
+      await expect.poll(() => approvals.length).toBe(1);
+      const [approval] = approvals as { chainSignatures: { chainId: number; signature: Hex }[] }[];
+      expect(Object.keys(approval!)).toEqual(['chainSignatures']);
+      expect(approval!.chainSignatures.map(item => item.chainId)).toEqual([42161]);
+      expect((await recoverTypedDataAddress({ ...walletRecoveryRotationDocument(arbitrum), signature: approval!.chainSignatures[0]!.signature })).toLowerCase()).toBe(secret.recoveryOwner.toLowerCase());
+      await expect.poll(() => page.locator('#recovery-chains').textContent()).toBe('Optimism: Updated, Arbitrum: Waiting for Base');
+      expect(await page.evaluate(() => (window as unknown as { prompts: number }).prompts)).toBe(0);
+    } finally { await context.close(); }
+  }, 30000);
+
   it('refuses recovery secrets or arbitrary return URLs in the page URL before any API call', async () => {
     const context = await browser.newContext(), page = await context.newPage(); let apiCalls = 0;
     await page.route(origin + '/**', async route => {

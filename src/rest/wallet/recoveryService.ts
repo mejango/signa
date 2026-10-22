@@ -105,18 +105,33 @@ export function createLocalWalletRecovery(options: LocalWalletRecoveryDependenci
     const { record } = await context(flowToken);
     await recoveries.prove(record.intent.id, flowToken, input); return status(flowToken);
   }
-  async function prepareRotation(flowToken: string) {
+  /** After activation only the other chains can still need the swap: one that failed, or one reached since the review. */
+  async function activeChains(flowToken: string) {
     const { record } = await context(flowToken);
-    if (!record.proof || record.activation) state();
+    if (!record.activation) return null;
+    if (!options.chains || !await recoveries.isCurrentActivation(record.intent.id, flowToken)) state();
+    return { record, chains: options.chains };
+  }
+  async function prepareRotation(flowToken: string) {
+    const active = await activeChains(flowToken);
+    if (active) return { review: null, document: null,
+      chains: (await active.chains.prepare(active.record.candidate!)).map(item => ({ review: item, document: walletRecoveryRotationDocument(item) })) };
+    const { record } = await context(flowToken);
+    if (!record.proof) state();
     const review = await rotation.prepare(record.intent.id), chains = await options.chains?.prepare(record.candidate!) ?? [];
     // One review: Base's swap and the same swap on each other chain, each signed by the backup key in the same approval.
     return { review, document: walletRecoveryRotationDocument(review),
       chains: chains.map(item => ({ review: item, document: walletRecoveryRotationDocument(item) })) };
   }
-  async function approveRotation(flowToken: string, backupSignature: Hex, chainSignatures: unknown = []) {
+  async function approveRotation(flowToken: string, backupSignature: Hex | undefined, chainSignatures: unknown = []) {
+    const active = await activeChains(flowToken);
+    if (active) {
+      // A repeated approval with nothing left to review is answered with the current state.
+      if ((await active.chains.status(active.record.intent.id)).some(chain => chain.state === 'review')) await active.chains.approve(active.record.candidate!, chainSignatures);
+      return status(flowToken);
+    }
     const { record } = await context(flowToken);
-    if (!record.proof) state();
-    if (record.activation) return status(flowToken);
+    if (!record.proof || typeof backupSignature !== 'string') state();
     // The other chains' approvals are kept first; none is sent before Base's own swap is on chain.
     await options.chains?.approve(record.candidate!, chainSignatures);
     const review = await rotation.prepare(record.intent.id);

@@ -97,8 +97,9 @@ export function mountWalletRecovery(app: Hono, options: WalletRecoverySiteOption
     await body(c, []); return json(c, await recovery.prepareRotation(cookie(c, walletRecoveryCookie)));
   });
   app.post(`${base}/recovery/rotation/approve`, async c => {
-    const input = await body(c, ['backupSignature'], ['chainSignatures']), token = cookie(c, walletRecoveryCookie);
-    return json(c, { view: await recovery.approveRotation(token, input.backupSignature as Hex, input.chainSignatures ?? []) });
+    // After activation only the other chains are approved, so Base's signature is absent.
+    const input = await body(c, [], ['backupSignature', 'chainSignatures']), token = cookie(c, walletRecoveryCookie);
+    return json(c, { view: await recovery.approveRotation(token, input.backupSignature as Hex | undefined, input.chainSignatures ?? []) });
   });
   app.post(`${base}/recovery/activate`, async c => {
     await body(c, []);

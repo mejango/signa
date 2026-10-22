@@ -114,7 +114,8 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
      * already showing the new passkey is updated; one whose owners are not the account's original pair fails. */
     async prepare(candidate: WalletRecoveryCandidate): Promise<WalletRecoveryRotation[]> {
       const id = candidate.intent.id, known = await rows(id);
-      const fresh = (await deployed(candidate)).filter(chainId => (known.find(row => Number(row.chain_id) === chainId)?.state ?? "review") === "review");
+      // A chain that failed is read again too: where the old passkey still holds it, the user can approve a fresh swap.
+      const fresh = (await deployed(candidate)).filter(chainId => ["review", "failed"].includes(known.find(row => Number(row.chain_id) === chainId)?.state ?? "review"));
       const states = await Promise.all(fresh.map(chainId => read(candidate, chainId).catch(() => {
         throw new RestError(503, "WALLET_RECOVERY_CHAIN_UNAVAILABLE", `${signaChainName(chainId)} could not be read. Try again shortly.`);
       })));
@@ -127,8 +128,9 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
           catch { /* An owner list the swap cannot be built from. */ }
         }
         await pool.query(`INSERT INTO rest_wallet_recovery_chains(recovery_id,chain_id,state,review,reason,updated_at_ms) VALUES($1,$2,$3,$4,$5,$6)
-          ON CONFLICT(recovery_id,chain_id) DO UPDATE SET state=EXCLUDED.state,review=EXCLUDED.review,reason=EXCLUDED.reason,updated_at_ms=EXCLUDED.updated_at_ms
-          WHERE rest_wallet_recovery_chains.state='review'`, [id, chainId, next, review, next === "failed" ? "owners-differ" : null, now()]);
+          ON CONFLICT(recovery_id,chain_id) DO UPDATE SET state=EXCLUDED.state,review=EXCLUDED.review,reason=EXCLUDED.reason,updated_at_ms=EXCLUDED.updated_at_ms,
+            approval=NULL,bundle_id=NULL,attempts=0
+          WHERE rest_wallet_recovery_chains.state IN ('review','failed')`, [id, chainId, next, review, next === "failed" ? "owners-differ" : null, now()]);
       }
       return (await rows(id)).filter(row => row.state === "review" || row.state === "approved").map(row => row.review!);
     },
@@ -161,8 +163,13 @@ export function createWalletRecoveryChains(options: { pool: Pool; rpc: RestRpc;
         await client.query("COMMIT");
       } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
     },
+    /** Every other chain the account is on. One deployed since the review has no row yet and waits for the user's approval. */
     async status(id: string): Promise<WalletRecoveryChain[]> {
-      return (await rows(id)).map(row => ({ chainId: Number(row.chain_id), name: signaChainName(Number(row.chain_id)), state: row.state }));
+      const unreviewed = (await pool.query<{ chain_id: string }>(`SELECT n.chain_id FROM rest_wallet_networks n JOIN rest_wallet_recoveries r ON r.account_id=n.account_id
+        WHERE r.id=$1 AND n.state='deployed' AND n.chain_id<>$2 AND NOT EXISTS (SELECT 1 FROM rest_wallet_recovery_chains c WHERE c.recovery_id=r.id AND c.chain_id=n.chain_id)`,
+        [id, SIGNA_HOME_CHAIN_ID])).rows.map(row => ({ chain_id: row.chain_id, state: "review" as const }));
+      return [...await rows(id), ...unreviewed].map(row => ({ chainId: Number(row.chain_id), name: signaChainName(Number(row.chain_id)), state: row.state }))
+        .sort((a, b) => a.chainId - b.chainId);
     },
     /** The worker step: every recovery with a chain due for a check gets one pass, one worker per recovery. */
     async tick(signal?: AbortSignal): Promise<void> {

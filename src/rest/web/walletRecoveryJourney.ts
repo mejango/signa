@@ -20,7 +20,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{1
 let view: WalletRecoveryView | null = null, known = false, busy = false, csrf = '', native: AbortController | null = null;
 let pending: { path: string; body: unknown; csrf: string } | null = null;
 type Rotation = { review: WalletRecoveryRotation; document: unknown };
-type Review = Rotation & { chains: Rotation[] };
+type Review = { review: WalletRecoveryRotation | null; document: unknown; chains: Rotation[] };
 let rotation: Review | null = null;
 let secret: WalletRecoverySecret | null = null, kit: WalletRecoveryKit | null = null, selectedWallet: Address | null = null;
 let disposed = false, pollCount = 0;
@@ -43,7 +43,11 @@ const chainStates: Record<WalletRecoveryView['chains'][number]['state'], string>
 const listed = (names: string[]) => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 // While work is in flight the status line's mark spins (Croptop's text ticker) instead of showing the lightning.
 // A native prompt waiting on the person is not work in flight; the mark holds still for it.
-const polling = () => view?.phase === 'rotating' || view?.phase === 'preparing_sign_in';
+/** After activation, other chains still on the old passkey: one that failed, or one reached since the review. */
+const unfinished = (value = view) => !!value && (value.phase === 'preparing_sign_in' || value.phase === 'ready_to_sign_in')
+  ? value.chains.filter(chain => chain.state === 'failed' || chain.state === 'review') : [];
+const polling = () => view?.phase === 'rotating' || view?.phase === 'preparing_sign_in'
+  || (view?.phase === 'ready_to_sign_in' && view.chains.some(chain => chain.state === 'approved' || chain.state === 'submitted'));
 const waiting = () => (busy && !native) || polling();
 function message(value: string, error = false) { status.textContent = value; status.dataset.state = error ? 'error' : waiting() ? 'busy' : 'ready'; }
 function spin() { if (waiting()) { if (status.dataset.state !== 'error') status.dataset.state = 'busy'; } else if (status.dataset.state === 'busy') status.dataset.state = 'ready'; }
@@ -99,15 +103,17 @@ function accept(result: { view: WalletRecoveryView | null; csrfToken?: string })
   if (result.csrfToken) { if (decode(result.csrfToken).length !== 32) invalid(); csrf = result.csrfToken; }
   if (!value || value.phase !== view?.phase) { rotation = null; pollCount = 0; }
   view = value; known = true;
-  if (value?.phase === 'ready_to_sign_in') { secret = null; kit = null; sessionStorage.removeItem('center:recovery:browser:' + value.id); }
-  message(value ? steps[value.phase] : reference.value ? 'Resume the original recovery with its replacement passkey and your backup.' : 'Open your backup file, or choose another way in below.');
+  const left = unfinished(value);
+  if (value?.phase === 'ready_to_sign_in' && !left.length) { secret = null; kit = null; sessionStorage.removeItem('center:recovery:browser:' + value.id); }
+  if (left.length) message(`${listed(left.map(chain => signaChainName(chain.chainId)))} still ${left.length > 1 ? 'accept' : 'accepts'} the old passkey. Open your backup and review the update.`);
+  else message(value ? steps[value.phase] : reference.value ? 'Resume the original recovery with its replacement passkey and your backup.' : 'Open your backup file, or choose another way in below.');
 }
 function render() {
   spin();
   form.hidden = !known || !!view; form.querySelector('button')!.disabled = engaged || !!pending || !!reference.value;
   if (!form.hidden && !name.value) name.value = defaultPasskeyName();
   name.disabled = engaged; wallet.disabled = engaged;
-  const recoverable = view?.phase !== 'ready_to_sign_in';
+  const recoverable = view?.phase !== 'ready_to_sign_in' || unfinished().length > 0;
   el<HTMLFieldSetElement>('recovery-method').hidden = !known || !recoverable; el<HTMLFieldSetElement>('recovery-method').disabled = engaged;
   el('recovery-kit').hidden = !known || !recoverable || method() !== 'kit';
   el('recovery-password').hidden = !known || !recoverable || method() !== 'password';
@@ -122,7 +128,8 @@ function render() {
   const chains = view?.chains ?? [];
   el('recovery-chains-box').hidden = !chains.length;
   el('recovery-chains').textContent = chains.map(chain => `${signaChainName(chain.chainId)}: ${chainStates[chain.state]}`).join(', ');
-  const label = view?.phase === 'awaiting_registration' ? 'Create replacement passkey' : view?.phase === 'awaiting_possession' ? 'Verify both owners'
+  const label = unfinished().length ? rotation ? 'Approve network updates' : 'Review network updates'
+    : view?.phase === 'awaiting_registration' ? 'Create replacement passkey' : view?.phase === 'awaiting_possession' ? 'Verify both owners'
     : view?.phase === 'awaiting_rotation_approval' ? rotation ? 'Approve passkey replacement' : 'Review passkey replacement'
     : view?.phase === 'awaiting_activation' ? 'Continue' : null;
   next.hidden = !label || !!pending; next.textContent = label; next.disabled = engaged;
@@ -232,29 +239,36 @@ async function advance() {
     const document = possessionDocument(), backupSignature = await signBackup(document, view.recoveryOwner);
     const proof = await assertion(view.possession.challenge, view.rpId);
     await send('prove', { assertion: proof, backupSignature });
-  } else if (view.phase === 'awaiting_rotation_approval') {
+  } else if (view.phase === 'awaiting_rotation_approval' || unfinished().length) {
+    // After activation Base is done; the review then holds only the chains still on the old passkey.
+    const repair = view.phase !== 'awaiting_rotation_approval', scope = new Set(unfinished().map(chain => chain.chainId));
     if (!view.replacementSigner || !view.candidateDigest || !view.rotationContext) invalid();
     const selected = { ...view, replacementSigner: view.replacementSigner, candidateDigest: view.candidateDigest, rotationContext: view.rotationContext };
     // One review covers Base and every other chain the account is on: the same swap, each for its own chain and Safe nonce.
     const documents = (value: Review) => {
-      if (!value || value.review?.chainId !== undefined || !Array.isArray(value.chains) || value.chains.length > 7) invalid();
+      if (!value || (repair ? value.review !== null || value.document !== null : !value.review || value.review.chainId !== undefined)
+        || !Array.isArray(value.chains) || value.chains.length > 7) invalid();
       const chains = value.chains.map(item => { fields(item, ['review', 'document']); return { chainId: item.review.chainId, document: assertWalletRecoveryRotationReview(item, selected) }; });
-      if (chains.some(item => item.chainId === undefined) || new Set(chains.map(item => item.chainId)).size !== chains.length) invalid();
-      return { base: assertWalletRecoveryRotationReview({ review: value.review, document: value.document }, selected), chains };
+      if (chains.some(item => item.chainId === undefined || (repair && !scope.has(item.chainId))) || new Set(chains.map(item => item.chainId)).size !== chains.length) invalid();
+      return { base: value.review ? assertWalletRecoveryRotationReview({ review: value.review, document: value.document }, selected) : null, chains };
     };
     if (!rotation) {
       const result: Review = await request('rotation/review', {});
-      fields(result, ['review', 'document', 'chains']); const checked = documents(result); rotation = result;
-      el('recovery-scope').textContent = listed([signaChainName(SIGNA_HOME_CHAIN_ID), ...checked.chains.map(item => signaChainName(item.chainId!))]);
-      el('recovery-nonce').textContent = result.review.safeNonce; el('recovery-factory').textContent = result.review.createSigner.to;
-      el('recovery-calls').textContent = JSON.stringify({ createSigner: result.review.createSigner, swapOwner: result.review.swapOwner,
+      fields(result, ['review', 'document', 'chains']); const checked = documents(result);
+      // A chain whose owners are no longer the account's original pair cannot take this swap.
+      if (repair && !checked.chains.length) throw new Error(`${listed(unfinished().map(chain => signaChainName(chain.chainId)))} cannot be updated with this backup.`);
+      rotation = result;
+      const first = result.review ?? result.chains[0]!.review;
+      el('recovery-scope').textContent = listed([...(repair ? [] : [signaChainName(SIGNA_HOME_CHAIN_ID)]), ...checked.chains.map(item => signaChainName(item.chainId!))]);
+      el('recovery-nonce').textContent = first.safeNonce; el('recovery-factory').textContent = first.createSigner.to;
+      el('recovery-calls').textContent = JSON.stringify({ ...(result.review ? { createSigner: result.review.createSigner, swapOwner: result.review.swapOwner } : {}),
         ...(result.chains.length ? { otherNetworks: result.chains.map(item => ({ chainId: item.review.chainId, safeNonce: item.review.safeNonce, swapOwner: item.review.swapOwner })) } : {}) }, null, 2);
       message('Review the account and the exact calls below, then approve the replacement with your backup.');
     } else {
-      const checked = documents(rotation), backupSignature = await signBackup(checked.base, view.recoveryOwner);
+      const checked = documents(rotation), backupSignature = checked.base ? await signBackup(checked.base, view.recoveryOwner) : null;
       const chainSignatures = [];
       for (const item of checked.chains) chainSignatures.push({ chainId: item.chainId!, signature: await signBackup(item.document, view.recoveryOwner) });
-      await send('rotation/approve', { backupSignature, chainSignatures }); rotation = null;
+      await send('rotation/approve', backupSignature ? { backupSignature, chainSignatures } : { chainSignatures }); rotation = null;
     }
   } else if (view.phase === 'awaiting_activation') {
     // The replacement passkey and the recovery owner already signed this recovery; Center binds

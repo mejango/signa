@@ -217,6 +217,32 @@ suite("recovery on every chain the account uses (PostgreSQL, Base plus two Anvil
     expect(await canSign(8453, safe, candidate.intent.priorSigner)).toBe(false);
   }, 60_000);
 
+  it("a chain that failed is reviewed again with the backup, only where the old passkey remains, and converges", async () => {
+    const { candidate, safe, id, accountId } = await account(), provider = relayr(new Set([42161])), { chains, payer } = services(provider);
+    await call(8453, "anvil_setBalance", [payer.address, toHex(10n ** 18n)]);
+    const reviews = await chains.prepare(candidate), base = await baseReview(candidate, safe), signatures = await approveAll(candidate, [base, ...reviews]);
+    await chains.approve(candidate, signatures.slice(1));
+    await rotateBase(candidate, safe, signatures[0]!.signature, base);
+    for (let pass = 0; pass < 12 && (await chains.status(id)).some(chain => chain.state === "approved" || chain.state === "submitted"); pass++) await chains.tick();
+    expect(await chains.status(id)).toEqual([{ chainId: 10, name: "Optimism", state: "updated" }, { chainId: 42161, name: "Arbitrum", state: "failed" }]);
+    // A network the account reached during recovery, with no recovery row yet, waits for the user's approval too.
+    await pool.query("INSERT INTO rest_wallet_networks(account_id,chain_id,state,bundle_id,tx_hash,updated_at_ms) VALUES($1,11155420,'deployed',NULL,NULL,1)", [accountId]);
+    expect((await chains.status(id)).map(chain => `${chain.chainId}:${chain.state}`)).toEqual(["10:updated", "42161:failed", "11155420:review"]);
+    await pool.query("DELETE FROM rest_wallet_networks WHERE chain_id=11155420");
+    // The retry reviews only the chain still on the old passkey, at its current nonce, and is resumable: a second read returns the same review.
+    provider.failing.clear();
+    const retry = await chains.prepare(candidate);
+    expect(retry.map(review => review.chainId)).toEqual([42161]);
+    expect(await chains.prepare(candidate)).toEqual(retry);
+    expect(await chains.status(id)).toEqual([{ chainId: 10, name: "Optimism", state: "updated" }, { chainId: 42161, name: "Arbitrum", state: "review" }]);
+    await chains.approve(candidate, await approveAll(candidate, retry).then(items => items.map(({ chainId, signature }) => ({ chainId, signature }))));
+    for (let pass = 0; pass < 6 && (await chains.status(id)).some(chain => chain.state !== "updated"); pass++) await chains.tick();
+    expect(await chains.status(id)).toEqual([{ chainId: 10, name: "Optimism", state: "updated" }, { chainId: 42161, name: "Arbitrum", state: "updated" }]);
+    for (const chainId of [8453, 10, 42161]) expect(await canSign(chainId, safe, candidate.intent.priorSigner)).toBe(false);
+    // Nothing is left to review once every chain is updated.
+    expect(await chains.prepare(candidate)).toEqual([]);
+  }, 60_000);
+
   it("the old passkey cannot sign on any chain after convergence", async () => {
     const { candidate, safe, id } = await account(), provider = relayr(), { chains, payer } = services(provider);
     await call(8453, "anvil_setBalance", [payer.address, toHex(10n ** 18n)]);
