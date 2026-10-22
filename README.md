@@ -74,7 +74,9 @@ Docker build argument (null when the build did not pass one) and `web` is the sh
 the image's web manifest. `node scripts/rest/verify-served-build.mjs https://signa.center
 <commit>` rebuilds that commit (it must be on `origin/main`) and exits 1 when any wallet
 page, script or stylesheet the origin serves differs. The manifest describes production's
-configuration: signup, recovery, devices, payments and funds all enabled.
+configuration: signup, recovery, devices, payments and funds all enabled. It checks the
+bare unframed pages and the files they name, that their policy runs only same-origin
+scripts, and that no response redirects; a server can still answer other requests differently.
 
 Configure a fresh `DATABASE_URL`, `DWELLIR_API_KEY`, the two origins and a new random
 `MCP_PLAN_SECRET` of at least 32 bytes before activation. Keep that plan secret stable

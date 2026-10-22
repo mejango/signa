@@ -25,6 +25,18 @@ const run = (command, args, cwd, env = process.env) => execFileSync(command, arg
 // The rebuild sees no deployment or operator secrets from this shell.
 const buildEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
 const sha256 = /^[0-9a-f]{64}$/;
+// Every page the manifest must hash (scripts/rest/build-web.mjs); everything else in it is a /assets/ file.
+const pages = ["/", "/add", "/create", "/funds", "/payment", "/recover"];
+// What a verified page can make a browser run: a same-origin script it names, under a policy allowing only those.
+const references = html => [...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g), ...html.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g),
+  ...html.matchAll(/<meta name="module:[^"]+" content="([^"]+)"/g)].map(match => match[1]);
+// CSP splits on ASCII whitespace only, and script-src-elem/-attr override script-src, so neither may appear.
+const scriptsOnlySelf = policy => {
+  if (!policy || /[^\x20-\x7e\t]/.test(policy)) return false;
+  const directives = policy.split(/[;,]/).map(directive => directive.trim().split(/[ \t]+/)).map(([name, ...values]) => [name.toLowerCase(), values]);
+  const scripts = directives.filter(([name]) => name.startsWith("script-src"));
+  return scripts.length > 0 && scripts.every(([name, values]) => name === "script-src" && values.length === 1 && values[0] === "'self'");
+};
 try {
   if (!flag) {
     run("git", ["fetch", "--quiet", "origin", "main"], root);
@@ -35,7 +47,7 @@ try {
   run("npm", ["run", "build:web"], directory, buildEnv);
   const manifest = JSON.parse(await readFile(join(directory, ".generated/rest/web-manifest.json"), "utf8"));
   const entries = manifest && typeof manifest === "object" && !Array.isArray(manifest) ? Object.entries(manifest) : [];
-  if (!entries.some(([path]) => path === "/") || !entries.some(([path]) => path.startsWith("/assets/"))
+  if (entries.filter(([path]) => !path.startsWith("/assets/")).map(([path]) => path).sort().join() !== pages.join()
     || !entries.every(([path, hash]) => /^\/[A-Za-z0-9./-]*$/.test(path) && !path.includes("..") && sha256.test(hash)))
     throw new Error("its web manifest is missing or malformed");
   let differences = 0;
@@ -44,7 +56,12 @@ try {
     try {
       // The origin itself must serve the bytes its pages name; a redirect elsewhere is a difference.
       const response = await fetch(new URL(path, origin), { redirect: "error", cache: "no-store" });
-      served = response.ok ? createHash("sha256").update(Buffer.from(await response.arrayBuffer())).digest("hex") : `HTTP ${response.status}`;
+      const body = Buffer.from(await response.arrayBuffer());
+      served = !response.ok ? `HTTP ${response.status}`
+        : response.headers.has("refresh") ? "a Refresh header"
+        : pages.includes(path) && !scriptsOnlySelf(response.headers.get("content-security-policy")) ? "a policy allowing scripts other than its own"
+        : pages.includes(path) && references(body.toString("utf8")).some(name => !Object.hasOwn(manifest, name)) ? "a page naming a file outside the manifest"
+        : createHash("sha256").update(body).digest("hex");
     } catch (error) { served = `unreachable (${error.cause?.code ?? error.message})`; }
     if (served === built) console.log(`same     ${path}`);
     else { differences++; console.log(`DIFFERS  ${path}\n  built  ${built}\n  served ${served}`); }
