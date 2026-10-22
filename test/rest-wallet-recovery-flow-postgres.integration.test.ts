@@ -29,7 +29,7 @@ suite('durable recovery browser continuation (genuine crypto, modeled canonical 
     for (const name of ['004_rest_accounts.sql', '007_rest_smart_accounts.sql', '012_rest_smart_account_onboarding.sql',
       '013_rest_wallet_ceremonies.sql', '014_rest_passkey_onboarding.sql', '042_wallet_binding_consent.sql', '015_rest_wallet_enrollment.sql', '046_wallet_signup_window.sql', '041_wallet_passkey_name.sql', '043_wallet_networks.sql', '044_wallet_devices.sql',
       '017_rest_wallet_policy.sql', '051_wallet_policy_app_grant_lifetime.sql', '019_rest_wallet_app_grants.sql', '052_wallet_app_grant_lifetime_90d.sql', '020_rest_wallet_authority.sql', '039_wallet_authority_window.sql', '049_wallet_authority_window_15m.sql', '028_wallet_recovery.sql',
-      '029_wallet_recovery_mapping.sql', '033_wallet_unproved_recovery_expiry.sql', '030_wallet_recovery_flow.sql', '064_wallet_recovery_chains.sql'])
+      '029_wallet_recovery_mapping.sql', '033_wallet_unproved_recovery_expiry.sql', '030_wallet_recovery_flow.sql', '064_wallet_recovery_chains.sql', '065_wallet_owner_chains.sql'])
       await pool.query(await readFile(new URL(`../src/db/migrations/${name}`, import.meta.url), 'utf8'));
     recovery = new PostgresWalletRecoveryStore(pool, policy); flows = new PostgresWalletRecoveryFlowStore(pool);
   });
@@ -269,13 +269,13 @@ suite('durable recovery browser continuation (genuine crypto, modeled canonical 
     await expect(chains.approve(candidate, [{ chainId: 10, signature: await sign(review!) }])).rejects.toMatchObject({ status: 400 });
     await chains.approve(candidate, [{ chainId: 10, signature: await sign(fresh!) }]);
     expect(await chains.status(value.flow.id)).toEqual([{ chainId: 10, name: 'Optimism', state: 'approved' }]);
-    const kept = (await pool.query('SELECT review,approval FROM rest_wallet_recovery_chains WHERE recovery_id=$1', [value.flow.id])).rows[0];
-    expect(kept.review).toEqual(fresh); expect(kept.approval.ownerChange.to.toLowerCase()).toBe(accountId.slice(12));
+    const kept = (await pool.query('SELECT review,approval FROM rest_wallet_owner_chains WHERE change_id=$1', [value.flow.id])).rows[0];
+    expect(kept.review).toEqual(fresh); expect(kept.approval.calls[1].to.toLowerCase()).toBe(accountId.slice(12));
     // Approved is kept as signed: a later read does not replace it, and a repeated approval is a no-op.
     safes[10]!.nonce = 5n;
     expect(await chains.prepare(candidate)).toEqual([fresh]);
     await chains.approve(candidate, [{ chainId: 10, signature: await sign(fresh!) }]);
-    expect((await pool.query('SELECT review,approval FROM rest_wallet_recovery_chains WHERE recovery_id=$1', [value.flow.id])).rows[0]).toEqual(kept);
+    expect((await pool.query('SELECT review,approval FROM rest_wallet_owner_chains WHERE change_id=$1', [value.flow.id])).rows[0]).toEqual(kept);
     // A chain whose owners are not the original pair cannot take this swap: it is reported, not reviewed.
     safes[42161] = { owners: [`0x${'ab'.repeat(20)}`, recoveryOwner], nonce: 0n }; await deploy(42161);
     expect(await chains.prepare(candidate)).toEqual([fresh]);
@@ -286,6 +286,6 @@ suite('durable recovery browser continuation (genuine crypto, modeled canonical 
     expect(repairs.map(item => item!.chainId)).toEqual([42161]);
     await chains.approve(candidate, [{ chainId: 42161, signature: await sign(repairs[0]!) }], true);
     expect(await chains.status(value.flow.id)).toEqual([{ chainId: 10, name: 'Optimism', state: 'approved' }, { chainId: 42161, name: 'Arbitrum', state: 'approved' }]);
-    expect((await pool.query('SELECT approval FROM rest_wallet_recovery_chains WHERE recovery_id=$1 AND chain_id=10', [value.flow.id])).rows[0]).toEqual({ approval: kept.approval });
+    expect((await pool.query('SELECT approval FROM rest_wallet_owner_chains WHERE change_id=$1 AND chain_id=10', [value.flow.id])).rows[0]).toEqual({ approval: kept.approval });
   });
 });

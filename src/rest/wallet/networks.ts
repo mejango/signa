@@ -77,8 +77,8 @@ export interface WalletNetworkRow { chainId: number; state: WalletNetworkState; 
 export type WalletNetworkBundleState = "quoted" | "paying" | "paid" | "settled" | "failed";
 export interface WalletNetworkBundle {
   id: string; accountId: string; family: WalletNetworkFamily; chainIds: number[]; state: WalletNetworkBundleState; centerPays: boolean;
-  /** An owner-change bundle carries a recovery's reviewed swaps, which hold their own owner signatures; it has no passkey document and no chain rows. */
-  purpose?: "owners"; recoveryId?: string;
+  /** An owner-change bundle carries reviewed owner changes (`ownerChains.ts`), which hold their own owner signatures; it has no passkey document and no chain rows. */
+  purpose?: "owners"; changeId?: string;
   quote: RelayrQuote<RelayrIndependentEntry>; /** Relayr returns transaction uuids in its own order; the first status read binds them. */ bound: boolean;
   payment: RelayrPayment; document: WalletNetworksDocumentInput | null;
   paymentTx: { hash: Hex; raw: Hex; nonce: number; sentAtMs: number | null } | null; createdAtMs: number; updatedAtMs: number;
@@ -297,16 +297,16 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
       }
       return view(session.accountId);
     },
-    /** Quotes one bundle for a recovery's reviewed calls on chains of one family. Nothing is paid yet: the
+    /** Quotes one bundle for an owner change's reviewed calls on chains of one family. Nothing is paid yet: the
      * caller records the bundle first, then funds it, so a crash never leaves a payment it does not know about. */
-    async quoteOwnerCalls(input: { accountId: string; recoveryId: string; calls: { chainId: number; to: Address; data: Hex }[] }): Promise<string> {
+    async quoteOwnerCalls(input: { accountId: string; changeId: string; calls: { chainId: number; to: Address; data: Hex }[] }): Promise<string> {
       if (!options.payer) throw new RestError(503, "WALLET_NETWORKS_UNAVAILABLE", "Network funding is not configured.");
       const chainIds = [...new Set(input.calls.map(call => call.chainId))].sort((a, b) => a - b), family = walletNetworkFamily(chainIds);
       if (chainIds.some(chainId => !networkById.get(chainId)!.centerPays)) throw new RestError(501, "WALLET_NETWORKS_PAYER_REQUIRED", "That network needs the account to pay; not available yet.");
       const entries = input.calls.map(call => ({ chain: call.chainId, target: getAddress(call.to), data: call.data, value: "0" }));
       const { quote, payment } = await relayQuote(entries, networkById.get(chainIds[0]!)!.paymentChainId, family), current = now();
       const bundle: WalletNetworkBundle = { id: randomUUID(), accountId: input.accountId, family, chainIds, state: "quoted", centerPays: true,
-        purpose: "owners", recoveryId: input.recoveryId, quote, bound: false, payment, document: null, paymentTx: null, createdAtMs: current, updatedAtMs: current };
+        purpose: "owners", changeId: input.changeId, quote, bound: false, payment, document: null, paymentTx: null, createdAtMs: current, updatedAtMs: current };
       await store.createBundle(bundle, current);
       return bundle.id;
     },
