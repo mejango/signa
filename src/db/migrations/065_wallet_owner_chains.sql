@@ -28,4 +28,8 @@ ALTER TABLE rest_wallet_owner_chains ADD CONSTRAINT rest_wallet_owner_chains_tar
 ALTER TABLE rest_wallet_owner_chains ADD COLUMN sent_step integer NOT NULL DEFAULT 0 CHECK (sent_step BETWEEN 0 AND 64);
 CREATE INDEX rest_wallet_owner_chains_account ON rest_wallet_owner_chains(account_id) WHERE state IN ('review','approved','submitted');
 -- One approved change per account and chain is on its way at a time, so two never fund calls for the same Safe nonce.
+-- An older approved change that never left gives way to a sent or newer one; a sent one keeps its payment record.
+UPDATE rest_wallet_owner_chains c SET state='failed',reason='superseded' WHERE c.state='approved' AND EXISTS (SELECT 1 FROM rest_wallet_owner_chains o
+  WHERE o.account_id=c.account_id AND o.chain_id=c.chain_id AND o.change_id<>c.change_id
+    AND (o.state='submitted' OR (o.state='approved' AND (o.updated_at_ms,o.change_id) > (c.updated_at_ms,c.change_id))));
 CREATE UNIQUE INDEX rest_wallet_owner_chains_underway ON rest_wallet_owner_chains(account_id,chain_id) WHERE state IN ('approved','submitted');

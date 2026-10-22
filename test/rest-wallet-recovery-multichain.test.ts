@@ -358,6 +358,14 @@ suite("owner changes on every chain the account uses (PostgreSQL, Base plus two 
     const last = [...provider.bundles.values()].at(-1)!.entries;
     expect(last.map(entry => entry.chain)).toEqual([10]);
     expect(last[0]!.target.toLowerCase()).not.toBe(safe.toLowerCase());
+    // A paid creation gets time to show before another is paid; then it is sent again, as the same attempt count's step.
+    const quotes = provider.quotes;
+    await chains.tick(); await chains.tick();
+    expect(provider.quotes).toBe(quotes);
+    await pool.query("UPDATE rest_wallet_owner_chains SET updated_at_ms=updated_at_ms-300001 WHERE change_id=$1 AND chain_id=10", [intent.id]);
+    await chains.tick();
+    expect(provider.quotes).toBe(quotes + 1);
+    expect((await pool.query("SELECT attempts,sent_step FROM rest_wallet_owner_chains WHERE change_id=$1 AND chain_id=10", [intent.id])).rows[0]).toEqual({ attempts: 2, sent_step: 1 });
     await call(10, "anvil_setCode", [candidate.signerAddress, approvesEverything]);
     await chains.tick();
     expect((await chains.status(intent.id)).map(chain => chain.state)).toEqual(["updated", "updated"]);
