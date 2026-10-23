@@ -141,7 +141,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   // Production serves the landing with signup and recovery offered; most tests here use the plain page.
   let landingWays = false;
   // Onramp routes answer only in the funds test; elsewhere they 404 and the link stays hidden.
-  let onramp = false;
+  let onramp = false, balancesAnswered = false;
   const csrf = encode(Buffer.alloc(32, 9)), intentId = encode(Buffer.alloc(32, 10));
   const state = encode(Buffer.alloc(32, 11)), code = encode(Buffer.alloc(32, 12));
   const challenge = encode(Buffer.alloc(32, 13)), handle = encode(Buffer.alloc(32, 14));
@@ -241,10 +241,10 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
       if (onramp && path === "/wallet/onramp") return json({ applePay: true });
-      if (onramp && path === "/wallet/balances") return json({ ethUsd: "250000000000", totalUsdCents: "251234", complete: false, chains: [
+      if (onramp && path === "/wallet/balances") return json({ ethUsd: "250000000000", totalUsdCents: balancesAnswered ? "251234" : null, complete: balancesAnswered, chains: [
         { chainId: 8453, name: "Base", testnet: false, eth: "1000000000000000000", usdc: "0" },
         { chainId: 10, name: "Optimism", testnet: false, eth: "0", usdc: "12345678" },
-        { chainId: 42161, name: "Arbitrum", testnet: false, eth: null, usdc: null },
+        { chainId: 42161, name: "Arbitrum", testnet: false, eth: balancesAnswered ? "0" : null, usdc: balancesAnswered ? "0" : null },
         { chainId: 84532, name: "Base Sepolia", testnet: true, eth: "0", usdc: "5000000" },
         { chainId: 1, name: "Ethereum", testnet: false, eth: "0", usdc: "0" }] });
       if (onramp && path === "/wallet/onramp/order") return json({ orderId: "order-1", url: "https://pay.coinbase.com/apple-pay?order=1", userAuthToken: "auth-token" });
@@ -261,7 +261,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   }, 30_000);
 
   beforeEach(async () => {
-    authenticated = false; landingWays = false; onramp = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
+    authenticated = false; landingWays = false; onramp = false; balancesAnswered = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
     redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0;
     requests.length = 0; errors.length = 0;
@@ -431,7 +431,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   it("shows the balance total and opens the per-network breakdown on click", async () => {
     onramp = true;
     await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
-    await expect.poll(() => page.locator("#wallet-balance-total").textContent()).toBe("$2,512.34");
+    await expect.poll(() => page.locator("#wallet-balance-total").textContent()).toBe("Unknown");
     expect(await page.locator("#wallet-balance-chains").isVisible()).toBe(false);
     // The total and Add funds share one line, like Networks and Add more.
     const [total, add] = await Promise.all([page.locator("#wallet-balance-total").boundingBox(), page.locator("#wallet-funds-open").boundingBox()]);
@@ -448,6 +448,13 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   it("sends a signed-out visit to the funds page to the account page to sign in", async () => {
     onramp = true;
     await page.goto(`${origin}/wallet/funds`); await page.waitForURL(`${origin}/wallet`); await status("ready");
+    expect(errors).toEqual([]);
+  });
+
+  it("shows the dollar total when every mainnet answered", async () => {
+    onramp = true; balancesAnswered = true;
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-balance-total").textContent()).toBe("$2,512.34");
     expect(errors).toEqual([]);
   });
 

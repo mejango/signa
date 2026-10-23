@@ -479,15 +479,17 @@ function renderBalance() {
   element("wallet-balance-label").hidden = element("wallet-balance-row").hidden = !shown;
   element("wallet-balance").hidden = !balances;
   if (!balances) { element("wallet-balance-chains").hidden = true; return; }
+  const unknownMainnet = balances.chains.some(chain => !chain.testnet && chain.eth === null);
   const mainnets = balances.chains.filter(chain => !chain.testnet && chain.eth !== null);
   const sum = (key: "eth" | "usdc") => mainnets.reduce((total, chain) => total + BigInt(chain[key]!), 0n);
   const cents = balances.totalUsdCents === null ? null : BigInt(balances.totalUsdCents);
-  element("wallet-balance-total").textContent = cents === null ? tokens(sum("eth"), sum("usdc"))
+  element("wallet-balance-total").textContent = unknownMainnet ? "Unknown"
+    : cents === null ? tokens(sum("eth"), sum("usdc"))
     : `$${(cents / 100n).toLocaleString("en-US")}.${(cents % 100n).toString().padStart(2, "0")}`;
   const lines = balances.chains.filter(chain => chain.eth !== null && (BigInt(chain.eth) || BigInt(chain.usdc!)))
     .map(chain => `${chain.name}${chain.testnet ? " (testnet)" : ""}: ${tokens(BigInt(chain.eth!), BigInt(chain.usdc!))}`);
   const unknown = balances.chains.filter(chain => chain.eth === null).map(chain => chain.name);
-  if (!lines.length) lines.push("Nothing on any network yet.");
+  if (!lines.length && !unknown.length) lines.push("Nothing on any network yet.");
   if (unknown.length) lines.push(`Couldn't check ${unknown.join(", ")}.`);
   element("wallet-balance-chains").replaceChildren(...lines.map(line => Object.assign(document.createElement("li"), { textContent: line })));
 }

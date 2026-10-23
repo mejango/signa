@@ -31,10 +31,13 @@ describe('account balances', () => {
     const usdcCall = calls.find(call => call.chainId === 8453 && call.method === 'eth_call' && (call.params[0] as { data: string }).data.startsWith('0x70a08231'))!;
     expect(usdcCall.params[0]).toEqual({ to: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', data: '0x70a08231' + address.slice(2).padStart(64, '0') });
   });
-  it('reports a chain that does not answer as unknown, not zero, and marks the total incomplete', async () => {
+  it('reports a mainnet that does not answer as unknown, not zero, with no total instead of a lower one', async () => {
     const result = await createWalletBalances(rpc({ down: [10] }).rpc).read(address, nowMs);
     expect(result.chains.find(chain => chain.chainId === 10)).toMatchObject({ eth: null, usdc: null });
-    expect(result).toMatchObject({ totalUsdCents: '250000', complete: false });
+    expect(result).toMatchObject({ totalUsdCents: null, complete: false });
+  });
+  it('ignores an unanswered testnet in the total', async () => {
+    expect(await createWalletBalances(rpc({ down: [84532] }).rpc).read(address, nowMs)).toMatchObject({ totalUsdCents: '251234', complete: true });
   });
   it('has no total without a fresh price', async () => {
     for (const stale of [round(nowMs / 1000 - 7201), '0x1234'])
