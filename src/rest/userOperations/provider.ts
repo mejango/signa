@@ -453,13 +453,14 @@ export class UserOperationProvider {
       "paymasterVerificationGasLimit" | "paymasterPostOpGasLimit"
     )[])
       if (key in value) {
-        if (!op.paymaster)
+        const quantity = uoQuantity(value[key], `estimated ${key}`, 128);
+        if (op.paymaster) result[key] = toHex(quantity);
+        else if (quantity !== 0n)
           uoError(
             "INVALID_USER_OPERATION_ESTIMATE",
             "The bundler added an unrequested paymaster estimate.",
             502,
           );
-        result[key] = toHex(uoQuantity(value[key], `estimated ${key}`, 128));
       }
     return result;
   }

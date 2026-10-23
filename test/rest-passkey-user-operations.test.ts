@@ -164,6 +164,7 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
       if (state.estimateFailure) return Response.json({ jsonrpc: "2.0", id: request.id, error: { code: -32500, message: "GS024" } });
       result = { callGasLimit: "0x186a0", verificationGasLimit: "0xc3500",
         preVerificationGas: toHex(state.growAlways ? 100_000n * BigInt(1 + state.finalQuotes) : state.growth && state.finalQuotes > 0 ? 60_000n : 50_000n),
+        ...(request.params[0].paymaster ? {} : { paymasterVerificationGasLimit: "0x0", paymasterPostOpGasLimit: "0x0" }),
         ...state.signedEstimate };
     } else if (request.method === "pm_getPaymasterStubData" || request.method === "pm_getPaymasterData") {
       if (state.sponsorRefused) return Response.json({ jsonrpc: "2.0", id: request.id, error: { code: -32500, message: "sponsorship policy rejected" } });
@@ -1045,6 +1046,15 @@ describe("sponsorship caps", () => {
     expect((await f.store.get(f.actor, view.id))!.gas).toMatchObject({ payer: "account", reason: "sponsor-refused", funded: true });
     // The refused sponsorship reserves nothing.
     expect(await fits(f, 10_000_000n)).toBe(true);
+    await f.service.submit(f.principal, view.id, f.signature(view), "submit");
+    expect(f.state.sends).toBe(1);
+    expect(f.state.sent?.paymaster).toBeUndefined();
+  });
+
+  it("rejects a nonzero paymaster estimate for a Safe-paid operation", async () => {
+    const f = await fixture({ sponsored: true, capWei: 0n });
+    f.state.signedEstimate = { paymasterVerificationGasLimit: "0x1" };
+    await expect(f.prepare()).rejects.toMatchObject({ code: "INVALID_USER_OPERATION_ESTIMATE" });
   });
 
   it("records an account that cannot prefund its own gas, so its review cannot be signed", async () => {
