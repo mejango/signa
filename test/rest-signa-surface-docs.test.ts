@@ -169,4 +169,15 @@ describe("Signa wallet API documentation", () => {
       expect(response.headers.get("vary"), `${path} ${accept}`).toBe("Accept");
     }
   });
+
+  it("states Signa's production boundary, not Center's or a local pilot's", async () => {
+    const risks = await readFile("RISKS.md", "utf8");
+    expect(risks.split("\n")[0]).toBe("# Signa risks and invariants");
+    for (const heading of ["## Owner state across chains", "## Approval page", "## Gas sponsorship", "## Server keys"])
+      expect(risks).toContain(heading);
+    for (const file of ["WALLET_SIGNUP.md", "docs/rest/CENTER-WALLET-DELIVERY.md", "docs/rest/CENTER-WALLET-IMPLEMENTATION.md", "docs/rest/PRODUCTION_OPERATIONS.md"]) {
+      const text = await readFile(file, "utf8");
+      expect(text, file).not.toMatch(/local-test kit|local pilot|does not enable production Base|jbcenter-production-readiness/i);
+    }
+  });
 });

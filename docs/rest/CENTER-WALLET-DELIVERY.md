@@ -5,23 +5,27 @@ Checkpoint: **2026-09-15 UTC** (September 14 in São Paulo). Application source:
 project; the [implementation record](CENTER-WALLET-IMPLEMENTATION.md) preserves
 the detailed chronology. For continuation, start with the [handoff](CENTER-WALLET-HANDOFF.md).
 
+Current production boundary: [RISKS.md](../../RISKS.md). This report is a
+2026-09-15 checkpoint of the Center wallet project; Signa runs the wallet
+at signa.center on the hosted Base path.
+
 Current scope update: Center has retired its Para integration, preserving passkey
 accounts and external-wallet support. The checkpoint below predates that decision;
 Juicebox Money and Revnet Money integrations are unchanged.
 
 ## Where we stand
 
-**The shared contracts are deployed, signup and recovery work in the local
-integration environment, and hosted Base creation is implemented at revision
-`516d163` but not configured or funded. Consumer production signup is still
-disabled.** Hosted recovery still needs implementation. Passing contract, browser
-and PostgreSQL tests does not complete that work; see the
-[handoff](CENTER-WALLET-HANDOFF.md) for the completed slice's evidence and the next one.
+**At this checkpoint the shared contracts were deployed, signup and recovery
+worked in the local integration environment, and hosted Base creation was
+implemented at revision `516d163` but not configured or funded.** Hosted Base
+recovery and device addition have since been implemented (`recoveryBase.ts`,
+`deviceBase.ts`) and `src/index.ts` mounts them from the `WALLET_RECOVERY_*`
+settings. Passing contract, browser and PostgreSQL tests does not establish
+production readiness; see the [handoff](CENTER-WALLET-HANDOFF.md) for the evidence.
 
-Homerun showing only external wallets is consistent with this state: its Para
-path was removed, and the Center feature remains disabled. People without a
-wallet are the intended audience, but cannot yet complete that production journey.
-Turning on the client flag now would expose an unavailable service.
+At this checkpoint Homerun showed only external wallets: its Para path was
+removed and the Center feature was disabled. Whether a client flag may be turned
+on depends on the live Signa service, not on this report.
 
 | Deliverable | Evidence at this checkpoint | Remaining boundary |
 | --- | --- | --- |
@@ -97,7 +101,7 @@ name a passkey, generate or connect a recovery owner, save and reopen the correc
 kit, approve deployment, complete canonical setup, then sign in freshly.
 The recovery phrase stays in browser memory except for the user's explicit
 download; it is not put in application storage, URLs, cookies or server requests.
-Local-test kits must not be used for real funds.
+The kit declares `network: "base"` and `chainId: 8453`; any other network is rejected.
 
 Signup can advance after the **latest** observation proves canonical creation
 and wallet readiness, before treasury finality. This removes the user's finality
@@ -227,10 +231,10 @@ This documentation checkpoint does not claim a new application release test.
 
 ## The remaining path to production testing
 
-1. **Implement hosted Base creation and recovery.** Reuse the durable local
+1. **Qualify hosted Base creation and recovery.** Reuse the durable local
    boundaries, qualify fee runtimes/forks, define explicit funding policy, retain
    signed bytes before sending, and join complete fees to settlement. The actual
-   server entrypoint currently supplies no wallet configuration.
+   server entrypoint (`src/index.ts`) now builds the wallet from environment settings.
 2. **Close treasury and availability gaps.** A Base type-2 fee cap does not cap
    future L1/operator charges. Preserve actual debit and unresolved liabilities,
    including any cost above a reservation. Add restore provenance outside the

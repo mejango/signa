@@ -155,7 +155,7 @@ Integrate and qualify the shared payment helper in the authorized Homerun and Be
 
 ## 2026-09-14 production audit checkpoint
 
-`wallet.juicebox.center` has verified Railway DNS and a valid certificate. It intentionally serves the setup response while the production wallet runtime is disabled. Center retained Para at this checkpoint. Do not modify Juicebox Money or Revnet Money; the pilot clients are Homerun and Beep.
+Historical checkpoint; the wallet is now Signa at `signa.center` (see [RISKS.md](../../RISKS.md)). `wallet.juicebox.center` has verified Railway DNS and a valid certificate. It intentionally serves the setup response while the production wallet runtime is disabled. Center retained Para at this checkpoint. Do not modify Juicebox Money or Revnet Money; the pilot clients are Homerun and Beep.
 
 The user-selected Claude Fable 5.1 model reviews cover separate contract/dependency and wallet-integration scopes. The [rollout record](WALLET-DEPENDENCY-ROLLOUT.md) now includes both finalized Relayr payments and all 14 finalized deployment calls across eight chains, plus the complete 13-contract Base runtime observation. The dedicated funding key signed one payment per L1 funding chain. This completes shared dependency deployment; consumer wallet activation remains disabled.
 

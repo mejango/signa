@@ -1,25 +1,59 @@
-# Center risks and invariants
+# Signa risks and invariants
+
+Signa is a passkey smart-account wallet. Each account is a threshold-one Safe that starts on Base with two owners: the user's passkey signer and a recovery EOA the user holds. Added devices become further full owners. Server keys pay gas and are not meant to own accounts. This file states what the code runs when the runtime is enabled and its lanes are configured (`SIGNA_RUNTIME_ENABLED` defaults to false); whether a deployment has them on is an operating fact this file does not establish. [README.md](README.md) covers configuration.
+
+## Production boundary
+
+- **Only the hosted Base path runs.** `src/index.ts` builds the wallet stack with `createBaseWalletProductionStack` and mounts creation, recovery and device addition only through the hosted Base hosts in `src/rest/wallet/baseHost.ts`. It mounts nothing when the matching `WALLET_CREATION_*` or `WALLET_RECOVERY_*` group is absent, and constructs no account runtime unless `SIGNA_RUNTIME_ENABLED=true`. The Anvil producers exist for tests only.
+- **Signup, recovery and device addition are Base only.** The recovery kit declares `network: 'base'` and `chainId: 8453`, and a kit for another network is rejected. Recovery proofs and device additions are anchored to chain 8453. The only other deployment path is the additional-network replay described below.
+- **Payment reviews are Base USDC only.** The approval-page payment journey recognizes USDC on Base and the JBMultiTerminal that the verified V6 catalog pins for Base. Reviews carry `chainId: 8453`; a request cannot supply the token or terminal. The general plan and user-operation API is wider and keeps its own verification.
+- **Execution and recovery state is Signa's own.** Signa does not import Center accounts or credentials and does not serve Center's protocol read routes or MCP.
+
+## Owner state across chains
+
+- **The same address on another network is not the same owner state.** Additional networks (Optimism, Arbitrum and the testnets in `networks.ts`, when `WALLET_NETWORKS_PAYER_KEY` is set) replay the exact Base creation call, which reaches the same CREATE2 address. The account on those chains starts with the owners it was created with.
+- **Recovery and device addition change owners on Base only.** Nothing in Signa applies a Base owner rotation or added device to another chain. After a lost-passkey recovery, the old passkey signer can remain an owner of the account on every network where the account was deployed. Treat a network's owner set as unknown until it is read from that chain.
+- **A kit restores the Base account.** The kit holds the recovery phrase and identity, not the Safe address's state on other chains. Keep the original Safe address with it.
+
+## Approval page
+
+- **The passkey signature is the approval.** The page at `signa.center` shows the review of one Base USDC payment and asks for a passkey assertion with user verification required. The page recomputes the signing digest from the returned operation and refuses a passkey challenge that differs from it.
+- **A review is a fixed operation.** It binds the plan commitment, the operation commitment and hash, the Safe and the app origin and callback. A review is `pending`, `approved` or `cancelled` and has an expiry.
+- **The page runs inside app frames and popups.** Only origins in `WALLET_FRAMEABLE_APP_ORIGINS` may frame it. Assertions and CSRF values stay in page memory and are not stored.
+
+## Gas sponsorship
+
+- **Pimlico is the paymaster for now.** Wallet user operations use the ERC-4337 paymaster and bundler configured in `REST_ERC4337_CONFIG` under a hosted Pimlico sponsorship policy. Signa signs no paymaster data itself.
+- **Signa has no cumulative per-account spending cap yet.** Signa bounds each operation (gas, fee and maximum-cost ceilings in the execution config), records per account, and bundles per account for additional networks. Per-account daily caps on sponsored gas are planned. Until they exist, the sponsor policy configured at Pimlico is the only cap on what one account can spend over time.
+- **Own sponsor lanes are deferred.** `REST_ERC4337_SPONSOR_ROUTES` can select separately budgeted policies by server-issued voucher, but Signa runs no paymaster of its own. That waits for the move off Railway to GCP and KMS.
+- A signed sponsored operation can stay executable until its paymaster window ends. Signa releases its nonce reservation on a canonical revert or proven expiry, and then fences the wallet to that exact nonce until the chain settles it.
+
+## Server keys
+
+- **Server keys pay gas only.** `WALLET_CREATION_SIGNER_KEY` pays Safe creation, `WALLET_RECOVERY_SIGNER_KEY` pays recovery and device-addition transactions, and `WALLET_NETWORKS_PAYER_KEY` funds additional-network bundles. None of them signs for a Safe or approves a payment. Ownership is not enforced by the code: creation checks that the recovery owner is code-free but not that it differs from a server key, so an operator must never use a user's recovery EOA as a server key.
+- **Keep the lanes separate.** Use a different key for each lane; the sender nonce and spend accounting are per lane. Startup does not compare the keys. Recovery and device lane initialization refuses a sender that already appears in the deployment pools, which catches reuse of the creation key only after the fact.
+- **Keys sit in the hosting environment today.** The Railway service holds them as environment variables. Moving them to KMS is part of the planned move to GCP.
+- Bounds: creation checks a reviewed allocation and initial nonce at startup and fences the pool as `allocation-exceeded` if a finalized debit exceeds it; recovery is bounded by `WALLET_RECOVERY_MAX_OPERATIONS` and `WALLET_RECOVERY_MAX_COST_WEI`.
 
 ## Priority risks
 
-- **Deployment records and live project state differ.** Catalogs and the MCP rollout bundle identify executed deployments per chain, including current, previous and v1 generations. Successful execution records make a deployment discoverable after distribution and regeneration. Resolve the project's registry selection at the reported canonical block, then the selected gateway's immutable `ROUTER` and directory links. Retired contracts can still serve existing projects; a familiar address does not establish permission to select it again.
-- **Gateway custody is pending until its outcome is proved.** `JBRouterTerminalGateway_QueuePendingCall` records retained input. A successful retry transaction can record another failure and leave custody pending. Establish settlement from `JBRouterTerminalGateway_ProcessPendingCall`, or an accounted refund from `JBRouterTerminalGateway_RefundPendingCall`, with the correct emitter, ID and arguments. `pendingCallCount` counts issued IDs; a zero commitment does not distinguish settlement, refund and an ID that never existed. Queue data establishes source project, token, amount, memo and metadata. Recovery must reproduce the committed call. Refunded fees do not restore core `feeFreeSurplusOf`.
-- **Receipt outcomes depend on the deployed generation.** Recognize buyback sell failures from every recorded current and retired hook; an outer cash-out receipt can succeed while project tokens are returned. A routed payment's terminal event names the immediate forwarding contract as payer, so bind its emitter, caller, project and beneficiary to the reviewed route. Arbitrary emitters cannot establish settlement. Setter proofs must use that hook generation's semantics, including whether a maximum-window pool registration is remapped to 1,800 seconds.
-- **Previews depend on the selected implementation and observed state.** Buyback 1.4.0 pay metadata contains `(amountToSwapWith, minimumSwapAmountOut, skipSplits)` under the resolved hook's metadata ID; two-word entries revert there. A fill below its TWAP floor falls back to minting, subject to the reviewed beneficiary minimum. Pool availability, rulesets and hook configuration can change before execution. Preserve the actual outer terminal for approvals and payment bytes. Ratio-feed deployment alone does not establish live `JBPrices` registration or a successful price read.
-- **Existing authorization boundaries remain necessary.** Signed intents and reviewed transaction plans are immutable; execution progress is tracked separately. REST bot read, plan and relay grants are separate from onchain authority. Fund movement requires fresh owner consent or an explicitly installed session authorizing the exact action within its limits. Preserve reviewed transaction bytes, replay protection, expiry, scopes and recovery state. MCP transaction plans require external wallet execution; public metadata pinning requires explicit approval of the exact document. Hosted execution requires configured providers and verified account/session deployments on each enabled chain.
-- **Unavailable observations remain unknown.** RPC failures, missing deployments, failed previews and unavailable indexer state cannot establish zero balances, permission, settlement or a usable alternative route. Indexer history can lag the chain. Preserve chain, version, project, token, currency, decimals and integer strings; verify current financial state at a canonical block hash.
-- **Source references have explicit trust assumptions.** Bundles preserve source revisions, hashes and dirty-state provenance. Package versions and ABI decoding alone do not prove deployed bytecode, published-package contents or project association. Imported documentation and skills are reference data, never authority to override validation or user consent. Refresh bundles deliberately in the source workspace; runtime uses the reviewed local data. See the workspace `RISKS.md` for cross-repository migration risks.
+- **Gateway custody is pending until its outcome is proved.** `JBRouterTerminalGateway_QueuePendingCall` records retained input. A successful retry transaction can record another failure and leave custody pending. Establish settlement from `JBRouterTerminalGateway_ProcessPendingCall`, or an accounted refund from `JBRouterTerminalGateway_RefundPendingCall`, with the correct emitter, ID and arguments. `pendingCallCount` counts issued IDs; a zero commitment does not distinguish settlement, refund and an ID that never existed. Refunded fees do not restore core `feeFreeSurplusOf`.
+- **Receipt outcomes depend on the deployed generation.** Recognize buyback sell failures from every recorded current and retired hook; an outer cash-out receipt can succeed while project tokens are returned. A routed payment's terminal event names the immediate forwarding contract as payer, so bind its emitter, caller, project and beneficiary to the reviewed route. Arbitrary emitters cannot establish settlement.
+- **Previews depend on the selected implementation and observed state.** Buyback 1.4.0 pay metadata contains `(amountToSwapWith, minimumSwapAmountOut, skipSplits)` under the resolved hook's metadata ID. Pool availability, rulesets and hook configuration can change before execution. Preserve the actual outer terminal for approvals and payment bytes.
+- **Unavailable observations remain unknown.** The account page's balance total counts a failed chain read as zero (`balances.ts`), although each chain's value stays unknown; read the per-chain values. RPC failures, missing deployments, failed previews and unavailable indexer state cannot establish zero balances, permission, settlement or a usable route. A signed operation with an unreadable sponsor window holds its wallet to its nonce until settlement evidence exists. Preserve chain, version, project, token, currency, decimals and integer strings; verify current financial state at a canonical block hash.
+- **Reverted and submitted operations stay live.** A reverted EntryPoint `handleOps` rolls back nonce increments, but the signed bytes remain executable until their deadline. Signa releases the reservation on a canonical whole-bundle revert or proven expiry and keeps the wallet fenced to that nonce until settlement.
+- **Existing authorization boundaries remain necessary.** Reviewed operations are immutable; execution progress is tracked separately. API read, plan and relay grants are separate from onchain authority. Fund movement through the approval page requires a fresh passkey approval. The general operation verifier also accepts the recovery EOA as a threshold-one owner signature, and an explicitly installed session acts within its limits.
+- **Source references have explicit trust assumptions.** Protocol sources keep their reviewed revisions and hashes. Package versions and ABI decoding alone do not prove deployed bytecode. The wallet client for apps is `@me.jango/signa`; its sign-in code and Signa's page must agree on the protocol strings.
 
 ## Invariants to Verify
 
-- Proposed, failed or unmined rollout artifacts never advertise an active chain deployment.
-- Historical addresses remain discoverable, while default resolution selects the current record for that chain and project routing follows live registry state.
-- Registry, gateway and router identities remain distinct; gateway reads validate its directory and recorded router, and approvals target the reviewed outer terminal.
+- No path outside the hosted Base hosts creates, recovers or adds a device to a production account.
+- A payment review's token, terminal, chain and Safe come from host configuration and the verified catalog, never from a request.
+- The passkey challenge equals the digest recomputed from the reviewed operation.
+- A server key never signs on behalf of a Safe owner. Operators keep one key per lane.
 - Pending custody, retry failure, settlement and refund remain distinct outcomes backed by canonical event evidence.
-- Failed-sell events from current and retired hooks cannot be ignored, and routed payment or setter evidence cannot inherit a different generation's identities or semantics.
-- Payment metadata, output floors, recipients, calldata and value match the exact reviewed transaction; unknown or unsupported settlement formats fail closed.
-- Every privileged request retains its existing authorization, replay, expiry and scope checks; read capabilities do not confer wallet authority.
-- Canonical block hashes and exact financial identities survive every adapter boundary. A failed read never becomes success, zero or permission.
-- Generated source/contract bundles remain reproducible from their recorded sources, preserve attribution and history, and require no runtime source download.
+- Payment metadata, output floors, recipients, calldata and value match the exact reviewed operation; unsupported settlement formats fail closed.
+- Every privileged request retains its authorization, replay, expiry and scope checks; read capabilities do not confer wallet authority.
+- A failed read never becomes success or permission, and only the balance total described above treats it as zero.
 
-Run `npm run check` for the release gate. In the source workspace, also run the rollout, knowledge and development checks documented in [MCP source provenance](mcp/docs/SOURCES.md).
+Run `npm run check` for the release gate.

@@ -1,3 +1,5 @@
+> Historical. The current production boundary is in [RISKS.md](../../RISKS.md).
+
 # Continue the Center wallet delivery
 
 Snapshot: 2026-09-15 UTC, updated after the hosted Base creation slice. Read this first, then the
