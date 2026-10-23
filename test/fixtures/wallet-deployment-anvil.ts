@@ -9,6 +9,7 @@ import { mnemonicToAccount } from "viem/accounts";
 import type { RestRpc } from "../../src/rest/core.js";
 import type { ContractPin, SmartAccountManifest } from "../../src/rest/smartAccounts/types.js";
 import { SAFE7579_INSPECTOR_ID } from "../../src/rest/smartAccounts/inspector.js";
+import { preparePasskeyDependencyDeployment } from "../../src/rest/smartAccounts/passkeyProfile.js";
 import type { RelayPolicy } from "../../src/rest/transactions/types.js";
 import { createWalletDeploymentChain } from "../../src/rest/wallet/deploymentChain.js";
 import { prepareWalletDeploymentApproval, prepareWalletDeploymentTemplate, validateSignedWalletDeployment,
@@ -45,7 +46,8 @@ export function createWalletDeploymentAnvilRpc(endpoint: string): RestRpc {
 }
 
 /** `setup` runs before the baseline snapshot so `reset()` restores its state too. */
-export async function startWalletDeploymentAnvil(setup?: (rpc: <T = unknown>(method: string, params?: readonly unknown[]) => Promise<T>) => Promise<void>) {
+export async function startWalletDeploymentAnvil(setup?: (rpc: <T = unknown>(method: string, params?: readonly unknown[]) => Promise<T>) => Promise<void>,
+  options: { passkeyAtProductionAddresses?: boolean } = {}) {
   const server = createServer();
   await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   const port = (server.address() as { port: number }).port;
@@ -95,17 +97,21 @@ export async function startWalletDeploymentAnvil(setup?: (rpc: <T = unknown>(met
       if (keccak256(code) !== a.runtimeCodeHash) throw new Error("Fixture artifact runtime mismatch");
       await rpc("anvil_setCode", [a.canonicalAddress ?? a.address, code]);
     }
-    async function deploy(a: Artifact): Promise<Address> {
-      const hash = await rpc<Hex>("eth_sendTransaction", [{ from: sender, data: a.bytecode, gas: "0xf42400" }]);
+    async function send(transaction: { to?: Address; data: Hex }) {
+      const hash = await rpc<Hex>("eth_sendTransaction", [{ from: sender, ...transaction, gas: "0xf42400" }]);
       let receipt: { status: Hex; contractAddress: Address } | null = null;
-      for (let i = 0; i < 100; i++) {
-        receipt = await rpc("eth_getTransactionReceipt", [hash]); if (receipt) break;
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
+      for (let i = 0; i < 100 && !receipt; i++) { receipt = await rpc("eth_getTransactionReceipt", [hash]); if (!receipt) await new Promise(resolve => setTimeout(resolve, 10)); }
       if (receipt?.status !== "0x1") throw new Error("Local fixture contract failed to deploy");
       return receipt.contractAddress;
     }
-    const fclAddress = await deploy(fcl.value), signerFactoryAddress = await deploy(signerFactory.value);
+    let fclAddress: Address, signerFactoryAddress: Address;
+    if (options.passkeyAtProductionAddresses) {
+      // Where production has them, through the deterministic deployer, so a browser's built-in profile derives the same signers here.
+      const passkey = await preparePasskeyDependencyDeployment();
+      await rpc("anvil_setCode", [passkey.deployer.address, passkey.deployer.runtime]);
+      for (const item of passkey.deployments) await send(item.transaction);
+      fclAddress = passkey.profile.p256Verifier.address; signerFactoryAddress = passkey.profile.signerFactory.address;
+    } else { fclAddress = await send({ data: fcl.value.bytecode }); signerFactoryAddress = await send({ data: signerFactory.value.bytecode }); }
     const singletonAddress = decodeFunctionResult({ abi: signerFactory.value.abi, functionName: "SINGLETON", data: await rpc<Hex>("eth_call",
       [{ to: signerFactoryAddress, data: encodeFunctionData({ abi: signerFactory.value.abi, functionName: "SINGLETON" }) }, "latest"]) }) as Address;
     async function deployedPin(a: ReturnType<typeof artifact>, address: Address): Promise<ContractPin> {

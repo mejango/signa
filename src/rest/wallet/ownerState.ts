@@ -18,7 +18,7 @@ export interface WalletOwnerStateStore {
   put(account: Address, observation: WalletOwnerObservation): Promise<void>;
 }
 
-async function observe(account: Address, chainId: number, rpc: RestRpc, now: () => number, store?: WalletOwnerStateStore, signal?: AbortSignal): Promise<WalletOwnerObservation> {
+async function observe(account: Address, chainId: number, rpc: RestRpc, now: () => number, store?: WalletOwnerStateStore, signal?: AbortSignal, withNonce = false): Promise<WalletOwnerObservation & { nonce?: bigint }> {
   const reads = operationRpc(rpc, walletPreflightRpcBounds, signal, false, chainId);
   try {
     const [chain, block, stored] = await Promise.all([reads.request("eth_chainId", []), reads.request("eth_getBlockByNumber", ["latest", false]), store?.get(account, chainId)]);
@@ -30,12 +30,12 @@ async function observe(account: Address, chainId: number, rpc: RestRpc, now: () 
     if (timestamp > seconds + 30n || timestamp + 300n < seconds) throw new Error("The chain head is stale.");
     if (stored && stored.block.blockHash === evidence.blockHash) return stored;
     const at = { blockHash: evidence.blockHash, requireCanonical: true };
-    const read = async (functionName: "getOwners" | "getThreshold") => decodeFunctionResult({ abi: safeAbi, functionName,
+    const read = async (functionName: "getOwners" | "getThreshold" | "nonce") => decodeFunctionResult({ abi: safeAbi, functionName,
       data: await reads.request("eth_call", [{ to: account, data: encodeFunctionData({ abi: safeAbi, functionName }) }, at]) as Hex });
-    const [owners, threshold] = await Promise.all([read("getOwners"), read("getThreshold")]);
+    const [owners, threshold, nonce] = await Promise.all([read("getOwners"), read("getThreshold"), withNonce ? read("nonce") : undefined]);
     const observation = { owners: (owners as readonly Address[]).map(owner => getAddress(owner)), threshold: threshold as bigint, block: evidence };
     await store?.put(account, observation);
-    return observation;
+    return withNonce ? { ...observation, nonce: nonce as bigint } : observation;
   } finally { reads.close(); }
 }
 const sameOwners = (a: readonly Address[], b: readonly Address[]) =>
@@ -59,6 +59,12 @@ export async function observeWalletOwners(input: { account: Address; chains: num
     if (threshold === 1n && sameOwners(owners, expected.owners) && expected.threshold === 1n) return { chainId, status: "consistent", owners, threshold, block };
     return { chainId, status: "diverged", owners, threshold, expected: expected.owners, block };
   });
+}
+
+/** The account's owners, threshold and Safe nonce on one chain, all at that chain's current head. */
+export async function readWalletSafe(input: { account: Address; chainId: number; rpc: RestRpc; signal?: AbortSignal; now?: () => number }) {
+  const read = await observe(input.account, input.chainId, input.rpc, input.now ?? Date.now, undefined, input.signal, true);
+  return { ...read, nonce: read.nonce! };
 }
 
 /** An operation on a chain is admitted only when that chain's owners are Base's. */

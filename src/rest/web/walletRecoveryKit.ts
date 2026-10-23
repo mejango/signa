@@ -1,5 +1,6 @@
 import { validateMnemonic } from '@scure/bip39';
 import { getAddress, isAddress, type Address, type Hex } from 'viem';
+import { signaChains } from '../wallet/chains.js';
 import { wordlist as english } from '@scure/bip39/wordlists/english';
 import { generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 
@@ -59,4 +60,35 @@ export function readWalletRecoveryKit(input: string, expected?: WalletRecoveryKi
       || getAddress(value.walletAddress) !== getAddress(expected.walletAddress) || getAddress(value.recoveryOwner) !== getAddress(expected.recoveryOwner)) invalid();
   }
   return value;
+}
+
+/** The account's Safe on one chain as that chain's public RPC reports it, never as Signa's server does: whether it is
+ * deployed and, if so, its owners in order, threshold and nonce. The RPC must answer as that chain, within ten seconds. */
+export interface WalletChainSafe { deployed: boolean; owners: Address[]; threshold: bigint; nonce: bigint }
+export async function readChainSafe(walletAddress: string, chainId: number): Promise<WalletChainSafe> {
+  address(walletAddress);
+  const rpc = signaChains.find(chain => chain.chainId === chainId)?.publicRpc ?? invalid();
+  const signal = AbortSignal.timeout(10_000);
+  const batch = async (calls: readonly (readonly [string, readonly unknown[]])[]) => {
+    const response = await fetch(rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit', referrerPolicy: 'no-referrer',
+      signal, body: JSON.stringify(calls.map(([method, params], id) => ({ jsonrpc: '2.0', id, method, params }))) });
+    const replies = await response.json() as { id: number; result?: unknown }[];
+    return calls.map((_, id) => Array.isArray(replies) ? replies.find(reply => reply?.id === id)?.result : undefined);
+  };
+  // Every read is at one block, named by its hash and required to be canonical, so the owners and the nonce describe the same state.
+  const [chain, head] = await batch([['eth_chainId', []], ['eth_getBlockByNumber', ['latest', false]]]);
+  const hash = (head as { hash?: unknown } | null)?.hash;
+  if (chain !== `0x${chainId.toString(16)}` || typeof hash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(hash)) invalid();
+  const block = { blockHash: hash, requireCanonical: true };
+  const call = (data: string) => ['eth_call', [{ to: walletAddress, data }, block]] as const;
+  const [code, owners, threshold, nonce] = await batch([['eth_getCode', [walletAddress, block]], call('0xa0e67e2b'), call('0xe75235b8'), call('0xaffed0e0')]);
+  const word = (value: unknown) => typeof value === 'string' && /^0x[0-9a-fA-F]{64}$/.test(value) ? BigInt(value) : invalid();
+  if (typeof code !== 'string' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(code)) invalid();
+  if (code === '0x') return { deployed: false, owners: [], threshold: 0n, nonce: 0n };
+  if (typeof owners !== 'string' || !/^0x(?:[0-9a-fA-F]{64})+$/.test(owners)) invalid();
+  // getOwners() returns one address[]: its offset, its length, then one word per owner.
+  const words = owners.slice(2).match(/.{64}/g)!, count = Number(BigInt(`0x${words[1] ?? ''}`));
+  if (BigInt(`0x${words[0]}`) !== 32n || !count || count > 16 || words.length !== count + 2) invalid();
+  return { deployed: true, owners: words.slice(2).map(item => { if (!/^0{24}/.test(item)) invalid(); return getAddress(`0x${item.slice(24)}`); }),
+    threshold: word(threshold), nonce: word(nonce) };
 }

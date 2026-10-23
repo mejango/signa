@@ -11,6 +11,7 @@ import type { createSmartAccountService } from '../smartAccounts/service.js';
 import type { createWalletAuthorityService } from './authorityService.js';
 import type { WalletRegistrationResponse } from './registration.js';
 import type { WalletAssertion } from './webauthn.js';
+import type { createWalletRecoveryChains, WalletRecoveryChain } from './recoveryChains.js';
 
 export type WalletRecoveryPhase = 'awaiting_registration' | 'awaiting_possession' | 'awaiting_rotation_approval'
   | 'rotating' | 'rotation_failed' | 'awaiting_activation' | 'preparing_sign_in' | 'ready_to_sign_in' | 'expired';
@@ -22,12 +23,16 @@ export interface WalletRecoveryView {
   registration: { challenge: string; userHandle: string } | null;
   possession: { credentialId: string; document: ReturnType<typeof walletRecoveryDocument>; challenge: Hex } | null;
   transactionHashes: Hex[];
+  /** The account's other chains and how far each is with the same replacement. */
+  chains: WalletRecoveryChain[];
 }
 export interface LocalWalletRecoveryDependencies {
   audience: string;
   recoveries: PostgresWalletRecoveryStore; flows: PostgresWalletRecoveryFlowStore;
   rotation: ReturnType<typeof createLocalAnvilWalletRecovery>;
   smart: ReturnType<typeof createSmartAccountService>; authority: ReturnType<typeof createWalletAuthorityService>;
+  /** The same replacement on every other chain the account is deployed on. */
+  chains?: ReturnType<typeof createWalletRecoveryChains>;
   onEvent?: (event: { stage: 'rotation' | 'setup' | 'activation'; outcome: string; recoveryId: string }) => void;
 }
 function state(): never { throw new RestError(409, 'WALLET_RECOVERY_STATE', 'Check the original recovery and complete its current step.'); }
@@ -75,7 +80,7 @@ export function createLocalWalletRecovery(options: LocalWalletRecoveryDependenci
     return { id: intent.id, passkeyName: flow.passkeyName, rpId: intent.rpId, origin: intent.origin, audience,
       expiresAtMs: flow.expiresAtMs, proofExpiresAtMs: intent.expiresAtMs, walletAddress: getAddress(intent.accountId.slice(12)),
       recoveryOwner: intent.recoveryOwner, initializerHash: intent.initializerHash, priorSigner: intent.priorSigner,
-      replacementSigner: candidate?.signerAddress ?? null, phase, transactionHashes,
+      replacementSigner: candidate?.signerAddress ?? null, phase, transactionHashes, chains: await options.chains?.status(intent.id) ?? [],
       candidateDigest: candidate ? enrollmentDigest(candidate) : null,
       rotationContext: candidate ? { publicKey: candidate.credential.publicKey, signerFactory: intent.manifest.ownerProfile!.signerFactory.address,
         verifiers: intent.manifest.ownerProfile!.p256Verifier.address } : null,
@@ -100,16 +105,35 @@ export function createLocalWalletRecovery(options: LocalWalletRecoveryDependenci
     const { record } = await context(flowToken);
     await recoveries.prove(record.intent.id, flowToken, input); return status(flowToken);
   }
-  async function prepareRotation(flowToken: string) {
+  /** After activation only the other chains can still need the swap: one that failed, or one reached since the review. */
+  async function activeChains(flowToken: string) {
     const { record } = await context(flowToken);
-    if (!record.proof || record.activation) state();
-    const review = await rotation.prepare(record.intent.id);
-    return { review, document: walletRecoveryRotationDocument(review) };
+    if (!record.activation) return null;
+    if (!options.chains || !await recoveries.isCurrentActivation(record.intent.id, flowToken)) state();
+    return { record, chains: options.chains };
   }
-  async function approveRotation(flowToken: string, backupSignature: Hex) {
+  async function prepareRotation(flowToken: string) {
+    const active = await activeChains(flowToken);
+    if (active) return { review: null, document: null,
+      chains: (await active.chains.prepare(active.record.candidate!, true)).map(item => ({ review: item, document: walletRecoveryRotationDocument(item) })) };
     const { record } = await context(flowToken);
     if (!record.proof) state();
-    if (record.activation) return status(flowToken);
+    const review = await rotation.prepare(record.intent.id), chains = await options.chains?.prepare(record.candidate!) ?? [];
+    // One review: Base's swap and the same swap on each other chain, each signed by the backup key in the same approval.
+    return { review, document: walletRecoveryRotationDocument(review),
+      chains: chains.map(item => ({ review: item, document: walletRecoveryRotationDocument(item) })) };
+  }
+  async function approveRotation(flowToken: string, backupSignature: Hex | undefined, chainSignatures: unknown = []) {
+    const active = await activeChains(flowToken);
+    if (active) {
+      // A repeated approval with nothing left to review is answered with the current state.
+      if ((await active.chains.status(active.record.intent.id)).some(chain => chain.state === 'review')) await active.chains.approve(active.record.candidate!, chainSignatures, true);
+      return status(flowToken);
+    }
+    const { record } = await context(flowToken);
+    if (!record.proof || typeof backupSignature !== 'string') state();
+    // The other chains' approvals are kept first; none is sent before Base's own swap is on chain.
+    await options.chains?.approve(record.candidate!, chainSignatures);
     const review = await rotation.prepare(record.intent.id);
     await rotation.approve(record.intent.id, review, backupSignature, flowToken);
     event({ stage: 'rotation', outcome: 'checked_original_attempt', recoveryId: record.intent.id });
@@ -135,7 +159,10 @@ export function createLocalWalletRecovery(options: LocalWalletRecoveryDependenci
   const controller = new AbortController();
   const tick = () => {
     if (stopped) return Promise.resolve();
-    return running ??= rotation.tick(controller.signal).finally(() => { running = null; });
+    return running ??= (async () => {
+      try { await rotation.tick(controller.signal); }
+      finally { await options.chains?.tick(controller.signal); }
+    })().finally(() => { running = null; });
   };
   function start() {
     if (stopped || timer) return;

@@ -52,7 +52,7 @@ describeIf("wallet networks against real PostgreSQL", () => {
           tx_uuid: ids[entries.length - 1 - i], request: { chain: entry.chain, target: entry.target, data: entry.data, value: entry.value },
           status: { state: deployed.has(entry.chain) ? "Included" : "Pending", data: deployed.has(entry.chain) ? { hash: keccak256(toHex(entry.chain)) } : {} } })) }; } };
     // The account's owners per chain, as each chain's Safe reports them.
-    const owners: Record<number, Address[]> = {}, initialOwners = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000a2"] as Address[];
+    const owners: Record<number, Address[]> = {}, initialOwners = creation.owners;
     const rpc = { async request(chainId: number, method: string, params: readonly unknown[]) {
       calls.push({ chainId, method, params });
       const target = String(params[0]).toLowerCase();
@@ -83,7 +83,7 @@ describeIf("wallet networks against real PostgreSQL", () => {
   }
 
   it("quotes, approves with one passkey prompt, pays from Center's payer and records each chain as it shows the account", async () => {
-    const { fixture, session, creation, amount, calldata, calls, sent, deployed, owners, provider, rpc, payer, networks } = await setup();
+    const { fixture, session, creation, amount, calldata, calls, sent, deployed, owners, provider, rpc, payer, dependencies, networks } = await setup();
 
     const before = await networks.list(session);
     expect(before.networks).toEqual([{ chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" }]);
@@ -129,6 +129,20 @@ describeIf("wallet networks against real PostgreSQL", () => {
     // A chain that has code is deployed, not up to date: Base's owners change and both other chains need an update.
     owners[8453] = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000b3"];
     expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "diverged", "diverged"]);
+    // A new network would replay the original owners, so it is refused while Base's owners differ from them.
+    const quotes = provider.requests.length;
+    await expect(networks.quote(session, { chainIds: [84532] })).rejects.toMatchObject({ status: 409, code: "WALLET_NETWORKS_OWNERS_CHANGED" });
+    expect(provider.requests).toHaveLength(quotes);
+    delete owners[8453];
+    // Owners that change between the quote and its approval stop the payment too.
+    const onTestnet = createWalletNetworks({ ...dependencies, provider: { ...provider, async createIndependent(entries: unknown) {
+      const q = await provider.createIndependent(entries); return { ...q, payment_info: [{ ...(q.payment_info[0] as object), chain: 84532 }] }; } } });
+    const late = await onTestnet.quote(session, { chainIds: [84532] });
+    owners[8453] = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000b3"];
+    await expect(onTestnet.approve(session, { bundleId: late.bundle!.id, assertion: signGet({ ...fixture.credential, challenge: late.challenge!, rpId, origin }) }))
+      .rejects.toMatchObject({ status: 409, code: "WALLET_NETWORKS_OWNERS_CHANGED" });
+    expect(sent).toHaveLength(1);
+    delete owners[8453];
     expect(done.pending).toEqual([]);
     expect(done.offered.map(item => item.chainId)).toEqual([11155111, 11155420, 421614, 84532]);
     // A quote above what Center covers is refused before anything is stored.

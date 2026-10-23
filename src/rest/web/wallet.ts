@@ -180,6 +180,9 @@ async function run(action: () => Promise<void>) {
     } else if (error instanceof InvalidResponse) {
       setStatus("error", "This wallet request could not be verified. Return to the app and start again.");
       // An unverified result never makes a previously unknown session safe to replace.
+    } else if (error instanceof HttpFailure && error.code === 'WALLET_NETWORKS_OWNERS_CHANGED') {
+      networksQuote = null;
+      setStatus("ready", "This account's owners changed, so adding networks is paused for it.");
     } else if (error instanceof HttpFailure && error.code === 'WALLET_LOGIN_UNKNOWN_PASSKEY') {
       pending = null; csrf = ""; completionAttempted = false;
       setStatus("ready", "That passkey isn't linked to an account here. It may be left over from a signup that didn't finish. Try another passkey, or sign up.");
