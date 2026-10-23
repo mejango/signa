@@ -9,7 +9,7 @@ import type { StoredPlan } from "../transactions/types.js";
 import { getPostgresTransports } from "../transactions/transport-reservations.js";
 import { assertPlan, digest, type UserOperationRecord } from "../userOperations/store.js";
 import type { WalletAssertion } from "./webauthn.js";
-import { assertWalletPaymentReviewContext, copyWalletPaymentReviewAssertion, createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft,
+import { assertWalletPaymentReviewContext, copyWalletPaymentReviewAssertion, reviewGas, createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft,
   walletReviewFromStored, walletReviewToStored,
   verifyWalletPaymentReviewProof, type WalletPaymentReviewApprover, type WalletPaymentReviewContext, type WalletReviewDraft } from "./paymentReviews.js";
 import { walletSessionCredential } from "./loginPostgres.js";
@@ -252,7 +252,8 @@ export class PostgresWalletPaymentReviewStore {
     const hint = await this.hint(id);
     const captured = await this.capture(this.rowActor(hint), hint.operation_id), draft = this.assertHint(hint, captured);
     // An account that cannot prefund its own gas is never asked to sign: the operation would fail at the EntryPoint.
-    if (draft.gas.payer === "account" && !draft.gas.funded)
+    const gas = reviewGas(draft);
+    if (gas.payer === "account" && !gas.funded)
       throw new RestError(409, "WALLET_PAYMENT_GAS_UNFUNDED", `Needs ETH for gas on ${signaChainName(draft.chainId)}.`);
     // Local WebAuthn/P256/ABI verification is complete before transactional lock acquisition. The
     // assertion names the approving passkey: the primary, or one of the account's devices.

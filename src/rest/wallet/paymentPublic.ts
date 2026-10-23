@@ -5,6 +5,7 @@ import type { WalletV6UsdcPayment } from '../userOperations/semantics.js';
 import { passkeyPayMetadataSteps, type PayMetadataStep } from '../userOperations/userPayMetadata.js';
 import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 import type { ReviewGas } from '../sponsorCaps.js';
+import { reviewGas } from './paymentReviews.js';
 
 export interface WalletPaymentReviewPublic {
   version: 'center-wallet-payment-review-v1';
@@ -63,7 +64,7 @@ export function publicWalletPaymentAppReview(view: WalletPaymentReviewAppView): 
 }
 export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView): WalletPaymentCentralPublic {
   const d = view.draft;
-  return { ...publicWalletPaymentReview(view), notice: d.notice ?? null, gas: { ...d.gas }, passkey: { rpId: d.authority.credential.rpId,
+  return { ...publicWalletPaymentReview(view), notice: d.notice ?? null, gas: reviewGas(d), passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId, credentialIds: [...view.approvers],
     challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' },
     metadataSteps: passkeyPayMetadataSteps(d.review.payment.metadata) };

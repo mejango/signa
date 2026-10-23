@@ -1421,7 +1421,8 @@ export class UserOperationService {
     const caps = this.options.sponsorCaps;
     if (!caps || !record.operation.paymaster) return;
     try {
-      if (record.observation?.actualGasCost !== undefined)
+      // Only a charge at its confirmation depth replaces the reservation: a shallower block can be reorged away.
+      if ((record.state === "confirmed" || record.state === "reverted") && record.observation?.actualGasCost !== undefined)
         await caps.settle({ operationId: record.id, spentWei: BigInt(record.observation.actualGasCost) });
       else if (record.state === "expired" || (record.state === "retired" && !record.submission))
         await caps.release({ operationId: record.id });

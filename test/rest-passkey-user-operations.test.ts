@@ -1091,7 +1091,11 @@ describe("sponsorship caps", () => {
     const saved = await f.store.observe(view.id, submitted.revision, { state: "confirmed", operationHash: view.operationHash, transactionHash, actualGasCost: "1000",
       receipt: { transactionHash, blockHash: h("passkey-block"), blockNumber: "90", status: "success", canonical: true, confirmations: 10,
         observedAt: now, logs: [], logsStored: false, logCount: 1, logsHash: h("logs") } });
-    await (f.service as unknown as { meter(record: typeof saved): Promise<void> }).meter(saved);
+    const meter = (record: typeof saved) => (f.service as unknown as { meter(record: typeof saved): Promise<void> }).meter(record);
+    // Short of its confirmation depth the charge could be reorged away: the full reservation stands.
+    await meter({ ...saved, state: "confirming" });
+    expect(await fits(f, 10_000_000n - cost(view) + 1n)).toBe(false);
+    await meter(saved);
     expect(await fits(f, 10_000_000n - 1000n)).toBe(true);
     expect(await fits(f, 10_000_000n - 999n)).toBe(false);
   });

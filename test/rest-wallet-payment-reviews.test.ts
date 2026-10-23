@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import { concat, encodeAbiParameters, encodeFunctionData, erc20Abi, hashTypedData, parseAbi, type Address, type Hex } from "viem";
-import { createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft, assertWalletPaymentReviewContext,
+import { createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft, assertWalletPaymentReviewContext, reviewGas,
   verifyWalletPaymentReviewProof, type WalletPaymentReviewContext } from "../src/rest/wallet/paymentReviews.js";
 import { createWalletAuthorityContextFixture } from "./fixtures/wallet-authority-context.js";
 import { createRegistration, enrollmentBackupAccount, signBackupProof, signGet } from "./fixtures/wallet-enrollment-crypto.js";
@@ -168,7 +168,15 @@ describe("owner-approved modeled payment review", () => {
     const sponsored = context(), paymaster = "0x00000000000000fb866daaa79352cc568a005d96" as Address;
     Object.assign(sponsored.operation.operation, { paymaster, paymasterVerificationGasLimit: "0x64", paymasterPostOpGasLimit: "0x0", paymasterData: "0x1234" });
     recommit(sponsored); delete sponsored.operation.gas;
+    expect(createWalletPaymentReviewDraft(sponsored, options()).gas).toBeUndefined();
+    sponsored.operation.gas = { payer: "pimlico", chainId: 8453, paymaster };
     expect(createWalletPaymentReviewDraft(sponsored, options()).gas).toEqual({ payer: "pimlico", chainId: 8453, paymaster });
+    // An operation that recorded no payer was sponsored: its review, stored before the field existed, still validates and shows the sponsor.
+    delete sponsored.operation.gas;
+    const legacy = createWalletPaymentReviewDraft(sponsored, options());
+    expect(validateWalletPaymentReviewDraft(legacy)).toEqual(legacy);
+    expect(() => assertWalletPaymentReviewContext(legacy, sponsored)).not.toThrow();
+    expect(reviewGas(legacy)).toEqual({ payer: "pimlico", chainId: 8453, paymaster });
     // A recorded payer that disagrees with the signed fields makes no review.
     sponsored.operation.gas = c.operation.gas!;
     expect(() => createWalletPaymentReviewDraft(sponsored, options())).toThrow();
