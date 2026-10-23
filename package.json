@@ -26,7 +26,7 @@
     "wallet:dependency-funding": "node --import tsx scripts/rest/wallet-dependency-funding.ts",
     "verify:execution-artifacts": "node src/rest/smartAccounts/stack/verify-artifacts.mjs",
     "migrate": "node --env-file-if-exists=.env --import tsx src/db/migrate-cli.ts",
-    "build:web": "node scripts/rest/build-web.mjs",
+    "build:web": "node --import tsx scripts/rest/build-web.mjs",
     "rest": "node scripts/rest/center.mjs",
     "build:client": "node scripts/rest/build-client.mjs"
   },

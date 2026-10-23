@@ -1,6 +1,6 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
-import { formatUnits } from 'viem';
+import { formatUnits, type Address } from 'viem';
 import { getUserOperationHash, normalizeUserOperation, uoCanonical, userOperationMaximumCost } from '../userOperations/codec.js';
 import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
@@ -10,6 +10,9 @@ import type { WalletPaymentCentralPublic } from '../wallet/paymentPublic.js';
 // Native assertions and CSRF values stay in this page's memory. A reload recovers
 // the durable review by ID; no proof is put in storage, a URL or diagnostics.
 type Json = Record<string, unknown>;
+// Base USDC and the V6 JBMultiTerminal, written into this bundle at build time (scripts/rest/build-web.mjs)
+// from the server's own pin, so a review cannot name its own token or terminal.
+declare const __SIGNA_PAYMENT_PIN__: { token: Address; directV6Terminal: Address };
 type Assertion = { credentialId: string; userHandle: string | null; authenticatorData: string; clientDataJSON: string; signature: string };
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = element('payment-status'), details = element('payment-review');
@@ -136,7 +139,7 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
     summary: { operation: 'pay', project, account: operation.sender, terminal: p.terminal, terminalPath: [p.terminal],
       routerGateway: null, route: 'multi-terminal', payment: { token: p.token, amount: p.amount, unit: 'token-base-units' },
       beneficiary: p.beneficiary, minimumBeneficiaryTokenCount: p.minimumReturnedTokens, metadata: p.metadata } } },
-    value.stepIndexes, { chainId: 8453, token: p.token, directV6Terminal: p.terminal });
+    value.stepIndexes, { chainId: 8453, ...__SIGNA_PAYMENT_PIN__ });
   if (!derived || uoCanonical(derived) !== uoCanonical(p)) fail();
   const signing = safe7579PasskeyOwnerSigningPayload({ operation, chainId: 8453, entryPoint: value.entryPoint, safe7579: value.safe7579,
     validAfter: decimal(value.signing.validAfter), validUntil: decimal(value.signing.validUntil) });
