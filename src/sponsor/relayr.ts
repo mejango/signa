@@ -25,7 +25,7 @@ import {
   type SponsorEvents,
   type SponsorSigner,
 } from "./chain.js";
-import { CREATION_FEE_CEILING, reservationWei, type SponsorPolicy } from "./policy.js";
+import { CREATION_FEE_CEILING, reservationWei, type SponsorPolicy } from "../rest/sponsorCaps.js";
 import type { DeploymentCall, RelayRequest } from "../types.js";
 
 const REQUEST_TTL_SECONDS = 47 * 3600;

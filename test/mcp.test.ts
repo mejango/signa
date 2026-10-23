@@ -13,7 +13,7 @@ import {
 import { createApp } from "../src/app.js";
 import { originsForEnvironment } from "../src/firstParty.js";
 import { contentHash, signingMessage } from "../src/intent.js";
-import { readSponsorPolicy } from "../src/sponsor/policy.js";
+import { readSponsorPolicy } from "../src/rest/sponsorCaps.js";
 import { MemoryStore } from "./support/memoryStore.js";
 import { createRpcGateway, type RpcGateway } from "../src/rpc.js";
 import type { PinningService } from "../src/ipfs.js";

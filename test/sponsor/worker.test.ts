@@ -5,7 +5,7 @@ import type { DeployLane, SponsorEvent } from "../../src/sponsor/chain.js";
 import { DeploymentVerificationError } from "../../src/deploymentVerifier.js";
 import { RestError } from "../../src/rest/core.js";
 import { LaneError } from "../../src/sponsor/chain.js";
-import { readSponsorPolicy } from "../../src/sponsor/policy.js";
+import { readSponsorPolicy } from "../../src/rest/sponsorCaps.js";
 import type { NewIntent, StorageLimits } from "../../src/store.js";
 
 const HASH = `0x${"12".repeat(32)}` as const;

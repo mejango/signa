@@ -38,7 +38,7 @@ import {
   SAFE_FALLBACK,
   SAFE_SINGLETON,
 } from "../../src/safe.js";
-import { readSponsorPolicy, reservationWei } from "../../src/sponsor/policy.js";
+import { readSponsorPolicy, reservationWei } from "../../src/rest/sponsorCaps.js";
 import { createRelayrLane, rankPayments } from "../../src/sponsor/relayr.js";
 import type { Intent } from "../../src/types.js";
 import { SAFE_FACTORY_RUNTIME } from "../fixtures/safe-factory.js";

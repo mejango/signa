@@ -11,7 +11,8 @@ import {
   type LaneReport,
   type SponsorEvents,
 } from "./chain.js";
-import type { SponsorPolicy, SponsorRuntime } from "./policy.js";
+import type { SponsorRuntime } from "./policy.js";
+import type { SponsorPolicy } from "../rest/sponsorCaps.js";
 
 const DRAIN_LIMIT_MS = 30_000;
 
