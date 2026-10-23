@@ -139,4 +139,6 @@ export interface UserOperationObservation {
   verifiedAtBlock?: Hex;
   /** Why a reverted payment reverted, when its trace shows a known payment revert. */
   payFailure?: PayFailure;
+  /** The canonical UserOperationEvent's actualGasCost (wei, decimal), once the EntryPoint reported one. */
+  actualGasCost?: string;
 }

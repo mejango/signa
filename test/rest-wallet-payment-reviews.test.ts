@@ -13,7 +13,7 @@ import { walletAppPrincipalId } from "../src/rest/wallet/appGrants.js";
 import { encodeSafe7579Execution } from "../src/rest/smartAccounts/accountExecution.js";
 import { decodeSafe7579PasskeyOwnerSignature, safe7579PasskeyOwnerSigningPayload } from "../src/rest/smartAccounts/passkeySignatures.js";
 import { digest } from "../src/rest/userOperations/store.js";
-import { getUserOperationHash, userOperationCommitment } from "../src/rest/userOperations/codec.js";
+import { getUserOperationHash, userOperationCommitment, userOperationMaximumCost } from "../src/rest/userOperations/codec.js";
 import { createWalletRecoveryIntent, createWalletRecoveryMapping, prepareWalletRecoveryCandidate,
   verifyWalletRecoveryProof, walletRecoveryDocument } from '../src/rest/wallet/recovery.js';
 import { passkeyOnboardingDocument } from '../src/rest/smartAccounts/passkeyOnboarding.js';
@@ -33,6 +33,9 @@ function recommit(c: WalletPaymentReviewContext): void {
   const r = c.operation;
   r.planCommitment = c.plan.commitment;
   r.operationHash = getUserOperationHash(r.operation, r.entryPoint, r.chainId);
+  // The cap left the operation for the account to pay, and its balance covers the gas.
+  r.gas = { payer: "account", chainId: r.chainId, maximumWei: userOperationMaximumCost(r.operation).toString(), reason: "account-cap",
+    balanceWei: (10n ** 18n).toString(), funded: true };
   r.commitment = digest({ planId: r.planId, planCommitment: r.planCommitment, operation: r.operation, operationHash: r.operationHash,
     accountBindingId: r.accountBindingId, accountStateHash: r.accountStateHash, gasPolicyId: r.gasPolicyId,
     providerId: r.providerId, createdAt: r.createdAt, expiresAt: r.expiresAt });
@@ -155,6 +158,24 @@ describe("owner-approved modeled payment review", () => {
     expect(Object.isFrozen(draft)).toBe(true); expect(Object.isFrozen(draft.operation)).toBe(true);
     expect(validateWalletPaymentReviewDraft(draft)).toEqual(draft);
     expect(() => assertWalletPaymentReviewContext(draft, c)).not.toThrow();
+  });
+  it("carries the payer the signed paymaster fields fix in the one review, for every kind", () => {
+    // Capped: the account pays, and the review says so with the balance read for it.
+    const c = context(), draft = createWalletPaymentReviewDraft(c, options());
+    expect(draft.gas).toEqual(c.operation.gas);
+    expect(draft.gas).toMatchObject({ payer: "account", reason: "account-cap", funded: true });
+    // Sponsored: the paymaster inside the signed operation names Pimlico, recorded or not.
+    const sponsored = context(), paymaster = "0x00000000000000fb866daaa79352cc568a005d96" as Address;
+    Object.assign(sponsored.operation.operation, { paymaster, paymasterVerificationGasLimit: "0x64", paymasterPostOpGasLimit: "0x0", paymasterData: "0x1234" });
+    recommit(sponsored); delete sponsored.operation.gas;
+    expect(createWalletPaymentReviewDraft(sponsored, options()).gas).toEqual({ payer: "pimlico", chainId: 8453, paymaster });
+    // A recorded payer that disagrees with the signed fields makes no review.
+    sponsored.operation.gas = c.operation.gas!;
+    expect(() => createWalletPaymentReviewDraft(sponsored, options())).toThrow();
+    const unsponsored = context(); delete unsponsored.operation.gas;
+    expect(() => createWalletPaymentReviewDraft(unsponsored, options())).toThrow();
+    // A stored review whose gas row changed is invalid.
+    expect(() => validateWalletPaymentReviewDraft({ ...draft, gas: { ...draft.gas, funded: false } })).toThrow();
   });
   it("binds the plan's quote notice into the review, and nothing else from its warnings", () => {
     const plain = createWalletPaymentReviewDraft(context(), options());

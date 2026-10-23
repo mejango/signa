@@ -6,6 +6,7 @@ import { assertActor, assertText } from '../transactions/store.js';
 import { assertDispatchAuthorization } from '../sponsorship/store.js';
 import { canonical, digest } from '../sponsorship/validation.js';
 import type { UserOperationObservation, UserOperationV07 } from './types.js';
+import type { ReviewGas } from '../sponsorCaps.js';
 import { normalizeUserOperation, getUserOperationHash, userOperationCommitment } from './codec.js';
 import type { UserOperationSessionBinding } from '../sessions/types.js';
 export type { UserOperationSessionBinding } from '../sessions/types.js';
@@ -47,7 +48,8 @@ export interface UserOperationRecord {
    * to its exact nonce, as a retired operation does. */
   nonceReleasedAt?: number;
   /** When the chain settled a retired or released operation: it never ran and never can, or Signa's own operation took its nonce. */
-  retiredSettledAt?: number;
+  retiredSettledAt?: number;  /** Who pays its gas, fixed at preparation and shown in its one review. */
+  gas?: ReviewGas;
 }
 export interface UserOperationClaim {
   actor: RestActor;

@@ -196,6 +196,16 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
     expect(await value.store.get(value.view.draft.id)).toEqual(value.view);
   });
 
+  it("never asks the passkey to approve an operation whose account cannot prefund its gas", async () => {
+    const context = await appContext(), prepared = await prepareWalletPaymentFixtureOperation(pool, context.actor, context.login.binding, 120_000, 1n, 1n);
+    const store = new PostgresWalletPaymentReviewStore(pool, options());
+    const view = await store.prepare(context.actor, { operationId: prepared.record.id, state: token() }, `review:${prepared.plan.id}`);
+    expect(view.draft.gas).toMatchObject({ payer: "account", balanceWei: "1", funded: false });
+    const assertion = signGet({ ...context.login.credential, challenge: view.draft.signing.digest, rpId: walletLoginFixtureRpId, origin: issuer });
+    await expect(store.approve(view.draft.id, assertion)).rejects.toMatchObject({ code: "WALLET_PAYMENT_GAS_UNFUNDED", message: "Needs ETH for gas on Base." });
+    expect((await reviewRow(view.draft.id)).status).toBe("pending");
+  });
+
   it("refuses a review for an operation whose full nonce another publication already holds", async () => {
     const context = await appContext(), held = await preparedOperation(context, 120_000, 7n), fresh = await preparedOperation(context, 120_000, 7n);
     // The claim writes the sender lowercase and the nonce in decimal; the review must look it up the same way.

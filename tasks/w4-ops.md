@@ -22,6 +22,15 @@ The publish workflow authenticates with GitHub OIDC (npm 11.21.1, pinned) and no
 2. Merge the PR that removes the token only after step 1.
 3. After the first OIDC publish (Task 19 version bump; the OIDC setup is only proven by a real publish of a new version) shows provenance with no token, delete the `NPM_TOKEN` repository secret and revoke the token on npmjs.com.
 
+## Per-account sponsor cap (Task 17, mejango/signa)
+
+Signa now refuses to start when a chain in `REST_ERC4337_CONFIG` has a Pimlico paymaster policy but no cap. Before merging the Task 17 PR:
+
+1. Set `SIGNA_SPONSOR_ACCOUNT_DAILY_WEI_8453` on the production (and dev) Signa service: the most Pimlico may sponsor for one account on Base over a rolling day, in wei. Set the same name for any other chain the config sponsors.
+2. Merge only after the variable is set. Until then the new build fails startup and the old one keeps serving.
+
+`SIGNA_SPONSOR_PAUSED=1` stops asking Pimlico everywhere (owner operations show the account paying). Gas policies may set `"requirePaymaster": true` to refuse instead of falling back to the account.
+
 ## Hosting-neutral environment names
 
 Signa reads `SIGNA_ENVIRONMENT` (`dev` or `production`, default production), `SIGNA_REPLICA_ID` and `SIGNA_REPLICA_REGION`, and falls back to `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_REPLICA_ID` and `RAILWAY_REPLICA_REGION`. Today's deploy needs no change. Set the three `SIGNA_*` names on each service (the dev service gets `SIGNA_ENVIRONMENT=dev`) before leaving Railway; a later PR removes the fallback.

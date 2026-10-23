@@ -122,6 +122,15 @@ Each network operation has a 60-second overall cancellation signal, a maximum of
 
 The implementation and fixtures are derived from the repository's existing `webclients/juicebox-money/src/lib/relayr.ts`, `webclients/juicescan/src/relayr.js`, their pinned payment-runtime tests, the V6 forwarder deployment, and the canonical contract catalog. Offline tests use public fixture keys and injected RPC/provider transports. Real PostgreSQL tests use disposable schemas and verify race behavior and complete rollback. Tests never publish a prepaid bundle, sign with production keys, fund a quote, or broadcast a transaction.
 
+## Wallet operation gas caps
+
+This is separate from the prepaid adapter above. Wallet user operations are sponsored by the operator's Pimlico paymaster policy in `REST_ERC4337_CONFIG`; Signa decides, before asking Pimlico, whether this account may be sponsored on this chain today.
+
+- `SIGNA_SPONSOR_ACCOUNT_DAILY_WEI_<chainId>` is the most one account may be sponsored on that chain over a rolling 24 hours. It is required for every chain with a Pimlico policy; startup fails without it. `0` never sponsors. `SIGNA_SPONSOR_PAUSED=1` stops asking Pimlico on every chain.
+- Prepare reserves the operation's maximum gas cost (`src/rest/sponsorCaps.ts`, table `rest_sponsor_cap_reservations`) under a per-account, per-chain lock, so concurrent preparations never pass the cap together. The reservation becomes the canonical `UserOperationEvent.actualGasCost` once observed. It is released when the approval is retired unsent or the operation is proven expired, and lapses when an unsigned review expires. An unknown submission keeps it.
+- Over the cap, paused, or refused by Pimlico, an owner operation is prepared without a paymaster for the account to pay, after reading the Safe's native balance. Its single review shows the payer from the signed fields: "Gas: sponsored", "Gas: up to <amount> ETH from your account", or "Needs ETH for gas on <chain>." with no approval offered. Session operations and chains whose gas policy sets `requirePaymaster: true` are refused with `USER_OPERATION_SPONSOR_UNAVAILABLE` instead. App sponsor routes (`REST_ERC4337_SPONSOR_ROUTES`) are the app's to meter and are not capped here.
+- A sponsored approval whose submission fails is retired and its reservation released; it is never resubmitted as Safe-paid. A fresh review decides the payer again.
+
 ## Sessions and prepaid spending
 
 Prepayment buys execution service for exact calls; it does not establish a reusable wallet spending balance or an expiring bot session. V6 operator permission bitmaps have no expiry. A forwarding deadline also does not expire an ERC-20 allowance or permission installed by the forwarded call.

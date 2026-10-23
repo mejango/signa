@@ -22,6 +22,7 @@ import { validateWalletPolicyOrigin } from "./policy.js";
 import { validateWalletHandoffToken } from "./handoff.js";
 import { PAY_QUOTE_FAILED_MESSAGE } from "@bananapus/nana-sdk-core/v6";
 import { SIGNA_HOME_CHAIN_ID } from "./chains.js";
+import { checkReviewGas, type ReviewGas } from "../sponsorCaps.js";
 
 export interface WalletPaymentReviewContext {
   issuer: string;
@@ -65,6 +66,8 @@ export interface WalletReviewDraft {
   entryPoint: Address;
   safe7579: Address;
   review: WalletReview;
+  /** Who pays the gas, as the signed paymaster fields fix it; every kind of review shows it. */
+  gas: ReviewGas;
   /** The SDK's notice when the plan's quote could not read the pool price; absent otherwise. */
   notice?: typeof PAY_QUOTE_FAILED_MESSAGE;
   signing: { digest: Hex; signedData: Hex; validAfter: string; validUntil: string };
@@ -198,6 +201,8 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
       planId: p.id, planCommitment: p.commitment, operationId: r.id, operationCommitment: r.commitment, operationHash: r.operationHash,
       stepIndexes: [...r.stepIndexes], operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address),
       review: { kind: "v6-usdc-pay", payment },
+      // An operation prepared before the payer was recorded was sponsored: its paymaster says so.
+      gas: checkReviewGas(r.gas ?? { payer: "pimlico", chainId: r.chainId, paymaster: operation.paymaster?.toLowerCase() }, operation, SIGNA_HOME_CHAIN_ID),
       ...(quoteFailed ? { notice: PAY_QUOTE_FAILED_MESSAGE } : {}),
       signing: signing({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: r.entryPoint, safe7579: c.manifest.safe7579.address },
         String(Math.floor(r.createdAt / 1000)), String(Math.floor(r.expiresAt / 1000))), expiresAtMs };
@@ -210,7 +215,7 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletReviewDr
   try {
     const d = snapshot(input) as WalletReviewDraft;
     walletAppFields(d, ["version", "id", "state", "issuer", "grant", "authority", "planId", "planCommitment", "operationId", "operationCommitment",
-      "operationHash", "stepIndexes", "operation", "chainId", "entryPoint", "safe7579", "review", "signing", "createdAtMs", "expiresAtMs", "ceremony"], ["notice"]);
+      "operationHash", "stepIndexes", "operation", "chainId", "entryPoint", "safe7579", "review", "gas", "signing", "createdAtMs", "expiresAtMs", "ceremony"], ["notice"]);
     if ("notice" in d && d.notice !== PAY_QUOTE_FAILED_MESSAGE) invalid();
     if (Buffer.byteLength(JSON.stringify(walletReviewToStored(d))) > 65_536 || d.version !== "center-wallet-payment-review-v1" ||
       ![d.id, d.planId, d.operationId].every(value => typeof value === "string" && uuid.test(value)) || d.chainId !== SIGNA_HOME_CHAIN_ID ||
@@ -238,6 +243,7 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletReviewDr
     fields(d.signing, ["digest", "signedData", "validAfter", "validUntil"]);
     if (!same(signing(d, d.signing.validAfter, d.signing.validUntil), d.signing) ||
       BigInt(d.signing.validAfter) * 1000n > BigInt(d.createdAtMs) || BigInt(d.signing.validUntil) * 1000n < BigInt(d.expiresAtMs)) invalid();
+    if (!same(checkReviewGas(d.gas, d.operation, d.chainId), d.gas)) invalid();
     fields(d.review, ["kind", "payment"]);
     if (d.review.kind !== "v6-usdc-pay") invalid();
     const payment = d.review.payment;

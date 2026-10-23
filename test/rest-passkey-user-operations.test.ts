@@ -14,13 +14,14 @@ import { TransactionService } from "../src/rest/transactions/service.js";
 import { MemoryTransportReservations } from "../src/rest/transactions/transport-reservations.js";
 import { ENTRY_POINT_V07_ABI } from "../src/rest/userOperations/chain.js";
 import { safeAbi } from "../src/rest/smartAccounts/service.js";
-import { getUserOperationHash, unpackUserOperation, userOperationCommitment } from "../src/rest/userOperations/codec.js";
+import { getUserOperationHash, unpackUserOperation, userOperationCommitment, userOperationMaximumCost } from "../src/rest/userOperations/codec.js";
 import { MemoryUserOperationStore } from "../src/rest/userOperations/memory.js";
 import { passkeyDummyContractSignature, passkeyDummySignature, passkeyEstimateProvider, PASSKEY_MAX_SIGNATURE_BYTES } from "../src/rest/userOperations/passkeyEstimation.js";
 import { UserOperationProvider } from "../src/rest/userOperations/provider.js";
 import { UserOperationService } from "../src/rest/userOperations/service.js";
 import { assertPlan, retiring } from "../src/rest/userOperations/store.js";
 import type { UserOperationGasEstimate, UserOperationGasPolicy, UserOperationV07 } from "../src/rest/userOperations/types.js";
+import { MemorySponsorCapStore } from "../src/rest/sponsorCaps.js";
 import { account, binding, entryPoint, h, owner, ownerKey, plan, safe, target } from "./fixtures/user-operations.js";
 
 const signer = "0x4444444444444444444444444444444444444444" as Address;
@@ -38,7 +39,9 @@ const gas: UserOperationGasPolicy = {
 
 // Real service, storage, codecs and EOA signatures; RPC/provider I/O is synthetic here.
 // The separate pinned-Anvil suite establishes actual passkey/FCL execution compatibility.
-async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint; paymentMetadata?: Hex; paymentLabel?: string; steps?: number; planLifetimeMs?: number } = {}) {
+async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: boolean; maximumPreVerificationGas?: bigint; paymentMetadata?: Hex; paymentLabel?: string; steps?: number; planLifetimeMs?: number;
+  /** Signa's per-account daily cap on the sponsor, in wei; with it, a refused owner operation is the account's to pay. */
+  capWei?: bigint; capPaused?: boolean; requirePaymaster?: boolean } = {}) {
   const apiAccount = account(now, 8453);
   if (!options.legacy) { apiAccount.id = `eip155:8453:${safe}`; apiAccount.ownerAddress = safe; }
   const actor = owner(apiAccount), wallet = binding(apiAccount, now);
@@ -114,13 +117,15 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
     baseFee: "0x0" as Hex, finalGasBump: false, nonce: 0n, headLagSeconds: 0, approved: true,
     /** The Safe's own owner reads: Base's owners unless a test changes them. */
     safeOwners: {} as Record<number, Address[]>, safeThreshold: 1n, ownersFailure: false,
+    /** The paymaster refuses to sponsor; the Safe's own native balance. */
+    sponsorRefused: false, balance: 10n ** 18n,
   };
   const rpcDefault: RestRpc["request"] = async (chain, method, params) => {
     if (method === "eth_chainId") return toHex(chain);
     if (method === "eth_getBlockByNumber") return { number: "0x64", hash: state.reorg ? h("reorg") : h("passkey-block"), timestamp: toHex(Math.floor(now / 1000) - state.headLagSeconds), baseFeePerGas: state.baseFee };
     if (method === "eth_maxPriorityFeePerGas") return "0x1";
     if (method === "eth_getCode") return state.runtimeFailure && params[0] === signer ? "0x6001" : code;
-    if (method === "eth_getBalance") return toHex(10n ** 18n);
+    if (method === "eth_getBalance") return toHex(state.balance);
     if (method === "eth_call") {
       const call = params[0] as { to: Address; data: Hex };
       if (call.to.toLowerCase() === signer) {
@@ -161,6 +166,7 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
         preVerificationGas: toHex(state.growAlways ? 100_000n * BigInt(1 + state.finalQuotes) : state.growth && state.finalQuotes > 0 ? 60_000n : 50_000n),
         ...state.signedEstimate };
     } else if (request.method === "pm_getPaymasterStubData" || request.method === "pm_getPaymasterData") {
+      if (state.sponsorRefused) return Response.json({ jsonrpc: "2.0", id: request.id, error: { code: -32500, message: "sponsorship policy rejected" } });
       if (request.method === "pm_getPaymasterData") state.finalQuotes++;
       result = { paymaster, paymasterData: toHex(0x1234 + state.finalQuotes, { size: 2 }),
         paymasterVerificationGasLimit: request.method === "pm_getPaymasterData" && state.finalGasBump ? "0x65" : "0x64", paymasterPostOpGasLimit: "0x0" };
@@ -188,12 +194,15 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
   // A signer runtime the inspection could not prove is absent from the state; the verifier reads it.
   const currentBindingAt = vi.fn(async () => { if (state.bindingFailure) throw Error("binding changed");
     return state.runtimeFailure ? { ...wallet, state: { ...wallet.state, codeHashes: [] } } : wallet; });
+  const caps = options.capWei === undefined ? undefined
+    : new MemorySponsorCapStore([{ chainId: 8453, accountDailyWei: options.capWei, paused: options.capPaused ?? false }], () => now);
   let service: UserOperationService;
   const transactions = new TransactionService({ store: transactionStore, rpc: { request: rpc }, now: () => now,
     externalObservers: [{ kind: "erc4337", observePlanStep: (plan, index, bindingId, request) => service.observePlanStep(plan, index, bindingId, request) }] });
   service = new UserOperationService({
     rpc: { request: rpc }, provider, store, transactionStore, transactions, approvedReview: async () => state.approved,
-    policies: [{ chainId: 8453, gas: { ...gas,
+    ...(caps ? { sponsorCaps: caps } : {}),
+    policies: [{ chainId: 8453, gas: { ...gas, ...(options.requirePaymaster ? { requirePaymaster: true } : {}),
       ...(options.maximumPreVerificationGas !== undefined ? { maximumPreVerificationGas: options.maximumPreVerificationGas } : {}),
     }, confirmations: 1 }],
     currentBinding, currentBindingAt, manifestFor: () => manifest, manifestForPlan: () => manifest,
@@ -205,7 +214,7 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
   const signature = (view: Awaited<ReturnType<typeof prepare>>, body: Hex = "0x1234") => encodeSafe7579PasskeyOwnerSignature({
     validAfter: String(view.createdAt / 1000), validUntil: String(view.expiresAt / 1000), signatures: [{ kind: "contract", owner: signer, signature: body }],
   });
-  return { service, prepare, signature, state, wallet, manifest, principal, rpc, rpcDefault, provider, fetcher, currentBinding, currentBindingAt, store, actor, requestKey, preparedPlan, transactionStore, transactions };
+  return { caps, service, prepare, signature, state, wallet, manifest, principal, rpc, rpcDefault, provider, fetcher, currentBinding, currentBindingAt, store, actor, requestKey, preparedPlan, transactionStore, transactions };
 }
 
 describe("app UserOperation owner boundary", () => {
@@ -986,5 +995,120 @@ describe("retiring a refused approval", () => {
     await expect(f.store.claim({ actor: f.actor, id: other.id, key: "late", operation,
       signedCommitment: userOperationCommitment(operation, entryPoint, 8453), retiredChecked: [],
       authorization: { issuedAt: now / 1000, expiresAt: now / 1000 + 60 }, now })).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED_CHANGED" });
+  });
+});
+
+describe("sponsorship caps", () => {
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  let probes = 0;
+  /** Whether the account could reserve this much more on Base now. */
+  const fits = async (f: Fixture, wei: bigint) => {
+    const operationId = `probe-${probes++}`;
+    const result = await f.caps!.reserve({ chainId: 8453, accountId: f.actor.accountId, operationId, reservationWei: wei, expiresAt: now + 60_000 });
+    if (result.ok) await f.caps!.release({ operationId });
+    return result.ok;
+  };
+  const cost = (view: { operation: object }) => userOperationMaximumCost(view.operation as UserOperationV07);
+  const pimlicoAsked = (f: Fixture) => f.fetcher.mock.calls.some(([, init]) => String(init?.body).includes("pm_getPaymaster"));
+  const at = async <T>(time: number, work: () => Promise<T>) => { const started = now; now = time; try { return await work(); } finally { now = started; } };
+
+  it("reserves a sponsored operation's own maximum gas cost before the passkey signs", async () => {
+    const f = await fixture({ sponsored: true, capWei: 10_000_000n }), view = await f.prepare();
+    expect(view.operation.paymaster).toBeDefined();
+    expect((await f.store.get(f.actor, view.id))!.gas).toEqual({ payer: "pimlico", chainId: 8453, paymaster: view.operation.paymaster!.toLowerCase() });
+    const left = 10_000_000n - cost(view);
+    expect(await fits(f, left)).toBe(true);
+    expect(await fits(f, left + 1n)).toBe(false);
+  });
+
+  it("a review prepared after the cap is reached shows the Safe paying with one confirmation", async () => {
+    const f = await fixture({ sponsored: true, capWei: 0n }), view = await f.prepare();
+    expect(view.operation.paymaster).toBeUndefined();
+    expect((await f.store.get(f.actor, view.id))!.gas).toEqual({ payer: "account", chainId: 8453, maximumWei: cost(view).toString(),
+      reason: "account-cap", balanceWei: (10n ** 18n).toString(), funded: true });
+    // The cap is checked before Pimlico is asked anything.
+    expect(pimlicoAsked(f)).toBe(false);
+    // The owner's one signature sends it, the account paying.
+    expect((await f.service.submit(f.principal, view.id, f.signature(view), "submit")).state).toBe("pending");
+    expect(f.state.sent?.paymaster).toBeUndefined();
+    const paused = await fixture({ sponsored: true, capWei: 10_000_000n, capPaused: true });
+    expect((await paused.store.get(paused.actor, (await paused.prepare()).id))!.gas).toMatchObject({ payer: "account", reason: "paused" });
+    expect(pimlicoAsked(paused)).toBe(false);
+  });
+
+  it("a Pimlico refusal falls back to Safe-paid before the passkey signs", async () => {
+    const f = await fixture({ sponsored: true, capWei: 10_000_000n });
+    f.state.sponsorRefused = true;
+    const view = await f.prepare();
+    expect(pimlicoAsked(f)).toBe(true);
+    expect(view.operation.paymaster).toBeUndefined();
+    expect((await f.store.get(f.actor, view.id))!.gas).toMatchObject({ payer: "account", reason: "sponsor-refused", funded: true });
+    // The refused sponsorship reserves nothing.
+    expect(await fits(f, 10_000_000n)).toBe(true);
+  });
+
+  it("records an account that cannot prefund its own gas, so its review cannot be signed", async () => {
+    const f = await fixture({ sponsored: true, capWei: 0n });
+    f.state.balance = 1n;
+    const view = await f.prepare();
+    expect((await f.store.get(f.actor, view.id))!.gas).toMatchObject({ payer: "account", balanceWei: "1", funded: false });
+  });
+
+  it("a sponsored approval whose submission fails is retired, never resubmitted as Safe-paid", async () => {
+    const f = await fixture({ sponsored: true, capWei: 10_000_000n }), view = await f.prepare(), signature = f.signature(view);
+    f.state.estimateFailure = true;
+    await expect(f.service.submit(f.principal, view.id, signature, "submit")).rejects.toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED" });
+    expect(await f.service.retire(f.principal, view.id)).toMatchObject({ state: "retired", operation: { paymaster: view.operation.paymaster } });
+    // Proven never sent: its reservation is released.
+    expect(await fits(f, 10_000_000n)).toBe(true);
+    f.state.estimateFailure = false;
+    await expect(f.service.submit(f.principal, view.id, signature, "again")).rejects.toMatchObject({ code: "USER_OPERATION_RETIRED" });
+    expect(f.state.sends).toBe(0);
+  });
+
+  it("an unknown submission keeps its reservation", async () => {
+    const f = await fixture({ sponsored: true, capWei: 10_000_000n }), view = await f.prepare();
+    f.state.sendFailure = true;
+    expect((await f.service.submit(f.principal, view.id, f.signature(view), "submit")).state).toBe("submission_unknown");
+    // Signed and possibly sent: it still counts past its unsigned window.
+    const left = 10_000_000n - cost(view);
+    await at(view.expiresAt + 1, async () => {
+      expect(await fits(f, left)).toBe(true);
+      expect(await fits(f, left + 1n)).toBe(false);
+    });
+  });
+
+  it("an expired unsigned review releases its reservation", async () => {
+    const f = await fixture({ sponsored: true, capWei: 10_000_000n }), view = await f.prepare();
+    expect(await fits(f, 10_000_000n)).toBe(false);
+    await at(view.expiresAt, async () => expect(await fits(f, 10_000_000n)).toBe(true));
+  });
+
+  it("settles a sponsored operation at the canonical UserOperationEvent charge, and releases one proven never to run", async () => {
+    const f = await fixture({ sponsored: true, capWei: 10_000_000n }), view = await f.prepare();
+    const submitted = await f.service.submit(f.principal, view.id, f.signature(view), "submit");
+    const transactionHash = h("sponsored-transaction");
+    const saved = await f.store.observe(view.id, submitted.revision, { state: "confirmed", operationHash: view.operationHash, transactionHash, actualGasCost: "1000",
+      receipt: { transactionHash, blockHash: h("passkey-block"), blockNumber: "90", status: "success", canonical: true, confirmations: 10,
+        observedAt: now, logs: [], logsStored: false, logCount: 1, logsHash: h("logs") } });
+    await (f.service as unknown as { meter(record: typeof saved): Promise<void> }).meter(saved);
+    expect(await fits(f, 10_000_000n - 1000n)).toBe(true);
+    expect(await fits(f, 10_000_000n - 999n)).toBe(false);
+  });
+
+  it("a capped session or requirePaymaster operation is refused, not Safe-paid", async () => {
+    const capped = await fixture({ sponsored: true, capWei: 0n, requirePaymaster: true });
+    await expect(capped.prepare()).rejects.toMatchObject({ code: "USER_OPERATION_SPONSOR_UNAVAILABLE", status: 429 });
+    expect(pimlicoAsked(capped)).toBe(false);
+    const refused = await fixture({ sponsored: true, capWei: 10_000_000n, requirePaymaster: true });
+    refused.state.sponsorRefused = true;
+    await expect(refused.prepare()).rejects.toThrow();
+    expect(await fits(refused, 10_000_000n)).toBe(true);
+  });
+
+  it("meters nothing without a cap store: a configured sponsor sponsors as before", async () => {
+    const f = await fixture({ sponsored: true });
+    f.state.sponsorRefused = true;
+    await expect(f.prepare()).rejects.toThrow();
   });
 });

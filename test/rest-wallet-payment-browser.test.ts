@@ -10,6 +10,8 @@ import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-clie
 import { buildUserPayMetadata, PAY_QUOTE_FAILED_MESSAGE } from '@bananapus/nana-sdk-core/v6';
 import { passkeyPayMetadataSteps } from '../src/rest/userOperations/userPayMetadata.js';
 import type { Hex } from 'viem';
+import { getUserOperationHash } from '../src/rest/userOperations/codec.js';
+import { safe7579PasskeyOwnerSigningPayload } from '../src/rest/smartAccounts/passkeySignatures.js';
 import type { WalletPaymentCentralPublic } from '../src/rest/wallet/paymentPublic.js';
 import { parseWalletRegistration, type WalletRegistrationCandidate } from '../src/rest/wallet/registration.js';
 import { verifyWalletAssertion } from '../src/rest/wallet/webauthn.js';
@@ -86,6 +88,7 @@ describe('central payment review browser, virtual authenticator', () => {
       planId: f.plan.id, planCommitment: f.plan.commitment, operationId: f.prepared.id, operationCommitment: f.prepared.commitment,
       operationHash: f.prepared.operationHash, stepIndexes: [0, 1], operation: f.prepared.operation, chainId: 8453, entryPoint: f.entryPoint,
       safe7579: f.safe7579, payment: f.payment,
+      gas: { payer: 'account', chainId: 8453, maximumWei: '115000000', reason: 'account-cap', balanceWei: '1000000000000000000', funded: true },
       signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
       createdAtMs: f.prepared.createdAt, expiresAtMs: f.prepared.expiresAt, status: 'pending', approvedAtMs: null, cancelledAtMs: null,
       operationState: 'prepared', notice: null, passkey: { rpId: 'localhost', credentialId: 'pending', credentialIds: ['pending'], challenge: encode(decode('AA')), userVerification: 'required' },
@@ -137,7 +140,7 @@ describe('central payment review browser, virtual authenticator', () => {
     expect(await page.locator('#payment-project').textContent()).toBe('7');
     expect(await page.locator('#payment-minimum').textContent()).toContain('5');
     expect(await page.locator('#payment-memo').textContent()).toBe('hello');
-    expect(await page.locator('#payment-fee').textContent()).toContain('0.000000000115 ETH');
+    expect(await page.locator('#payment-gas').textContent()).toBe('Gas: up to 0.000000000115 ETH from your account');
     expect(await page.locator('#payment-status').evaluate(e => getComputedStyle(e).borderTopWidth)).toBe('0px');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     // A fresh approval returns to the app on its own; the page keeps the approved state for a return visit.
@@ -327,6 +330,44 @@ describe('central payment review browser, virtual authenticator', () => {
       expect(await page.locator('#payment-approve').isVisible()).toBe(false);
       expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0); expect(approvals()).toHaveLength(0);
     }
+  });
+
+  it('the gas row matches the signed paymaster fields', async () => {
+    // Sponsored: the operation's own paymaster fields, inside the signed bytes, name the payer.
+    const paymaster = '0x00000000000000fb866daaa79352cc568a005d96' as const;
+    const operation = { ...review.operation, paymaster, paymasterVerificationGasLimit: '0x64' as Hex, paymasterPostOpGasLimit: '0x0' as Hex, paymasterData: '0x1234' as Hex };
+    const signing = safe7579PasskeyOwnerSigningPayload({ operation, chainId: 8453, entryPoint: review.entryPoint, safe7579: review.safe7579,
+      validAfter: review.signing.validAfter, validUntil: review.signing.validUntil });
+    const sponsored = { ...review, operation, operationHash: getUserOperationHash(operation, review.entryPoint, 8453),
+      signing: { digest: signing.digest, signedData: signing.signedData, validAfter: signing.validAfter, validUntil: signing.validUntil },
+      passkey: { ...review.passkey, challenge: encode(Buffer.from(signing.digest.slice(2), 'hex')) }, gas: { payer: 'pimlico' as const, chainId: 8453, paymaster } };
+    const unsponsored = review;
+    review = sponsored; await load();
+    expect(await page.locator('#payment-gas').textContent()).toBe('Gas: sponsored');
+    expect(await page.locator('#payment-approve').isVisible()).toBe(true);
+    // A response whose gas row disagrees with the signed fields is refused before any approval.
+    for (const claimed of [{ ...sponsored, gas: unsponsored.gas }, { ...unsponsored, gas: sponsored.gas },
+      { ...unsponsored, gas: { ...unsponsored.gas, maximumWei: '1' } }, { ...unsponsored, gas: { ...unsponsored.gas, balanceWei: '1' } }]) {
+      review = claimed as typeof review;
+      await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+      expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+    }
+    expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0); expect(approvals()).toHaveLength(0);
+  });
+
+  it('a Safe-paid review without enough ETH shows needs ETH for gas in the same confirmation and cannot be signed', async () => {
+    review.gas = { payer: 'account', chainId: 8453, maximumWei: '115000000', reason: 'sponsor-refused', balanceWei: '114999999', funded: false };
+    for (const viewport of [{ width: 360, height: 780 }, { width: 1280, height: 800 }]) {
+      await page.setViewportSize(viewport); await load();
+      expect(await page.locator('#payment-gas').textContent()).toBe('Needs ETH for gas on Base.');
+      expect(await page.locator('#payment-gas').isVisible()).toBe(true);
+      expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+      // Not a dead end: the customer can decline here or go back to the app.
+      expect(await page.locator('#payment-cancel').isVisible()).toBe(true);
+      expect(await page.locator('#payment-return').isVisible()).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0); expect(approvals()).toHaveLength(0);
   });
 
   it('does not prompt for an already expired or approved review', async () => {

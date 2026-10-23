@@ -4,6 +4,7 @@ import type { UserOperationV07 } from '../userOperations/types.js';
 import type { WalletV6UsdcPayment } from '../userOperations/semantics.js';
 import { passkeyPayMetadataSteps, type PayMetadataStep } from '../userOperations/userPayMetadata.js';
 import { SIGNA_HOME_CHAIN_ID } from './chains.js';
+import type { ReviewGas } from '../sponsorCaps.js';
 
 export interface WalletPaymentReviewPublic {
   version: 'center-wallet-payment-review-v1';
@@ -37,6 +38,9 @@ export interface WalletPaymentAppPublic extends WalletPaymentReviewPublic {
 export interface WalletPaymentCentralPublic extends WalletPaymentReviewPublic {
   /** Shown beside approval: the quote could not read the pool price. Center's own page only. */
   notice: string | null;
+  /** Who pays the gas, as the signed paymaster fields fix it. Center's own page only: an app's
+   * client checks its view's exact keys. */
+  gas: ReviewGas;
   passkey: { rpId: string; credentialId: string; credentialIds: string[]; challenge: string; userVerification: 'required' };
   /** The pay metadata as the SDK's review decoder reads it, decoded here so the page does not bundle the SDK; empty for `0x`. */
   metadataSteps: PayMetadataStep[];
@@ -59,7 +63,7 @@ export function publicWalletPaymentAppReview(view: WalletPaymentReviewAppView): 
 }
 export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView): WalletPaymentCentralPublic {
   const d = view.draft;
-  return { ...publicWalletPaymentReview(view), notice: d.notice ?? null, passkey: { rpId: d.authority.credential.rpId,
+  return { ...publicWalletPaymentReview(view), notice: d.notice ?? null, gas: { ...d.gas }, passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId, credentialIds: [...view.approvers],
     challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' },
     metadataSteps: passkeyPayMetadataSteps(d.review.payment.metadata) };
