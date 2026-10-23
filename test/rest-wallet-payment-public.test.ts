@@ -19,9 +19,9 @@ describe('wallet payment HTTP projection',()=>{
     expect(publicWalletPaymentCentralReview(source)).not.toHaveProperty('approval');
     expect(publicWalletPaymentAppReview({...source,approval:null})).toMatchObject({approval:null});
   });
-  it('gives the central browser only the selected credential and exact SafeOp challenge',()=>{
+  it('gives the central browser the account passkeys that may approve and the exact SafeOp challenge',()=>{
     const result=publicWalletPaymentCentralReview(fixture()) as any;
-    expect(result.passkey).toEqual({rpId:'wallet.example.test',credentialId:'selected-credential',
+    expect(result.passkey).toEqual({rpId:'wallet.example.test',credentialId:'selected-credential',credentialIds:['selected-credential','device-credential'],
       challenge:Buffer.from('ab'.repeat(32),'hex').toString('base64url'),userVerification:'required'});
     expect(JSON.stringify(result)).not.toContain('private-');expect(result).not.toHaveProperty('authority');
   });

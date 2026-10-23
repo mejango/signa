@@ -60,8 +60,14 @@ export function mountWalletDevices(app: Hono, options: WalletDeviceSiteOptions) 
     return json(c, await devices.prepareAddition(c.req.param('id'), session));
   });
   app.post(`${base}/devices/:id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}/approve`, async c => {
-    const session = await options.session(c, true), input = await body(c, ['review', 'assertion']);
-    const view = await devices.approveAddition(c.req.param('id'), session, { review: input.review as WalletDeviceAddition, assertion: walletHttpAssertion(input.assertion) });
+    const session = await options.session(c, true), input = await body(c, ['review', 'assertion'], ['chains']);
+    if (input.chains !== undefined && (!Array.isArray(input.chains) || input.chains.length > 8)) invalid();
+    const chains = (input.chains as unknown[] | undefined)?.map(item => {
+      const value = item as { chainId?: unknown; assertion?: unknown };
+      if (!value || typeof value !== 'object' || Object.keys(value).sort().join(',') !== 'assertion,chainId' || !Number.isSafeInteger(value.chainId)) invalid();
+      return { chainId: value.chainId as number, assertion: walletHttpAssertion(value.assertion) };
+    });
+    const view = await devices.approveAddition(c.req.param('id'), session, { review: input.review as WalletDeviceAddition, assertion: walletHttpAssertion(input.assertion), ...(chains ? { chains } : {}) });
     emit('device_approve');
     return json(c, { view });
   });

@@ -34,9 +34,10 @@ export interface WalletDevicePossessionProof {
   deviceId: string; accountId: string; intentDigest: string; candidateDigest: string; verificationDigest: string; verifiedAtMs: number;
 }
 export interface WalletDeviceCall { to: Address; value: '0'; data: Hex }
-/** The exact owner addition the primary passkey reviews: one Safe transaction at one nonce. */
+/** The exact owner addition the primary passkey reviews: one Safe transaction at one nonce. Base's review
+ * carries no `chainId`; every other chain's names it, and its SafeTx is bound to that chain. */
 export interface WalletDeviceAddition {
-  version: 'center-wallet-device-addition-v1'; deviceId: string; candidateDigest: string;
+  version: 'center-wallet-device-addition-v1'; chainId?: number; deviceId: string; candidateDigest: string;
   walletAddress: Address; initializerHash: Hex; primarySigner: Address; deviceSigner: Address; safeNonce: string;
   createSigner: WalletDeviceCall; addOwner: WalletDeviceCall;
 }
@@ -164,9 +165,11 @@ export function verifyWalletDevicePossession(input: WalletDeviceCandidate, input
   return { ...identity, verifiedAtMs: nowMs, verificationDigest: enrollmentDigest({ ...identity, challenge }) };
 }
 
-/** The exact addition at one Safe nonce, rebuilt from the captured candidate and the observed owners. */
-export function prepareWalletDeviceAddition(input: WalletDeviceCandidate, inputState: { owners: Address[]; threshold: number; safeNonce: string }): WalletDeviceAddition {
+/** The exact addition at one Safe nonce on one chain, rebuilt from the captured candidate and the observed owners. */
+export function prepareWalletDeviceAddition(input: WalletDeviceCandidate, inputState: { owners: Address[]; threshold: number; safeNonce: string },
+  chainId: number = SIGNA_HOME_CHAIN_ID): WalletDeviceAddition {
   assertWalletDeviceCandidate(input); enrollmentDigest(inputState);
+  if (!Number.isSafeInteger(chainId) || chainId <= 0) invalid();
   const candidate = structuredClone(input), state = structuredClone(inputState), intent = candidate.intent;
   if (Object.keys(state).sort().join(',') !== 'owners,safeNonce,threshold' || !Array.isArray(state.owners) || state.threshold !== 1
     || state.owners.length < 2 || state.owners.length > maximumPasskeySigners || state.owners.some(entry => typeof entry !== 'string' || !isAddress(entry))) invalid();
@@ -178,7 +181,7 @@ export function prepareWalletDeviceAddition(input: WalletDeviceCandidate, inputS
   if (new Set(owners).size !== owners.length || owners.length !== expected.length || expected.some(entry => !owners.includes(entry))
     || owners.includes(candidate.signerAddress.toLowerCase())) invalid();
   const walletAddress = getAddress(intent.accountId.slice(12));
-  return { version: 'center-wallet-device-addition-v1', deviceId: intent.id, candidateDigest: enrollmentDigest(candidate),
+  return { version: 'center-wallet-device-addition-v1', ...(chainId === SIGNA_HOME_CHAIN_ID ? {} : { chainId }), deviceId: intent.id, candidateDigest: enrollmentDigest(candidate),
     walletAddress, initializerHash: intent.initializerHash, primarySigner: intent.primarySigner, deviceSigner: candidate.signerAddress, safeNonce: state.safeNonce,
     createSigner: { to: getAddress(intent.manifest.ownerProfile!.signerFactory.address), value: '0',
       data: encodeFunctionData({ abi: factoryAbi, functionName: 'createSigner', args: [BigInt(candidate.credential.publicKey.x),
@@ -188,11 +191,13 @@ export function prepareWalletDeviceAddition(input: WalletDeviceCandidate, inputS
 /** Standard Safe 1.4.1 SafeTx the primary passkey signs (its challenge is the SafeTx hash). */
 export function walletDeviceAdditionDocument(input: WalletDeviceAddition) {
   enrollmentDigest(input); const review = structuredClone(input); nonce(review.safeNonce);
-  if (Object.keys(review).sort().join(',') !== 'addOwner,candidateDigest,createSigner,deviceId,deviceSigner,initializerHash,primarySigner,safeNonce,version,walletAddress'
+  const chainId = Object.hasOwn(review, 'chainId') ? review.chainId : SIGNA_HOME_CHAIN_ID;
+  if (!Number.isSafeInteger(chainId) || chainId! <= 0 || (Object.hasOwn(review, 'chainId') && chainId === SIGNA_HOME_CHAIN_ID)) invalid();
+  if (Object.keys(review).filter(key => key !== 'chainId').sort().join(',') !== 'addOwner,candidateDigest,createSigner,deviceId,deviceSigner,initializerHash,primarySigner,safeNonce,version,walletAddress'
     || review.version !== 'center-wallet-device-addition-v1' || !isAddress(review.walletAddress) || !review.addOwner
     || Object.keys(review.addOwner).sort().join(',') !== 'data,to,value' || review.addOwner.to !== review.walletAddress || review.addOwner.value !== '0'
     || typeof review.addOwner.data !== 'string' || !/^0x[0-9a-f]{136}$/.test(review.addOwner.data)) invalid();
-  return walletOwnerChangeSafeTx(review.walletAddress, review.addOwner.data, review.safeNonce);
+  return walletOwnerChangeSafeTx(review.walletAddress, review.addOwner.data, review.safeNonce, chainId);
 }
 export type WalletDevicePrimary = Pick<WalletAuthorityCredential, 'credentialId' | 'userHandle' | 'publicKey' | 'backupEligible'>;
 /** Rebuild the addition from the captured candidate, verify the primary passkey's assertion over
@@ -201,8 +206,9 @@ export type WalletDevicePrimary = Pick<WalletAuthorityCredential, 'credentialId'
 export function verifyWalletDeviceAddition(input: WalletDeviceCandidate, inputReview: WalletDeviceAddition, inputAssertion: WalletAssertion, primary: WalletDevicePrimary) {
   assertWalletDeviceCandidate(input); enrollmentDigest(inputReview);
   const candidate = structuredClone(input), review = structuredClone(inputReview);
-  // Only the nonce is read from the review; every owner fact is rebuilt from the candidate.
-  const expected = prepareWalletDeviceAddition(candidate, { owners: [candidate.intent.primarySigner, candidate.intent.recoveryOwner, ...candidate.intent.existingSigners], threshold: 1, safeNonce: review.safeNonce });
+  // Only the nonce and the chain are read from the review; every owner fact is rebuilt from the candidate.
+  const expected = prepareWalletDeviceAddition(candidate, { owners: [candidate.intent.primarySigner, candidate.intent.recoveryOwner, ...candidate.intent.existingSigners], threshold: 1, safeNonce: review.safeNonce },
+    Object.hasOwn(review, 'chainId') ? review.chainId : SIGNA_HOME_CHAIN_ID);
   if (enrollmentDigest(expected) !== enrollmentDigest(review)) invalid();
   const document = walletDeviceAdditionDocument(review), safeTxHash = hashTypedData(document);
   let assertion: WalletAssertion;

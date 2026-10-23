@@ -188,7 +188,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
     const passkey = () => prepareWalletRecoveryCandidate(intent, createRegistration({ rpId: intent.rpId, origin: intent.origin, userHandle: intent.userHandle,
       challenge: `0x${Buffer.from(intent.registration.challenge, 'base64url').toString('hex')}` }).response);
     const candidate = passkey(), owners = [intent.priorSigner, intent.recoveryOwner];
-    const safes: Record<number, { owners: Address[]; nonce: bigint; down?: boolean }> = { 8453: { owners, nonce: 4n }, 10: { owners, nonce: 0n }, 42161: { owners, nonce: 2n } };
+    const safes: Record<number, { owners: Address[]; nonce: bigint; down?: boolean; threshold?: bigint }> = { 8453: { owners, nonce: 4n }, 10: { owners, nonce: 0n }, 42161: { owners, nonce: 2n } };
     const review = (chainId: number, from = candidate, nonce = safes[chainId]!.nonce) =>
       prepareWalletRecoveryRotation(from, { owners: safes[chainId]!.owners, threshold: 1, safeNonce: String(nonce) }, chainId);
     const shaped = (item: ReturnType<typeof review>) => JSON.parse(JSON.stringify({ review: { ...item, recoveryOwner: secret.recoveryOwner }, document: walletRecoveryRotationDocument(item) },
@@ -215,7 +215,7 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
         const replies = (JSON.parse(route.request().postData()!) as { id: number; method: string; params: any[] }[]).map(({ id, method, params }) => {
           reads.push({ chainId, method, block: method === 'eth_getCode' || method === 'eth_call' ? params[1] : undefined });
           const result = method === 'eth_chainId' ? `0x${chainId.toString(16)}` : method === 'eth_getBlockByNumber' ? { number: '0x10', hash: blockHash } : method === 'eth_getCode' ? '0x6001'
-            : params[0].data === '0xa0e67e2b' ? encodeAbiParameters([{ type: 'address[]' }], [safe.owners]) : params[0].data === '0xe75235b8' ? word(1n) : word(safe.nonce);
+            : params[0].data === '0xa0e67e2b' ? encodeAbiParameters([{ type: 'address[]' }], [safe.owners]) : params[0].data === '0xe75235b8' ? word(safe.threshold ?? 1n) : word(safe.nonce);
           return { jsonrpc: '2.0', id, result };
         });
         return route.fulfill({ headers: cors, json: replies });
@@ -296,6 +296,11 @@ describe('recovery browser continuation and secret handling with modeled HTTP', 
       // Optimism no longer has the old passkey as an owner.
       ['prior', model => { const reviews = [8453, 10, 42161].map(chainId => model.review(chainId));
         model.safes[10] = { owners: [`0x${'ab'.repeat(20)}`, model.intent.recoveryOwner], nonce: 0n }; return { reviews }; }, 'The recovery review changed'],
+      // Optimism's swap names the backup as the link before the old passkey, but on Optimism the old passkey comes first.
+      ['link', model => { const owners = model.safes[10]!.owners; model.safes[10] = { owners: [...owners].reverse(), nonce: 0n };
+        const reviews = [8453, 10, 42161].map(chainId => model.review(chainId)); model.safes[10] = { owners, nonce: 0n }; return { reviews }; }, 'The recovery review changed'],
+      // Arbitrum's Safe needs two signatures, so one swap there would not be the whole change.
+      ['threshold', model => { model.safes[42161]!.threshold = 2n; return {}; }, 'The recovery review changed'],
       ['unread', model => { model.safes[42161]!.down = true; return {}; }, 'Arbitrum could not be read, so nothing was signed'],
       ['other browser', () => ({ keep: false }), 'Continue this recovery in the browser where you created its replacement passkey'],
       // After a reload the server points the same recovery at another account the backup also controls.

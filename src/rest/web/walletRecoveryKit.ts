@@ -1,5 +1,8 @@
 import { validateMnemonic } from '@scure/bip39';
-import { getAddress, isAddress, type Address, type Hex } from 'viem';
+import { concatHex, decodeAbiParameters, getAddress, getContractAddress, hashTypedData, isAddress, keccak256, type Address, type Hex } from 'viem';
+import { SAFE_141_PROXY_CREATION_CODE } from '../smartAccounts/safeCode.js';
+import { walletOwnerUpdateSafeTx } from './walletOwnerUpdate.js';
+import { walletOwnerChangeSafeTx, walletOwnerPlan } from './walletRecoveryReview.js';
 import { signaChains } from '../wallet/chains.js';
 import { wordlist as english } from '@scure/bip39/wordlists/english';
 import { generateMnemonic, mnemonicToAccount } from 'viem/accounts';
@@ -91,4 +94,75 @@ export async function readChainSafe(walletAddress: string, chainId: number): Pro
   if (BigInt(`0x${words[0]}`) !== 32n || !count || count > 16 || words.length !== count + 2) invalid();
   return { deployed: true, owners: words.slice(2).map(item => { if (!/^0{24}/.test(item)) invalid(); return getAddress(`0x${item.slice(24)}`); }),
     threshold: word(threshold), nonce: word(nonce) };
+}
+/** The account's owners on Base, as Base reports them, with a threshold of one. */
+export async function readHomeOwners(walletAddress: string): Promise<Address[]> {
+  const home = await readChainSafe(walletAddress, 8453);
+  if (!home.deployed || home.threshold !== 1n) invalid();
+  return home.owners;
+}
+/** One network's update to Base's owners, checked before anything signs it: the calls must be exactly the ones that take `from` to `owners`
+ * (`walletOwnerPlan`: owner calls on this account only, a threshold of one, no owner added on the way that is not in
+ * `owners`), on a chain the person chose, with the backup kept as an owner. `owners` must be exactly the owners this page
+ * read from Base itself (`readHomeOwners`). On a deployed network, `from`, its order and the Safe nonce must be exactly what
+ * this page read there (`readChainSafe`), so no signature waits for a later nonce; an undeployed one starts at nonce 0.
+ * Returns the backup's address and each call's SafeTx, in order. */
+export function walletOwnerUpdateDocuments(input: unknown, expected: { walletAddress: string; chainIds: number[]; homeOwners: Address[]; destination: WalletChainSafe;
+  /** The backup file's record of the account's creation, when the backup came from the file. */
+  initializerHash?: Hex }) {
+  const update = input as { chainId: number; walletAddress: Address; recoveryOwner: Address; from: Address[]; owners: Address[]; safeNonce: string; steps: Hex[];
+    creation?: { to: Address; data: Hex } };
+  const owners = (value: unknown) => { if (!Array.isArray(value) || !value.length || value.length > 16) invalid(); for (const item of value) address(item); return (value as Address[]).map(item => getAddress(item)); };
+  if (!update || typeof update !== 'object' || !expected.chainIds.includes(update.chainId) || !Array.isArray(update.steps) || !update.steps.length) invalid();
+  address(update.walletAddress); address(update.recoveryOwner);
+  if (getAddress(update.walletAddress) !== getAddress(expected.walletAddress) || typeof update.safeNonce !== 'string' || !/^(0|[1-9][0-9]{0,30})$/.test(update.safeNonce)) invalid();
+  const backup = getAddress(update.recoveryOwner), from = owners(update.from), target = owners(update.owners);
+  if (new Set(target).size !== target.length || !from.includes(backup) || !target.includes(backup)
+    || target.length !== expected.homeOwners.length || target.some(owner => !expected.homeOwners.some(item => getAddress(item) === owner))) invalid();
+  const there = expected.destination;
+  const start = there.deployed ? { owners: there.owners, threshold: there.threshold, nonce: there.nonce } : { ...creationOwners(update.creation, update.walletAddress, expected.initializerHash), nonce: 0n };
+  if (start.threshold !== 1n || BigInt(update.safeNonce) !== start.nonce || from.length !== start.owners.length || from.some((owner, index) => owner !== start.owners[index])) invalid();
+  const plan = walletOwnerPlan(from, target);
+  if (plan.steps.length !== update.steps.length || plan.steps.some((step, index) => step !== update.steps[index])) invalid();
+  return { recoveryOwner: backup, documents: [walletOwnerUpdateSafeTx(getAddress(update.walletAddress), plan.steps, update.safeNonce, update.chainId)] };
+}
+/** The owners a network not deployed yet starts with: those its replayed creation call sets up. The call is trusted only
+ * because it creates exactly this account's address (CREATE2 over the Safe 1.4.1 proxy, its singleton, initializer and
+ * salt), and, given the backup file, because its initializer is the one the file recorded. */
+function creationOwners(creation: { to: Address; data: Hex } | undefined, walletAddress: Address, initializerHash?: Hex) {
+  if (!creation || typeof creation !== 'object' || typeof creation.data !== 'string' || !creation.data.startsWith('0x1688f0b9')) invalid(); // createProxyWithNonce
+  address(creation.to);
+  const [singleton, initializer, saltNonce] = decodeAbiParameters([{ type: 'address' }, { type: 'bytes' }, { type: 'uint256' }], `0x${creation.data.slice(10)}`);
+  const salt = keccak256(concatHex([keccak256(initializer), `0x${saltNonce.toString(16).padStart(64, '0')}`]));
+  const created = getContractAddress({ from: getAddress(creation.to), opcode: 'CREATE2', salt, bytecode: concatHex([SAFE_141_PROXY_CREATION_CODE, `0x${singleton.slice(2).padStart(64, '0')}`]) });
+  if (created !== getAddress(walletAddress) || (initializerHash && keccak256(initializer) !== initializerHash.toLowerCase()) || !initializer.startsWith('0xb63e800d')) invalid(); // setup
+  const [owners, threshold] = decodeAbiParameters([{ type: 'address[]' }, { type: 'uint256' }], `0x${initializer.slice(10)}`);
+  return { owners: owners.map(owner => getAddress(owner)), threshold };
+}
+/** The backup file or password signs one checked network update (`walletOwnerUpdateDocuments`). */
+export async function signWalletOwnerUpdate(mnemonic: string, input: unknown, expected: Parameters<typeof walletOwnerUpdateDocuments>[1]): Promise<Hex[]> {
+  const { recoveryOwner, documents } = walletOwnerUpdateDocuments(input, expected), backup = recoveryAccountFromPhrase(mnemonic, recoveryOwner);
+  return Promise.all(documents.map(document => backup.signTypedData(document)));
+}
+/** The SafeTx hash the primary passkey signs to add the device's signer on one chain, rebuilt from what this page shows
+ * (the account and the device's signer), so a prompt never signs a hash the server chose. */
+export function walletDeviceAdditionChallenge(walletAddress: string, deviceSigner: string, safeNonce: unknown, chainId: number): Hex {
+  address(walletAddress); address(deviceSigner);
+  if (typeof safeNonce !== 'string' || !/^(0|[1-9][0-9]{0,30})$/.test(safeNonce)) invalid();
+  const data = `0x0d582f13${deviceSigner.slice(2).toLowerCase().padStart(64, '0')}${'1'.padStart(64, '0')}` as Hex; // addOwnerWithThreshold(device, 1)
+  return hashTypedData(walletOwnerChangeSafeTx(getAddress(walletAddress), data, safeNonce, chainId));
+}
+/** The challenges the primary passkey signs to add the device, one per chain, Base first. Each chain is read by this page
+ * (`readChainSafe`) before any prompt: deployed, a threshold of one, Base's owners, the device not yet among them, and the
+ * server's nonce exactly the chain's, so no signature waits for a later nonce to re-add a device removed meanwhile. */
+export async function walletDeviceAdditionChallenges(walletAddress: string, deviceSigner: string, reviews: { chainId: number; safeNonce: unknown }[]): Promise<Hex[]> {
+  address(deviceSigner);
+  if (reviews[0]?.chainId !== 8453 || new Set(reviews.map(review => review.chainId)).size !== reviews.length) invalid();
+  const safes = await Promise.all(reviews.map(review => readChainSafe(walletAddress, review.chainId))), home = safes[0]!, device = getAddress(deviceSigner);
+  return reviews.map((review, index) => {
+    const safe = safes[index]!, challenge = walletDeviceAdditionChallenge(walletAddress, device, review.safeNonce, review.chainId);
+    if (!safe.deployed || safe.threshold !== 1n || BigInt(review.safeNonce as string) !== safe.nonce || safe.owners.includes(device)
+      || safe.owners.length !== home.owners.length || safe.owners.some(owner => !home.owners.includes(owner))) invalid();
+    return challenge;
+  });
 }

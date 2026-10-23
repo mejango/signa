@@ -28,6 +28,8 @@ export interface WalletPaymentReviewView {
   approvedAtMs: number | null;
   cancelledAtMs: number | null;
   operationState: UserOperationRecord["state"];
+  /** The account's passkeys that may approve: the primary and every activated device. */
+  approvers: string[];
 }
 export interface WalletPaymentReviewAppView extends WalletPaymentReviewView {
   approval: { signature: Hex; signedCommitment: Hex } | null;
@@ -95,8 +97,9 @@ function live(row: ReviewRow, time: number): void {
   if (Number(row.created_at_ms) > time) inactive();
   if (Number(row.expires_at_ms) <= time) expired();
 }
-function view(row: ReviewRow, operation: UserOperationRecord): WalletPaymentReviewView {
-  return { draft: row.draft, status: row.status,
+function view(row: ReviewRow, operation: UserOperationRecord, captured: Captured): WalletPaymentReviewView {
+  const authority = captured.context.authority;
+  return { draft: row.draft, status: row.status, approvers: [authority.credential.credentialId, ...(authority.devices ?? []).map(device => device.credentialId)],
     approvedAtMs: row.approved_at_ms === null ? null : Number(row.approved_at_ms),
     cancelledAtMs: row.cancelled_at_ms === null ? null : Number(row.cancelled_at_ms), operationState: operation.state };
 }
@@ -182,7 +185,7 @@ export class PostgresWalletPaymentReviewStore {
         const row = prior[0]!;
         if (row.account_id !== actor.accountId || row.principal_id !== actor.principalId || row.preparation_key !== key ||
           row.operation_id !== operationId || row.input_digest !== inputDigest || draftIdentity(row.draft) !== expectedDraft) conflict();
-        await this.finish(client, captured, row, operation); return { view: view(row, operation), row };
+        await this.finish(client, captured, row, operation); return { view: view(row, operation, captured), row };
       }
       await this.unspent(client, operation, plan);
       const counts = (await client.query<{ total: string; account: string }>(`SELECT count(*)::text AS total,
@@ -195,7 +198,7 @@ export class PostgresWalletPaymentReviewStore {
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) RETURNING *`,
       [draft.id, actor.accountId, actor.principalId, operationId, key, inputDigest, draft.ceremony.id,
         draft.createdAtMs, draft.expiresAtMs, draft.expiresAtMs + this.options.receiptRetentionMs, encoded])).rows[0]!;
-      await this.finish(client, captured, row, operation); return { view: view(row, operation), row };
+      await this.finish(client, captured, row, operation); return { view: view(row, operation, captured), row };
     });
     this.speculate(result.row);
     return { ...result.view, draft: validateWalletPaymentReviewDraft(result.view.draft) };
@@ -207,7 +210,7 @@ export class PostgresWalletPaymentReviewStore {
       await this.guard(client, captured, draft);
       const { operation } = await this.lockExecution(client, captured), row = await this.lockReview(client, hint);
       await this.finish(client, captured, row, operation);
-      return { ...view(row, operation), approval: row.status === "approved" ? { signature: row.signature!, signedCommitment: row.signed_commitment! } : null };
+      return { ...view(row, operation, captured), approval: row.status === "approved" ? { signature: row.signature!, signedCommitment: row.signed_commitment! } : null };
     });
   }
   /** The review id is the capability: the page that holds it reads the review and cancels it, and
@@ -221,7 +224,7 @@ export class PostgresWalletPaymentReviewStore {
       await this.guard(client, captured, draft);
       const { operation } = await this.lockExecution(client, captured), row = await this.lockReview(client, hint);
       await this.finish(client, captured, row, operation);
-      return { view: view(row, operation), row, pending: row.status === "approved" && operation.state === "prepared" };
+      return { view: view(row, operation, captured), row, pending: row.status === "approved" && operation.state === "prepared" };
     });
     // The approval page reloaded on an approved review nothing has published yet: send again.
     if (result.pending) this.sendApproved(result.row);
@@ -257,7 +260,7 @@ export class PostgresWalletPaymentReviewStore {
       if (row.status === "approved") {
         if (row.proof_digest !== proof.proofDigest) conflict();
         await this.finish(client, captured, row, operation);
-        return { view: view(row, operation), replayed: true, row, pending: operation.state === "prepared" };
+        return { view: view(row, operation, captured), replayed: true, row, pending: operation.state === "prepared" };
       }
       await this.unspent(client, operation, plan);
       const consumed = await this.ceremonies.consumeInTransaction(client, { ...draft.ceremony,
@@ -269,7 +272,7 @@ export class PostgresWalletPaymentReviewStore {
       [row.id, proof.proofDigest, proof.signature, proof.signedCommitment])).rows[0];
       if (!updated) expired();
       await this.finish(client, captured, updated, operation);
-      return { view: view(updated, operation), replayed: false, row: updated, pending: true };
+      return { view: view(updated, operation, captured), replayed: false, row: updated, pending: true };
     });
     if (result.pending) this.sendApproved(result.row);
     return { view: result.view, replayed: result.replayed };
@@ -285,7 +288,7 @@ export class PostgresWalletPaymentReviewStore {
       const updated = row.status === "cancelled" ? row : (await client.query<ReviewRow>(`UPDATE rest_wallet_payment_reviews
         SET status='cancelled',cancelled_at_ms=${nowSql} WHERE id=$1 AND status='pending' AND expires_at_ms>${nowSql} RETURNING *`, [row.id])).rows[0];
       if (!updated) expired();
-      await this.finish(client, captured, updated, operation); return view(updated, operation);
+      await this.finish(client, captured, updated, operation); return view(updated, operation, captured);
     });
   }
   /** An approval is final: no review leaves the approved state. */

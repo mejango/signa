@@ -5,6 +5,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from "vitest";
 import { build } from "esbuild";
+import { encodeFunctionData, getAddress, hashTypedData, parseAbi, recoverAddress, type Hex } from "viem";
+import { english, generateMnemonic, mnemonicToAccount } from "viem/accounts";
+import { walletOwnerChangeSafeTx } from "../src/rest/web/walletRecoveryReview.js";
 import { parseWalletRegistration, type WalletRegistrationCandidate } from "../src/rest/wallet/registration.js";
 import { verifyWalletAssertion, type WalletAssertion } from "../src/rest/wallet/webauthn.js";
 import { walletFundsPageHeaders, walletSigningPageHeaders } from "../src/rest/wallet/http.js";
@@ -142,6 +145,26 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   let landingWays = false;
   // Onramp routes answer only in the funds test; elsewhere they 404 and the link stays hidden.
   let onramp = false, balancesAnswered = false;
+  // Owner-update routes answer only in the backup update test.
+  let ownerUpdate: { steps: Hex[]; owners?: Hex[] } | null = null, kitScript = "";
+  const backupWords = generateMnemonic(english, 256), backupOwner = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }).address;
+  const ownerAbi = parseAbi(["function swapOwner(address prevOwner,address oldOwner,address newOwner)", "function removeOwner(address prevOwner,address owner,uint256 _threshold)"]);
+  const [oldPasskey, newPasskey] = [getAddress(`0x${"a0".repeat(20)}`), getAddress(`0x${"a1".repeat(20)}`)];
+  /** One chain's public RPC as the page reads it: the account's Safe deployed there with these owners, threshold one, at this nonce. Returns the request bodies. */
+  async function chainRpc(target: Page, url: string, chainId: number, owners: string[], nonce: bigint) {
+    const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0"), reads: string[] = [];
+    const calls: Record<string, string> = { "0xa0e67e2b": `0x${word(32n)}${word(BigInt(owners.length))}${owners.map(owner => word(owner)).join("")}`,
+      "0xe75235b8": `0x${word(1n)}`, "0xaffed0e0": `0x${word(nonce)}` };
+    await target.route(`${url}/**`, async route => {
+      const body = route.request().postData() ?? "[]";
+      if (body.includes("eth_chainId")) reads.push(body);
+      const result = (request: { method: string; params: unknown[] }) => request.method === "eth_chainId" ? `0x${chainId.toString(16)}`
+        : request.method === "eth_getBlockByNumber" ? { hash: `0x${"ab".repeat(32)}` } : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
+      await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify((JSON.parse(body) as { id: number; method: string; params: unknown[] }[]).map(request => ({ jsonrpc: "2.0", id: request.id, result: result(request) }))) });
+    });
+    return reads;
+  }
   const csrf = encode(Buffer.alloc(32, 9)), intentId = encode(Buffer.alloc(32, 10));
   const state = encode(Buffer.alloc(32, 11)), code = encode(Buffer.alloc(32, 12));
   const challenge = encode(Buffer.alloc(32, 13)), handle = encode(Buffer.alloc(32, 14));
@@ -165,6 +188,8 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     const built = await build({ entryPoints: [new URL("../src/rest/web/wallet.ts", import.meta.url).pathname],
       bundle: true, platform: "browser", format: "esm", target: "es2022", write: false });
     script = built.outputFiles[0]!.text;
+    kitScript = (await build({ entryPoints: [new URL("../src/rest/web/walletRecoveryKit.ts", import.meta.url).pathname],
+      bundle: true, platform: "browser", format: "esm", target: "es2022", write: false })).outputFiles[0]!.text;
     const productionPage = await import("../src/rest/web/walletPage.js");
     pageHtml = productionPage.walletPage(); css = productionPage.walletCss(); productionWaysHtml = productionPage.walletPage(true, true);
     signupScript = (await build({ entryPoints: [new URL("../src/rest/web/walletSignup.ts", import.meta.url).pathname],
@@ -191,6 +216,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : "text/css" });
         response.end(path.endsWith(".js") ? signupScript : signupCss); return;
       }
+      if (path === "/wallet/assets/wallet-recovery-kit.js") { response.writeHead(200, { "content-type": "text/javascript" }); response.end(kitScript); return; }
       if (path === "/wallet/assets/wallet.js" || path === "/wallet/assets/wallet.css") {
         response.writeHead(200, { "content-type": path.endsWith(".js") ? "text/javascript" : "text/css" });
         response.end(path.endsWith(".js") ? script : css); return;
@@ -241,6 +267,13 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
       if (onramp && path === "/wallet/onramp") return json({ applePay: true });
+      const updateView = (owners: string) => ({ offered: [], pending: [], backup: "needed", networks: [
+        { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" }, { chainId: 10, name: "Optimism", state: "deployed", txHash: null, owners }] });
+      if (ownerUpdate && path === "/wallet/networks") return json(updateView("diverged"));
+      if (ownerUpdate && path === "/wallet/networks/quote") return json({ bundle: null, challenge: null, view: updateView("diverged"), owners: { changeId: "33333333-3333-4333-8333-333333333333",
+        recoveryOwner: backupOwner, chains: [{ version: "center-wallet-network-owners-v1", chainId: 10, walletAddress, recoveryOwner: backupOwner,
+          from: [oldPasskey, backupOwner], owners: ownerUpdate.owners ?? [newPasskey, backupOwner], safeNonce: "3", steps: ownerUpdate.steps, createSigners: [] }] } });
+      if (ownerUpdate && path === "/wallet/networks/owners") return json({ view: updateView("updating") });
       if (onramp && networksDown && path === "/wallet/networks") return json({ error: { code: "WALLET_NETWORKS_UNAVAILABLE", message: "unavailable" } }, 503);
       if (onramp && path === "/wallet/networks") return json({ offered: [], pending: [], networks: [
         { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" },
@@ -268,7 +301,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
 
   beforeEach(async () => {
     walletAddress = `0x${"03".repeat(20)}`; networksDown = false;
-    authenticated = false; landingWays = false; onramp = false; balancesAnswered = false; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
+    authenticated = false; landingWays = false; onramp = false; balancesAnswered = false; ownerUpdate = null; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
     redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0;
     requests.length = 0; errors.length = 0;
@@ -458,6 +491,134 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.locator("#wallet-networks").textContent()).toBe("Base: Up to date, Optimism: Needs update, Arbitrum: Couldn't check, "
       + "Base Sepolia (deploying…). Actions on a network that needs an update wait until its owners match Base.");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("updates an out-of-date network with the backup, in this tab, after checking the owner calls it signs", async () => {
+    const sentinel = "0x0000000000000000000000000000000000000001";
+    // An update that would remove the backup is refused before anything is signed or sent.
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "removeOwner", args: [oldPasskey, backupOwner, 1n] })] };
+    // The chains' public RPCs, as the page reads them itself: Base holds the current passkey and the backup; Optimism
+    // still the old passkey and the backup, at nonce 3.
+    const baseReads = await chainRpc(page, "https://mainnet.base.org", 8453, [newPasskey, backupOwner], 9n);
+    await chainRpc(page, "https://mainnet.optimism.io", 10, [oldPasskey, backupOwner], 3n);
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-networks-update").click();
+    expect(await page.locator("#wallet-networks-backup").isVisible()).toBe(true);
+    expect(await page.locator("#wallet-networks-choices").isHidden()).toBe(true);
+    await page.locator("#wallet-networks-words").fill(backupWords);
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("That backup does not match this account");
+    expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(0);
+    expect(await page.locator("#wallet-networks-words").inputValue()).toBe("");
+    // The server names an owner Base does not hold, with calls that lead exactly there: refused, nothing signed.
+    const attacker = getAddress(`0x${"e1".repeat(20)}`);
+    ownerUpdate = { owners: [attacker, backupOwner], steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, attacker] })] };
+    await page.locator("#wallet-networks-words").fill(backupWords);
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => baseReads.length).toBe(2);
+    await expect.poll(() => page.locator("#wallet-status").textContent()).toContain("That backup does not match this account");
+    expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(0);
+    // The real update: one swap of the old passkey for the current one, signed by the backup for Optimism at its nonce.
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
+    await page.locator("#wallet-networks-words").fill(backupWords);
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
+    const sent = requests.filter(item => item.path === "/wallet/networks/owners");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.body.changeId).toBe("33333333-3333-4333-8333-333333333333");
+    const [signature] = sent[0]!.body.signatures[0].signatures as Hex[];
+    expect(sent[0]!.body.signatures[0].chainId).toBe(10);
+    expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(walletAddress as Hex, ownerUpdate.steps[0]!, "3", 10)), signature: signature! })).toBe(backupOwner);
+    expect(await page.locator("#wallet-networks-form").isHidden()).toBe(true);
+    expect(errors).toEqual([]);
+  });
+
+  it("updates an out-of-date network with the backup wallet chosen at signup when no backup file or password is given", async () => {
+    const sentinel = "0x0000000000000000000000000000000000000001";
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
+    await chainRpc(page, "https://mainnet.base.org", 8453, [newPasskey, backupOwner], 9n);
+    await chainRpc(page, "https://mainnet.optimism.io", 10, [oldPasskey, backupOwner], 3n);
+    // The signup wallet, injected: it holds the backup key, starts on Base, and signs what the page asks.
+    const backup = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }), asked: string[] = [];
+    let walletChain = "0x2105", domainTypes: unknown = null;
+    await page.exposeFunction("backupWallet", async (method: string, params: unknown[]) => {
+      asked.push(method);
+      if (method === "eth_requestAccounts") return [backup.address];
+      if (method === "wallet_switchEthereumChain") { walletChain = (params[0] as { chainId: string }).chainId; return null; }
+      if (method === "eth_chainId") return walletChain;
+      const { types: { EIP712Domain, ...types }, ...document } = JSON.parse(params[1] as string);
+      domainTypes = EIP712Domain;
+      return backup.signTypedData({ ...document, types, message: { ...document.message, nonce: BigInt(document.message.nonce), value: 0n, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n } });
+    });
+    await page.addInitScript(() => { (window as unknown as { ethereum: unknown }).ethereum = { request: ({ method, params }: { method: string; params?: unknown[] }) =>
+      (window as unknown as { backupWallet(method: string, params: unknown[]): Promise<unknown> }).backupWallet(method, params ?? []) }; });
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-networks-update").click();
+    expect(await page.locator("#wallet-networks-backup").textContent()).toContain("your wallet asks to sign");
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
+    expect(asked).toEqual(["eth_requestAccounts", "wallet_switchEthereumChain", "eth_chainId", "eth_signTypedData_v4"]);
+    expect(walletChain).toBe("0xa");
+    expect(domainTypes).toEqual([{ name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }]);
+    const [signature] = requests.filter(item => item.path === "/wallet/networks/owners")[0]!.body.signatures[0].signatures as Hex[];
+    expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(walletAddress as Hex, ownerUpdate.steps[0]!, "3", 10)), signature: signature! })).toBe(backupOwner);
+    expect(errors).toEqual([]);
+  });
+
+  it("signs nothing and sends nothing when a chain cannot be read or the signup wallet is not ready", async () => {
+    const sentinel = "0x0000000000000000000000000000000000000001";
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
+    // Each chain's public RPC answers as the test sets it: a real answer, a refused request, or a page that is not JSON.
+    const modes: Record<string, "ok" | "abort" | "html"> = { base: "ok", optimism: "ok" };
+    const word = (value: string | bigint) => BigInt(value).toString(16).padStart(64, "0");
+    for (const [name, url, chainId, owners, nonce] of [["base", "https://mainnet.base.org", 8453, [newPasskey, backupOwner], 9n], ["optimism", "https://mainnet.optimism.io", 10, [oldPasskey, backupOwner], 3n]] as const) {
+      const calls: Record<string, string> = { "0xa0e67e2b": `0x${word(32n)}${word(2n)}${owners.map(owner => word(owner)).join("")}`, "0xe75235b8": `0x${word(1n)}`, "0xaffed0e0": `0x${word(nonce)}` };
+      await page.route(`${url}/**`, async route => {
+        if (modes[name] === "abort") return route.abort("connectionrefused");
+        if (modes[name] === "html") return route.fulfill({ status: 200, contentType: "text/html", headers: { "access-control-allow-origin": "*" }, body: "<html>busy</html>" });
+        const result = (request: { method: string; params: unknown[] }) => request.method === "eth_chainId" ? `0x${chainId.toString(16)}`
+          : request.method === "eth_getBlockByNumber" ? { hash: `0x${"ab".repeat(32)}` } : request.method === "eth_getCode" ? "0x6080" : calls[(request.params[0] as { data: string }).data];
+        await route.fulfill({ status: 200, contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+          body: JSON.stringify((JSON.parse(route.request().postData() ?? "[]") as { id: number; method: string; params: unknown[] }[]).map(request => ({ jsonrpc: "2.0", id: request.id, result: result(request) }))) });
+      });
+    }
+    // The signup wallet: which account it offers, whether it follows a network switch, and whether its holder declines.
+    const backup = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }), other = mnemonicToAccount(generateMnemonic(english, 256)).address;
+    const wallet = { account: other as string, switches: false, declines: false, chain: "0x2105" };
+    await page.exposeFunction("backupWallet", async (method: string, params: unknown[]) => {
+      if (method === "eth_requestAccounts") return [wallet.account];
+      if (method === "wallet_switchEthereumChain") { if (wallet.switches) wallet.chain = (params[0] as { chainId: string }).chainId; return null; }
+      if (method === "eth_chainId") return wallet.chain;
+      if (wallet.declines) return { declined: true };
+      const { types: { EIP712Domain: _domain, ...types }, ...document } = JSON.parse(params[1] as string);
+      return backup.signTypedData({ ...document, types, message: { ...document.message, nonce: BigInt(document.message.nonce), value: 0n, safeTxGas: 0n, baseGas: 0n, gasPrice: 0n } });
+    });
+    await page.addInitScript(() => { (window as unknown as { ethereum: unknown }).ethereum = { request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+      const answer = await (window as unknown as { backupWallet(method: string, params: unknown[]): Promise<unknown> }).backupWallet(method, params ?? []);
+      if (answer && typeof answer === "object" && "declined" in answer) throw Object.assign(new Error("User rejected the request."), { code: 4001 });
+      return answer;
+    } }; });
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-networks-update").click();
+    const attempt = async (message: string) => {
+      await page.locator("#wallet-networks-deploy").click();
+      await expect.poll(() => page.locator("#wallet-status").textContent()).toContain(message);
+      expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(0);
+    };
+    modes.base = "abort"; await attempt("Couldn't read this account's owners on Base. Try again.");
+    modes.base = "ok"; modes.optimism = "html"; await attempt("Couldn't read this account's owners on Optimism. Try again.");
+    modes.optimism = "ok"; await attempt("Select the wallet you chose at signup, then try again.");
+    wallet.account = backup.address; await attempt("Switch your wallet to Optimism, then try again.");
+    wallet.switches = true; wallet.declines = true; await attempt("Nothing was signed.");
+    // Once everything is in place, the same click signs and sends the update.
+    wallet.declines = false;
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
+    expect(requests.filter(item => item.path === "/wallet/networks/owners")).toHaveLength(1);
     expect(errors).toEqual([]);
   });
 

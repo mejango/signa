@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { hashTypedData, keccak256 } from "viem";
+import { decodeFunctionData, hashTypedData, keccak256, parseAbi, type Address } from "viem";
+import { walletOwnerPlan } from "../src/rest/web/walletRecoveryReview.js";
 import { createWalletAuthorityContextFixture } from "./fixtures/wallet-authority-context.js";
 import { walletNetworkCatalog, walletNetworkEntries, walletNetworksDocument, walletNetworkFamily } from "../src/rest/wallet/networks.js";
 import type { WalletAuthorityContext } from "../src/rest/wallet/authority.js";
@@ -46,5 +47,26 @@ describe("wallet networks", () => {
     const digest = hashTypedData(document);
     expect(hashTypedData(walletNetworksDocument({ ...input, chainIds: [42161, 10] }))).not.toBe(digest);
     expect(hashTypedData(walletNetworksDocument({ ...input, payment: { ...input.payment, value: "1" } }))).not.toBe(digest);
+  });
+  it("brings a chain's owners to Base's with swaps first, then additions at the head, then removals, each from the right previous owner", () => {
+    const abi = parseAbi(["function addOwnerWithThreshold(address owner,uint256 _threshold)", "function removeOwner(address prevOwner,address owner,uint256 _threshold)",
+      "function swapOwner(address prevOwner,address oldOwner,address newOwner)"]);
+    const [p0, p1, d1, d2, r] = ["0x" + "a0".repeat(20), "0x" + "a1".repeat(20), "0x" + "d1".repeat(20), "0x" + "d2".repeat(20), "0x" + "ee".repeat(20)].map(item => item.toLowerCase() as Address) as [Address, Address, Address, Address, Address];
+    const sentinel = "0x0000000000000000000000000000000000000001";
+    // Safe's linked list, applied step by step, must end at exactly the target owners.
+    const apply = (owners: Address[], steps: `0x${string}`[]) => steps.reduce((list, step) => {
+      const { functionName, args } = decodeFunctionData({ abi, data: step }), at = (owner: string) => list.findIndex(item => item.toLowerCase() === owner.toLowerCase());
+      const prev = (owner: string) => at(owner) === 0 ? sentinel : list[at(owner) - 1]!.toLowerCase();
+      if (functionName === "addOwnerWithThreshold") { expect(args[1]).toBe(1n); return [args[0].toLowerCase() as Address, ...list]; }
+      if (functionName === "swapOwner") { expect(args[0].toLowerCase()).toBe(prev(args[1])); return list.map(item => item.toLowerCase() === args[1].toLowerCase() ? args[2].toLowerCase() as Address : item); }
+      expect(args[0].toLowerCase()).toBe(prev(args[1])); expect(args[2]).toBe(1n);
+      return list.filter(item => item.toLowerCase() !== args[1].toLowerCase());
+    }, owners);
+    const cases: [Address[], Address[], number][] = [[[p0, r], [p1, r], 1], [[p0, r], [p1, d1, r], 2], [[p0, d1, r], [p1, r], 2], [[d1, p0, r], [d2, p1, r], 2], [[p0, r], [p0, r], 0], [[r, p0], [r], 1]];
+    for (const [from, to, count] of cases) {
+      const steps = walletOwnerPlan(from, to).steps;
+      expect(steps).toHaveLength(count);
+      expect(apply(from, steps).sort()).toEqual([...to].sort());
+    }
   });
 });

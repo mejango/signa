@@ -55,7 +55,7 @@ export interface WalletSiteOptions {
   refresh: { request(accountId: string): Promise<unknown>; tick(): Promise<unknown> };
   payments?: Pick<PostgresWalletPaymentReviewStore, 'get' | 'approve' | 'cancel'> & Partial<Pick<PostgresWalletPaymentReviewStore, 'frameOrigin'>>;
   /** The account on more chains (quote, one passkey approval, Center-paid Relayr bundle, per-chain status). */
-  networks?: Pick<ReturnType<typeof createWalletNetworks>, 'list' | 'quote' | 'approve' | 'status'>;
+  networks?: Pick<ReturnType<typeof createWalletNetworks>, 'list' | 'quote' | 'approve' | 'approveOwners' | 'status'>;
   /** ETH and USDC on every chain the account's address can exist on, with a mainnet total in dollars. */
   balances?: ReturnType<typeof createWalletBalances>;
   /** Coinbase Onramp to the account's own address: hosted checkout, and Apple Pay when Coinbase admits it. */
@@ -267,9 +267,10 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
   };
   app.get(base || '/', landing);
   if (base) app.get(`${base}/`, landing);
-  const assets = mountAssets(app, base, { 'wallet.js': browserScript, 'wallet.css': walletCss(),
+  // The account page loads the backup kit too, to sign a network's owner update.
+  const assets = { ...kitAssets, ...mountAssets(app, base, { 'wallet.js': browserScript, 'wallet.css': walletCss(),
     ...(options.qrScript ? { 'wallet-qr.js': options.qrScript } : {}),
-    ...(options.payments && options.paymentBrowserScript ? { 'wallet-payment.js': options.paymentBrowserScript, 'wallet-payment.css': walletPaymentCss() } : {}) });
+    ...(options.payments && options.paymentBrowserScript ? { 'wallet-payment.js': options.paymentBrowserScript, 'wallet-payment.css': walletPaymentCss() } : {}) }) };
   app.get(`${base}/assets/favicon.svg`, c => c.body(FAVICON_SVG, 200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' }));
   app.get(`${base}/config`, async c => {
     const candidate = c.req.header('Origin');
@@ -363,14 +364,22 @@ export function createWalletSite(options: WalletSiteOptions): Hono {
     const result = await service.quote(session, { chainIds: body.chainIds as number[] });
     emit('networks_quote', 'ok');
     // The account's own passkey id lets the browser prompt offer only that passkey (it already holds the id).
-    return c.json({ bundle: result.bundle, challenge: result.challenge ?? null, credentialId: result.bundle ? session.credentialId : null, view: result.view });
+    return c.json({ bundle: result.bundle, challenge: result.challenge ?? null, credentialId: result.bundle ? session.credentialId : null, owners: result.owners, view: result.view });
   });
   app.post(`${base}/networks/approve`, async c => {
     const service = networks(), session = await paymentSession(c, true, true);
-    const body = fields(await readWalletJson(c.req.raw), ['bundleId', 'assertion']);
-    const result = await service.approve(session, { bundleId: body.bundleId as string, assertion: assertion(body.assertion) });
+    const body = fields(await readWalletJson(c.req.raw), ['bundleId', 'assertion'], ['owners']);
+    const result = await service.approve(session, { bundleId: body.bundleId as string, assertion: assertion(body.assertion), ...(body.owners === undefined ? {} : { owners: body.owners }) });
     emit('networks_approve', 'ok');
     return c.json(result);
+  });
+  // The backup's signatures for networks the account is already on: the update brings them to Base's owners.
+  app.post(`${base}/networks/owners`, async c => {
+    const service = networks(), session = await paymentSession(c, true, true);
+    const body = fields(await readWalletJson(c.req.raw), ['changeId', 'signatures']);
+    const view = await service.approveOwners(session, body);
+    emit('networks_owners', 'ok');
+    return c.json({ view });
   });
   // Money lands only at the signed-in account's own address; the body never names a destination.
   const onramp = () => { if (!options.onramp) reject(503, 'WALLET_ONRAMP_UNAVAILABLE'); return options.onramp; };

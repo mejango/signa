@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeFunctionData, encodeFunctionResult, keccak256, parseTransaction, toHex, type Address, type Hex } from "viem";
@@ -11,7 +10,8 @@ import { PostgresWalletEnrollmentStore } from "../src/rest/wallet/enrollmentPost
 import { PostgresWalletAuthorityStore } from "../src/rest/wallet/authorityPostgres.js";
 import { createWalletNetworks, type WalletNetworksDependencies } from "../src/rest/wallet/networks.js";
 import { PostgresWalletNetworksStore } from "../src/rest/wallet/networksPostgres.js";
-import { completeWalletLoginFixture, walletLoginTestMigrations } from "./fixtures/wallet-login-setup.js";
+import { completeWalletLoginFixture } from "./fixtures/wallet-login-setup.js";
+import { migrate } from "../src/db/migrate.js";
 import { signGet } from "./fixtures/wallet-enrollment-crypto.js";
 
 function deferred() {
@@ -28,10 +28,9 @@ describeIf("wallet networks against real PostgreSQL", () => {
   beforeAll(async () => {
     admin = new Pool({ connectionString }); await admin.query(`CREATE SCHEMA ${schema}`);
     pool = new Pool({ connectionString, options: `-c search_path=${schema}`, max: 4 });
-    for (const name of walletLoginTestMigrations)
-      await pool.query(await readFile(new URL(`../src/db/migrations/${name}`, import.meta.url), "utf8"));
+    await migrate(pool);
   });
-  beforeEach(async () => { await pool.query("TRUNCATE rest_wallet_networks,rest_wallet_network_bundles"); });
+  beforeEach(async () => { await pool.query("TRUNCATE rest_wallet_networks,rest_wallet_network_bundles,rest_wallet_owner_chains"); });
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await admin.end(); } });
 
   async function setup() {
@@ -129,10 +128,6 @@ describeIf("wallet networks against real PostgreSQL", () => {
     // A chain that has code is deployed, not up to date: Base's owners change and both other chains need an update.
     owners[8453] = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000b3"];
     expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "diverged", "diverged"]);
-    // A new network would replay the original owners, so it is refused while Base's owners differ from them.
-    const quotes = provider.requests.length;
-    await expect(networks.quote(session, { chainIds: [84532] })).rejects.toMatchObject({ status: 409, code: "WALLET_NETWORKS_OWNERS_CHANGED" });
-    expect(provider.requests).toHaveLength(quotes);
     delete owners[8453];
     // Owners that change between the quote and its approval stop the payment too.
     const onTestnet = createWalletNetworks({ ...dependencies, provider: { ...provider, async createIndependent(entries: unknown) {
@@ -152,6 +147,16 @@ describeIf("wallet networks against real PostgreSQL", () => {
       store: new PostgresWalletNetworksStore(pool), provider: costly, rpc, payer: { address: payer.address, signTransaction: tx => payer.signTransaction(tx) } });
     await expect(pricey.quote(session, { chainIds: [84532] })).rejects.toMatchObject({ code: "WALLET_NETWORKS_QUOTE_UNSUPPORTED" });
     expect((await pricey.list(session)).offered.map(item => item.chainId)).toContain(84532);
+  });
+  it("a network add is refused when no original owner remains", async () => {
+    const { session, owners, provider, networks, dependencies } = await setup();
+    // Neither the original passkey nor the recovery owner holds Base: nothing can bring a replayed creation to Base's owners.
+    owners[8453] = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000b3"];
+    expect((await networks.list(session)).backup).toBe("lost");
+    await expect(networks.quote(session, { chainIds: [10] })).rejects.toMatchObject({ status: 409, code: "WALLET_NETWORKS_OWNERS_LOST",
+      message: "This account can no longer be opened on new networks." });
+    expect(provider.requests).toHaveLength(0);
+    expect(await dependencies.store.listNetworks(session.accountId)).toEqual([]);
   });
   it("serializes different bundles across replicas before signing and keeps their nonce reservations", async () => {
     const { fixture, session, dependencies, networks, sent } = await setup();

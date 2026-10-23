@@ -2,6 +2,8 @@ import { nativePasskeyError, takeSignInNotice } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
 import type * as Qr from "./qr.js";
 import { lazyModule } from "./lazyModule.js";
+import { loadRecoveryKit } from "./walletRecoveryKitLoader.js";
+import { signaChains } from "../wallet/chains.js";
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
 /** No credentials, assertions, CSRF values or handoff codes are persisted by this page. It keeps only Coinbase's
  * returning-user token for Apple Pay (no personal data), per account, on this device. */
@@ -15,13 +17,18 @@ type Completion = { loginId: string; assertion: { credentialId: string; userHand
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = element("wallet-status"), account = element("wallet-account"), address = element("wallet-address"), passkey = element("wallet-passkey"), passkeyLabel = element("wallet-passkey-label");
 // The account on more chains: a list, an "Add more" text button, a chain picker, one quote and one passkey approval.
+// A network whose owners differ from Base's is brought to them with the backup, which signs in this tab without a prompt.
 type NetworksView = { networks: { chainId: number; name: string; state: string; txHash: string | null; owners: string | undefined }[];
-  offered: { chainId: number; name: string; family: string; centerPays: boolean }[]; pending: { id: string; state: string; chainIds: number[] }[] };
+  offered: { chainId: number; name: string; family: string; centerPays: boolean }[]; pending: { id: string; state: string; chainIds: number[] }[]; backup: string | null };
 const networksList = element("wallet-networks"), networksAdd = element<HTMLButtonElement>("wallet-networks-add"), networksForm = element<HTMLFormElement>("wallet-networks-form");
 let networksView: NetworksView | null = null, networksQuote: { bundleId: string; challenge: string } | null = null, networksTimer: ReturnType<typeof setInterval> | null = null, networksOpen = false, networksPolls = 0;
+/** The open form updates out-of-date networks instead of adding new ones. The backup file is held only while the form is open. */
+let networksUpdating = false, networksBackupWords: string | null = null, networksBackupNeeded = false, networksBackupInitializer: `0x${string}` | null = null;
+const networksUpdate = element<HTMLButtonElement>("wallet-networks-update");
 const destination = element("wallet-destination");
 // Adding a device: begin here, show the other device its link, approve with this passkey once it has proved its own.
-type DeviceView = { id: string; phase: string; passkeyName: string | null; deviceSigner: string | null; expiresAtMs: number; transactionHashes: string[] };
+type DeviceView = { id: string; phase: string; passkeyName: string | null; deviceSigner: string | null; expiresAtMs: number; transactionHashes: string[];
+  chains?: { chainId: number; name: string; state: string }[] };
 const deviceAdd = element<HTMLButtonElement>("wallet-device-add"), devicePanel = element("wallet-device"), deviceApprove = element<HTMLButtonElement>("wallet-device-approve");
 let device: { view: DeviceView; link: string } | null = null, deviceTimer: ReturnType<typeof setInterval> | null = null;
 const signIn = element<HTMLButtonElement>("wallet-signin"), retry = element<HTMLButtonElement>("wallet-retry");
@@ -180,9 +187,9 @@ async function run(action: () => Promise<void>) {
     } else if (error instanceof InvalidResponse) {
       setStatus("error", "This wallet request could not be verified. Return to the app and start again.");
       // An unverified result never makes a previously unknown session safe to replace.
-    } else if (error instanceof HttpFailure && error.code === 'WALLET_NETWORKS_OWNERS_CHANGED') {
+    } else if (error instanceof HttpFailure && error.code && networksMessages[error.code]) {
       networksQuote = null;
-      setStatus("ready", "This account's owners changed, so adding networks is paused for it.");
+      setStatus("ready", networksMessages[error.code]!);
     } else if (error instanceof HttpFailure && error.code === 'WALLET_LOGIN_UNKNOWN_PASSKEY') {
       pending = null; csrf = ""; completionAttempted = false;
       setStatus("ready", "That passkey isn't linked to an account here. It may be left over from a signup that didn't finish. Try another passkey, or sign up.");
@@ -368,14 +375,23 @@ async function logout() {
   if (fundsPage) { location.replace(base || "/"); return; }
   setStatus("ready", "You are signed out. You can sign in again with your passkey.");
 }
+const networksMessages: Record<string, string> = {
+  WALLET_NETWORKS_OWNERS_CHANGED: "This account's owners changed in a way Signa cannot copy to another network, so adding networks is paused for it.",
+  WALLET_NETWORKS_OWNERS_LOST: "This account can no longer be opened on new networks.",
+  WALLET_NETWORKS_BACKUP_INVALID: "That backup does not match this account. Open the backup for this account and try again.",
+  WALLET_NETWORKS_UPDATING: "That network is still being updated. Check it again shortly.",
+  WALLET_DEVICE_CHAIN_UNAVAILABLE: "A network could not be read. Try again shortly.",
+};
 function networkView(value: Json): NetworksView {
   const v = record(value);
-  const list = (items: unknown, keys: string[]) => (Array.isArray(items) ? items : []).map(item => { const r = record(item); for (const key of keys) if (!(key in r)) throw new InvalidResponse(); return r; });
+  const list = (items: unknown, keys: string[]) => { if (!Array.isArray(items)) throw new InvalidResponse();
+    return items.map(item => { const r = record(item); for (const key of keys) if (!(key in r)) throw new InvalidResponse(); return r; }); };
   return { networks: list(v.networks, ["chainId", "name", "state"]).map(r => ({ chainId: Number(r.chainId), name: string(r.name, 40), state: string(r.state, 20), txHash: typeof r.txHash === "string" ? r.txHash : null,
       // A view read without owners (an approval's) keeps the last ones read.
       owners: typeof r.owners === "string" ? string(r.owners, 20) : networksView?.networks.find(n => n.chainId === Number(r.chainId))?.owners })),
     offered: list(v.offered, ["chainId", "name", "family", "centerPays"]).map(r => ({ chainId: Number(r.chainId), name: string(r.name, 40), family: string(r.family, 10), centerPays: r.centerPays === true })),
-    pending: list(v.pending, ["id", "state", "chainIds"]).map(r => ({ id: string(r.id, 36), state: string(r.state, 20), chainIds: (r.chainIds as unknown[]).map(Number) })) };
+    pending: list(v.pending, ["id", "state", "chainIds"]).map(r => ({ id: string(r.id, 36), state: string(r.state, 20), chainIds: (r.chainIds as unknown[]).map(Number) })),
+    backup: typeof v.backup === "string" ? string(v.backup, 10) : v.backup === undefined ? networksView?.backup ?? null : null };
 }
 function renderNetworks() {
   if (!networksList || !networksAdd || !networksForm) return;
@@ -383,18 +399,25 @@ function renderNetworks() {
   // The list shows where the account is and where it is arriving; quotes and failures stay out of it.
   const shown = view ? view.networks.filter(item => item.state === "deployed" || item.state === "pending") : [];
   // Only a chain read as carrying Base's owners is up to date; an unread one never is.
-  const owners = (item: { owners: string | undefined }) => item.owners === "consistent" ? ": Up to date" : item.owners === "diverged" ? ": Needs update" : item.owners ? ": Couldn't check" : "";
+  const owners = (item: { owners: string | undefined }) => item.owners === "consistent" ? ": Up to date" : item.owners === "diverged" ? ": Needs update"
+    : item.owners === "updating" ? ": Updating…" : item.owners ? ": Couldn't check" : "";
+  const lost = view?.backup === "lost";
   networksList.textContent = view ? shown.map(item => item.state === "deployed" ? `${item.name}${owners(item)}` : `${item.name} (deploying…)`).join(", ")
-    + (shown.some(item => item.owners === "diverged") ? ". Actions on a network that needs an update wait until its owners match Base." : "") : "Base";
-  networksAdd.hidden = !view || !view.offered.length || networksOpen || busy || fundsPage;
+    + (shown.some(item => item.owners === "diverged" || item.owners === "updating") ? ". Actions on a network that needs an update wait until its owners match Base." : "")
+    + (lost ? ". This account can no longer be opened on new networks." : "") : "Base";
+  networksAdd.hidden = !view || !view.offered.length || networksOpen || busy || fundsPage || lost;
+  networksUpdate.hidden = !view || networksOpen || busy || fundsPage || lost || !view.networks.some(item => item.owners === "diverged");
   networksForm.hidden = !view || !networksOpen;
-  element<HTMLButtonElement>("wallet-networks-deploy").disabled = busy;
+  element("wallet-networks-family").hidden = element("wallet-networks-choices").hidden = networksUpdating;
+  element("wallet-networks-backup").hidden = !networksUpdating && !networksBackupNeeded && view?.backup !== "needed";
+  const deploy = element<HTMLButtonElement>("wallet-networks-deploy"); deploy.disabled = busy; deploy.textContent = networksUpdating ? "Update" : "Deploy";
   // Polling runs beside the busy gate so a click is never dropped; it stops after ten minutes or when nothing is pending.
-  if (view && view.pending.length && !networksTimer) networksTimer = setInterval(() => {
+  const waiting = !!view && (view.pending.length > 0 || view.networks.some(item => item.owners === "updating"));
+  if (waiting && !networksTimer) networksTimer = setInterval(() => {
     if (busy || document.hidden || !navigator.onLine || networksPolls++ > 200) return;
     networksStatus().catch(() => { /* The next poll reads again. */ });
   }, 3000);
-  if (view && !view.pending.length && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
+  if (view && !waiting && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
 }
 function chosenFamily(): string {
   return (networksForm?.querySelector<HTMLInputElement>("input[name=family]:checked")?.value) ?? "mainnet";
@@ -410,10 +433,67 @@ function renderChoices() {
     label.append(input, document.createTextNode(item.centerPays ? item.name : `${item.name} (you pay)`)); choices.append(label);
   }
 }
-function openNetworks() {
+function openNetworks(updating = false) {
   if (!networksView) return;
   renderChoices();
-  networksQuote = null; networksOpen = true; render();
+  networksQuote = null; networksOpen = true; networksUpdating = updating; render();
+}
+function closeNetworks() {
+  networksOpen = networksUpdating = networksBackupNeeded = false; networksQuote = null; networksBackupWords = networksBackupInitializer = null;
+  element<HTMLInputElement>("wallet-networks-words").value = ""; element<HTMLInputElement>("wallet-networks-file").value = "";
+}
+/** The backup's words, from the file loaded in this tab or the password field, read when needed and not kept in the field. */
+function networksBackup(): string | null {
+  const field = element<HTMLInputElement>("wallet-networks-words"), words = field.value.trim(); field.value = "";
+  return words || networksBackupWords;
+}
+type Ethereum = { request(input: { method: string; params?: unknown[] }): Promise<unknown> };
+const injectedWallet = () => (window as unknown as { ethereum?: Ethereum }).ethereum?.request ? (window as unknown as { ethereum: Ethereum }).ethereum : null;
+const backupNeededText = "Open your backup file or password, or open this page in the browser with the wallet you chose at signup.";
+/** The backup signs each network's owner calls after the kit checks them against this account, the chosen networks and
+ * Base's owners: the backup file or password in this tab, or else the wallet chosen at signup, once per network. */
+async function signNetworkOwners(plan: Json, words: string | null, chainIds: number[]) {
+  const kit = await loadRecoveryKit(), chains = Array.isArray(plan.chains) ? plan.chains : [];
+  if (!chains.length || chains.length > 8) throw new InvalidResponse();
+  // The owners each update brings are checked against Base's, as this page reads them from Base itself.
+  let homeOwners: Awaited<ReturnType<typeof kit.readHomeOwners>>;
+  try { homeOwners = await kit.readHomeOwners(session!.walletAddress); }
+  catch { setStatus("ready", "Couldn't read this account's owners on Base. Try again."); return null; }
+  const signatures = [], wallet = words ? null : injectedWallet();
+  if (!words && !wallet) { setStatus("ready", backupNeededText); return null; }
+  for (const chain of chains) {
+    let signed: string[], destination: Awaited<ReturnType<typeof kit.readChainSafe>>;
+    const chainId = Number(record(chain).chainId), name = signaChains.find(item => item.chainId === chainId)?.name;
+    if (!name || !chainIds.includes(chainId)) throw new InvalidResponse();
+    // The network's own owners and nonce, read here too: a signature never waits for a nonce the network has not reached.
+    try { destination = await kit.readChainSafe(session!.walletAddress, chainId); }
+    catch { setStatus("ready", `Couldn't read this account's owners on ${name}. Try again.`); return null; }
+    const expected = { walletAddress: session!.walletAddress, chainIds, homeOwners, destination,
+      ...(words && words === networksBackupWords && networksBackupInitializer ? { initializerHash: networksBackupInitializer } : {}) }, hexChain = `0x${chainId.toString(16)}`;
+    if (wallet) {
+      let checked: ReturnType<typeof kit.walletOwnerUpdateDocuments>;
+      try { checked = kit.walletOwnerUpdateDocuments(chain, expected); } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); return null; }
+      try {
+        const accounts = await wallet.request({ method: "eth_requestAccounts" });
+        if (!Array.isArray(accounts) || typeof accounts[0] !== "string" || accounts[0].toLowerCase() !== checked.recoveryOwner.toLowerCase()) {
+          setStatus("ready", "Select the wallet you chose at signup, then try again."); return null;
+        }
+        // A wallet signs typed data only for its current network, so it is switched to this update's first.
+        await wallet.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexChain }] });
+        if (await wallet.request({ method: "eth_chainId" }) !== hexChain) { setStatus("ready", `Switch your wallet to ${name}, then try again.`); return null; }
+        signed = [];
+        for (const document of checked.documents) signed.push(string(await wallet.request({ method: "eth_signTypedData_v4", params: [checked.recoveryOwner,
+          JSON.stringify({ ...document, types: { EIP712Domain: [{ name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }], ...document.types } },
+            (_key, value) => typeof value === "bigint" ? value.toString() : value)] }), 132));
+      } catch (error) {
+        if ((error as { code?: unknown })?.code === 4001) { setStatus("ready", "Nothing was signed."); return null; }
+        throw error;
+      }
+    } else try { signed = await kit.signWalletOwnerUpdate(words!, chain, expected); }
+    catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); return null; }
+    signatures.push({ chainId: Number(record(chain).chainId), signatures: signed });
+  }
+  return { changeId: string(plan.changeId, 36), signatures };
 }
 function chosenChains(): number[] {
   return [...element("wallet-networks-choices").querySelectorAll<HTMLInputElement>("input:checked")].map(input => Number(input.value));
@@ -429,14 +509,29 @@ async function refreshNetworks(attempt = 0) {
 }
 // Center pays for every offered network, so the quote stays inside one click: quote, one passkey prompt, funding.
 async function networksDeploy() {
-  const chainIds = chosenChains();
-  if (!chainIds.length) { setStatus("ready", "Choose at least one network."); return; }
+  // An update covers one family at a time, as Relayr does; the other family's networks stay listed for the next one.
+  const diverged = networksView?.networks.filter(item => item.owners === "diverged").map(item => item.chainId) ?? [], family = (chainId: number) => signaChains.find(chain => chain.chainId === chainId)?.family;
+  const chainIds = networksUpdating ? diverged.filter(chainId => family(chainId) === family(diverged[0]!)) : chosenChains();
+  if (!chainIds.length) { setStatus("ready", networksUpdating ? "Every network is up to date." : "Choose at least one network."); return; }
   const families = new Set([...element("wallet-networks-choices").querySelectorAll<HTMLInputElement>("input:checked")].map(input => input.dataset.family));
-  if (families.size > 1) { setStatus("ready", "Choose mainnets or testnets, not both at once."); return; }
-  setStatus("checking", "Preparing the deployments…");
+  if (!networksUpdating && families.size > 1) { setStatus("ready", "Choose mainnets or testnets, not both at once."); return; }
+  const words = networksBackup();
+  if ((networksUpdating || networksView?.backup === "needed") && !words && !injectedWallet()) { setStatus("ready", backupNeededText); return; }
+  setStatus("checking", networksUpdating ? "Preparing the update…" : "Preparing the deployments…");
   const quoted = record(await request(`${base}/networks/quote`, { chainIds }, csrf, 60_000));
   networksView = networkView(quoted.view as Json);
-  if (quoted.bundle === null) { networksOpen = false; networksQuote = null; setStatus("ready", "Your account is already on those networks."); return; }
+  let owners: Awaited<ReturnType<typeof signNetworkOwners>> = null;
+  if (quoted.owners) {
+    if (!words && !injectedWallet()) { networksBackupNeeded = true; render(); setStatus("ready", backupNeededText); return; }
+    owners = await signNetworkOwners(record(quoted.owners), words, chainIds);
+    if (!owners) return;
+  }
+  if (quoted.bundle === null) {
+    if (!owners) { closeNetworks(); setStatus("ready", "Your account is already on those networks."); return; }
+    setStatus("checking", "Updating the owners…");
+    networksView = networkView(record(record(await request(`${base}/networks/owners`, owners, csrf, 60_000)).view)); closeNetworks();
+    setStatus("checking", "Updating the owners. Actions there wait until it lands."); return;
+  }
   const bundle = record(quoted.bundle);
   networksQuote = { bundleId: string(bundle.id, 36), challenge: string(quoted.challenge, 66) };
   if (!configuration) throw new InvalidResponse();
@@ -450,8 +545,8 @@ async function networksDeploy() {
   setStatus("checking", "Funding the deployments…");
   const result = record(await request(`${base}/networks/approve`, { bundleId: networksQuote.bundleId, assertion: { credentialId: encode(credential.rawId),
     userHandle: response.userHandle ? encode(response.userHandle) : null, authenticatorData: encode(response.authenticatorData),
-    clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) } }, csrf, 60_000));
-  networksView = networkView(result.view as Json); networksQuote = null; networksOpen = false;
+    clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) }, ...(owners ? { owners } : {}) }, csrf, 60_000));
+  networksView = networkView(result.view as Json); closeNetworks();
   setStatus("checking", deployingText());
 }
 function deployingText() {
@@ -463,13 +558,25 @@ async function networksStatus() {
   networksView = networkView(await request(`${base}/networks/status`, {}, csrf, 60_000));
   render();
   if (networksView.pending.length) setStatus("checking", deployingText());
+  else if (networksView.networks.some(item => item.owners === "updating")) setStatus("checking", "Updating the owners. Actions there wait until it lands.");
   else setStatus("ready", `Your account is on ${networksView.networks.filter(item => item.state === "deployed").length} networks.`);
 }
 if (networksAdd && networksForm) {
   networksAdd.addEventListener("click", () => openNetworks());
+  networksUpdate.addEventListener("click", () => openNetworks(true));
+  element<HTMLInputElement>("wallet-networks-file").addEventListener("change", event => { void run(async () => {
+    const input = event.target as HTMLInputElement, file = input.files?.[0]; input.value = "";
+    if (!file || file.size > 8192) { setStatus("ready", "Choose the backup file you saved for this account."); return; }
+    try {
+      const kit = (await loadRecoveryKit()).readWalletRecoveryKit(await file.text());
+      if (kit.walletAddress.toLowerCase() !== session?.walletAddress.toLowerCase()) throw new Error();
+      networksBackupWords = kit.mnemonic; networksBackupInitializer = kit.initializerHash; setStatus("ready", "Backup file loaded in this tab.");
+    } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); }
+  }); });
   networksForm.addEventListener("submit", event => { event.preventDefault(); void run(networksDeploy); });
   for (const radio of networksForm.querySelectorAll<HTMLInputElement>("input[name=family]")) radio.addEventListener("change", () => { networksQuote = null; renderChoices(); render(); });
-  element("wallet-networks-cancel").addEventListener("click", () => { networksOpen = false; networksQuote = null; render(); });
+  element("wallet-networks-cancel").addEventListener("click", () => { closeNetworks(); render(); });
+  window.addEventListener("pagehide", () => { networksBackupWords = networksBackupInitializer = null; });
 }
 // The balance: ETH and USDC on every network the address can hold them, a mainnet dollar total that opens to
 // the per-network breakdown. A network that didn't answer is named, never counted as zero.
@@ -650,10 +757,20 @@ element("wallet-funds-cancel").addEventListener("click", () => { fundsShown = fa
 // The mark spins only while the service works (adding, finishing); waiting on a person does not spin.
 const deviceWorking = (phase: string) => phase === "adding" || phase === "awaiting_activation";
 const deviceTag = (signer: string | null) => typeof signer === "string" && /^0x[0-9a-fA-F]{40}$/.test(signer) ? signer.slice(-6).toUpperCase() : "";
+const listed = (names: string[]) => names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "";
+/** The account's other networks follow Base; one that did not take the device stays blocked there and is named. */
+function deviceChainsText() {
+  const chains = device?.view.chains ?? [], failed = chains.filter(chain => chain.state === "failed").map(chain => chain.name);
+  const coming = chains.filter(chain => chain.state === "approved" || chain.state === "submitted").map(chain => chain.name);
+  return (coming.length ? ` ${listed(coming)} ${coming.length > 1 ? "follow" : "follows"} shortly.` : "")
+    + (failed.length ? ` Adding it on ${listed(failed)} did not complete; actions there wait until it does.` : "");
+}
 function deviceText(phase: string, signer: string | null = device?.view.deviceSigner ?? null) {
+  const networks = networksView?.networks.filter(item => item.state === "deployed").map(item => item.name) ?? [];
   return phase === "awaiting_registration" || phase === "awaiting_possession" ? "Waiting for the other device to create its passkey…"
-    : phase === "awaiting_approval" ? `The other device is ready. Approve it with your passkey if it shows ${deviceTag(signer)}.` : phase === "adding" ? "Adding the device to your account…"
-    : phase === "awaiting_activation" ? "Finishing…" : phase === "ready" ? "The device is added. Sign in again on this device to continue."
+    : phase === "awaiting_approval" ? (networks.length > 1 ? `The other device is ready and shows ${deviceTag(signer)}. Add this device on ${listed(networks)}. Your current device confirms each.`
+      : `The other device is ready. Approve it with your passkey if it shows ${deviceTag(signer)}.`) : phase === "adding" ? "Adding the device to your account…"
+    : phase === "awaiting_activation" ? "Finishing…" : phase === "ready" ? `The device is added. Sign in again on this device to continue.${deviceChainsText()}`
     : phase === "addition_failed" ? "Adding the device did not complete. Try again." : "The link expired. Start again.";
 }
 function renderDevice() {
@@ -701,20 +818,39 @@ async function devicePoll() {
   if (view.phase === "awaiting_activation") { await run(deviceActivate); return; }
   render(); setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
+/** Confirmations already given, by challenge: a prompt the browser drops part way keeps the earlier ones for the next click. */
+const deviceConfirmed = new Map<string, Json>();
 async function deviceApproveNow() {
   if (!device || !configuration) return;
   setStatus("checking", "Preparing the approval…");
   const prepared = record(await request(`${base}/devices/${device.view.id}/review`, {}, csrf, 60_000));
-  const challenge = string(prepared.challenge, 66); if (!/^0x[0-9a-fA-F]{64}$/.test(challenge)) throw new InvalidResponse();
-  nativePrompt = new AbortController(); setStatus("authenticating", "Approve the new device with your passkey."); render();
-  const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge: Uint8Array.from(challenge.slice(2).match(/../g)!.map(pair => parseInt(pair, 16))),
-    userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
-  if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
-  const response = credential.response; nativePrompt = null;
+  // Base first, then each other network the account is on: the same addition, signed for that network.
+  const chains = Array.isArray(prepared.chains) ? prepared.chains.map(item => record(item)) : [];
+  if (chains.length > 8) throw new InvalidResponse();
+  const steps = [{ name: "Base", challenge: string(prepared.challenge, 66) }, ...chains.map(chain => ({ chainId: Number(chain.chainId),
+    name: signaChains.find(item => item.chainId === Number(chain.chainId))?.name ?? `Chain ${Number(chain.chainId)}`, challenge: string(chain.challenge, 66) }))];
+  // Each prompt signs the addition this page rebuilds from the account and the device it shows, never a hash as given.
+  const kit = await loadRecoveryKit(), signer = device.view.deviceSigner ?? "", reviews = [record(prepared.review), ...chains.map(chain => record(chain.review))];
+  if (steps.some((step, index) => index && reviews[index]!.chainId !== (step as { chainId: number }).chainId)) throw new InvalidResponse();
+  // Each chain is read here first, so the nonce and owners each prompt signs for are the chain's own, never only the server's.
+  const expected = await kit.walletDeviceAdditionChallenges(session!.walletAddress, signer,
+    steps.map((step, index) => ({ chainId: "chainId" in step ? step.chainId : 8453, safeNonce: reviews[index]!.safeNonce }))).catch(() => { throw new InvalidResponse(); });
+  if (steps.some((step, index) => step.challenge.toLowerCase() !== expected[index])) throw new InvalidResponse();
+  for (const [index, step] of steps.entries()) {
+    if (deviceConfirmed.has(step.challenge)) continue;
+    nativePrompt = new AbortController();
+    setStatus("authenticating", steps.length > 1 ? `Confirm on ${step.name} (${index + 1} of ${steps.length}).` : "Approve the new device with your passkey."); render();
+    const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge: Uint8Array.from(step.challenge.slice(2).match(/../g)!.map(pair => parseInt(pair, 16))),
+      userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
+    if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
+    const response = credential.response; nativePrompt = null;
+    deviceConfirmed.set(step.challenge, { credentialId: encode(credential.rawId), userHandle: response.userHandle ? encode(response.userHandle) : null,
+      authenticatorData: encode(response.authenticatorData), clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) });
+  }
   setStatus("checking", "Adding the device to your account…");
-  const result = record(await request(`${base}/devices/${device.view.id}/approve`, { review: prepared.review, assertion: { credentialId: encode(credential.rawId),
-    userHandle: response.userHandle ? encode(response.userHandle) : null, authenticatorData: encode(response.authenticatorData),
-    clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) } }, csrf, 60_000));
+  const result = record(await request(`${base}/devices/${device.view.id}/approve`, { review: prepared.review, assertion: deviceConfirmed.get(steps[0]!.challenge),
+    ...(chains.length ? { chains: steps.slice(1).map(step => ({ chainId: (step as { chainId: number }).chainId, assertion: deviceConfirmed.get(step.challenge) })) } : {}) }, csrf, 60_000));
+  deviceConfirmed.clear();
   device = { ...device, view: record(result.view) as unknown as DeviceView };
   setStatus(deviceWorking(device.view.phase) ? "checking" : "ready", deviceText(device.view.phase));
 }
@@ -728,7 +864,7 @@ async function deviceActivate() {
 if (deviceAdd && devicePanel) {
   deviceAdd.addEventListener("click", () => void run(deviceBegin));
   deviceApprove.addEventListener("click", () => void run(deviceApproveNow));
-  element("wallet-device-cancel").addEventListener("click", () => { device = null; render(); });
+  element("wallet-device-cancel").addEventListener("click", () => { device = null; deviceConfirmed.clear(); render(); });
 }
 signIn.addEventListener("click", () => void run(login));
 if (framed) window.addEventListener("resize", render);

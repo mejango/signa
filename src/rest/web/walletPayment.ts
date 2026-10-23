@@ -149,6 +149,9 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   if (passkey.rpId !== rpId || passkey.userVerification !== 'required' || decode(passkey.challenge).length !== 32 ||
     `0x${Array.from(decode(passkey.challenge), byte => byte.toString(16).padStart(2, '0')).join('')}` !== signing.digest) fail();
   decode(passkey.credentialId);
+  const approvers = passkey.credentialIds;
+  if (!Array.isArray(approvers) || approvers.length > 16 || !approvers.includes(passkey.credentialId)) fail();
+  for (const id of approvers as unknown[]) decode(id);
   if (value.notice !== null) text(value.notice, 256);
   // Status may advance, but the displayed terms, exact operation and selected
   // credential cannot change while recovering an interrupted approval.
@@ -257,10 +260,10 @@ async function approvePayment() {
   // only lets iOS refuse a passkey it cannot preselect (see rest-wallet-pages-discoverable).
   const credential = await navigator.credentials.get({ publicKey: { rpId, challenge: decode(review.passkey.challenge), userVerification: 'required', timeout: 90_000 }, signal: nativePrompt.signal });
   if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
-  // The device offered another passkey than the one this review pins (a second passkey for this
-  // account, or another account's): nothing was sent, so the customer simply picks again.
-  if (encode(credential.rawId) !== review.passkey.credentialId) {
-    nativePrompt = null; setStatus('ready', 'That was a different passkey. Approve with the passkey of this account.'); return;
+  // Any of the account's passkeys approves: the primary or an added device. Another passkey (another
+  // account's, or one left over from an unfinished signup) sends nothing, so the customer simply picks again.
+  if (!review.passkey.credentialIds.includes(encode(credential.rawId))) {
+    nativePrompt = null; setStatus('ready', 'That was a different passkey. Approve with a passkey of this account.'); return;
   }
   const response = credential.response;
   pending = { credentialId: encode(credential.rawId), userHandle: response.userHandle ? encode(response.userHandle) : null,

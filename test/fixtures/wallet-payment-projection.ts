@@ -11,6 +11,6 @@ export function paymentProjectionFixture(): WalletPaymentReviewAppView {
       stepIndexes:[0,1],operation:{sender:'wallet-address',callData:'exact-call-data'},chainId:8453,entryPoint:'entry-point',safe7579:'adapter',
       payment:{amount:'1000000',beneficiary:'recipient',projectId:'1',minimumReturnedTokens:'5',metadata:'0x'},signing:{digest:`0x${'ab'.repeat(32)}`,signedData:'safe-op-preimage',validAfter:'10',validUntil:'20'},
       createdAtMs:10_000,expiresAtMs:20_000,ceremony:{id:'private-ceremony',challenge:'private-random-challenge'} },
-    status:'approved',approvedAtMs:12_000,cancelledAtMs:null,operationState:'prepared',approval:{signature:'0x1234',signedCommitment:'0x4321'},
+    status:'approved',approvedAtMs:12_000,cancelledAtMs:null,operationState:'prepared',approvers:['selected-credential','device-credential'],approval:{signature:'0x1234',signedCommitment:'0x4321'},
   } as unknown as WalletPaymentReviewAppView;
 }

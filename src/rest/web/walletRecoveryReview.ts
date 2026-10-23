@@ -53,6 +53,29 @@ export function walletPasskeySigner(publicKey: { x: Hex; y: Hex }) {
       [p.signerSingleton, x, y, BigInt(p.p256Verifier)])]) }),
     rotationContext: { publicKey, signerFactory: p.signerFactory as Address, verifiers: p.p256Verifier as Hex } };
 }
+const ownerAbi = [
+  {"name":"addOwnerWithThreshold","type":"function","stateMutability":"nonpayable","inputs":[{"type":"address","name":"owner"},{"type":"uint256","name":"_threshold"}],"outputs":[]},
+  {"name":"removeOwner","type":"function","stateMutability":"nonpayable","inputs":[{"type":"address","name":"prevOwner"},{"type":"address","name":"owner"},{"type":"uint256","name":"_threshold"}],"outputs":[]},
+  {"name":"swapOwner","type":"function","stateMutability":"nonpayable","inputs":[{"type":"address","name":"prevOwner"},{"type":"address","name":"oldOwner"},{"type":"address","name":"newOwner"}],"outputs":[]},
+] as const;
+/** The Safe owner calls, in order, that take `owners` (in the Safe's own list order) to exactly `target` with a threshold
+ * of one: a swap for each owner replaced, then additions at the head, then removals. Each call is one SafeTx; `path[i]`
+ * is the owner list before call `i`, and the last entry is the list after them all. Shared by the server, which builds
+ * the update, and the backup kit, which rebuilds it before signing. */
+export function walletOwnerPlan(owners: readonly Address[], target: readonly Address[]): { steps: Hex[]; path: Address[][] } {
+  const same = (a: Address, b: Address) => a.toLowerCase() === b.toLowerCase(), has = (list: readonly Address[], owner: Address) => list.some(item => same(item, owner));
+  let list = owners.map(owner => getAddress(owner));
+  const wanted = target.map(owner => getAddress(owner)), remove = list.filter(owner => !has(wanted, owner)), add = wanted.filter(owner => !has(list, owner));
+  const steps: Hex[] = [], path: Address[][] = [[...list]];
+  const previous = (owner: Address) => { const index = list.indexOf(owner); return index === 0 ? '0x0000000000000000000000000000000000000001' as Address : list[index - 1]!; };
+  const step = (data: Hex, next: Address[]) => { steps.push(data); list = next; path.push([...list]); };
+  const swaps = Math.min(remove.length, add.length);
+  for (let i = 0; i < swaps; i++)
+    step(encodeFunctionData({ abi: ownerAbi, functionName: 'swapOwner', args: [previous(remove[i]!), remove[i]!, add[i]!] }), list.map(owner => owner === remove[i] ? add[i]! : owner));
+  for (const owner of add.slice(swaps)) step(encodeFunctionData({ abi: ownerAbi, functionName: 'addOwnerWithThreshold', args: [owner, 1n] }), [owner, ...list]);
+  for (const owner of remove.slice(swaps)) step(encodeFunctionData({ abi: ownerAbi, functionName: 'removeOwner', args: [previous(owner), owner, 1n] }), list.filter(item => item !== owner));
+  return { steps, path };
+}
 function canonical(value: unknown, depth = 0, budget = { nodes: 0, bytes: 0 }): string {
   if (++budget.nodes > 256 || depth > 8) invalid();
   if (value === null || typeof value === 'boolean') return JSON.stringify(value);

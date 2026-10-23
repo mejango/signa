@@ -24,6 +24,7 @@ import { PostgresWalletRecoveryStore } from "./recoveryPostgres.js";
 import { PostgresWalletRecoveryFlowStore } from "./recoveryFlowPostgres.js";
 import { createLocalWalletRecovery } from "./recoveryService.js";
 import { createWalletRecoveryChains } from "./recoveryChains.js";
+import { createWalletDeviceChains } from "./deviceChains.js";
 import type { RestWalletRuntime } from "../runtime.js";
 
 export interface BaseWalletHostContext { pool: Pool; rpc: RestRpc; wallet: RestWalletRuntime; audience: string;
@@ -106,6 +107,7 @@ export function createBaseWalletDeviceHost(context: BaseWalletHostContext, optio
   return createLocalWalletDevices({ audience: context.audience, smart: context.smart, authority: new PostgresWalletAuthorityStore(context.pool), login: context.wallet.login,
     devices: new PostgresWalletDeviceStore(context.pool, { origin, rpId }, { audience: context.audience, observe: value => chain.observe(value) }),
     ...(options.onDeviceEvent ? { onEvent: options.onDeviceEvent } : {}),
+    chains: createWalletDeviceChains({ pool: context.pool, rpc: context.rpc, ...(context.wallet.networks ? { networks: context.wallet.networks } : {}) }),
     addition: createBaseWalletDeviceRelay({ pool: context.pool, url: options.url, ...(options.genesisHash ? { genesisHash: options.genesisHash } : {}),
       signer: options.signer, manifest: options.manifest, utility: options.utility,
       maximumOperations: options.maximumOperations, maximumCostWei: options.maximumCostWei }) });
