@@ -1,12 +1,15 @@
 import { createConnector, type CreateConnectorFn } from "wagmi";
 import { base } from "wagmi/chains";
 import type { Address } from "viem";
+import { SIGNA_HOME_CHAIN_ID, signaChainName } from "../../../src/rest/wallet/chains.js";
+
+const homeChainHex = `0x${SIGNA_HOME_CHAIN_ID.toString(16)}`;
 
 /** The slice of a Signa wallet client the connector needs. Signing never crosses this seam. */
 export type CenterAccountWallet = {
   restoreConnection(): {
     address: Address;
-    chainId: 8453;
+    chainId: typeof SIGNA_HOME_CHAIN_ID;
     accountId: string;
     expiresAt: number;
   } | null;
@@ -34,7 +37,7 @@ const unsupported = (chain = false) =>
   Object.assign(
     new Error(
       chain
-        ? "This Signa account uses Base. Connect an external wallet for other networks."
+        ? `This Signa account uses ${signaChainName(SIGNA_HOME_CHAIN_ID)}. Connect an external wallet for other networks.`
         : "This action needs its own review at Signa. Use a payment review, or connect an external wallet.",
     ),
     { code: chain ? 4902 : 4200 },
@@ -50,8 +53,8 @@ export function centerAccountConnector(
       const value = (await options.wallet()).restoreConnection();
       if (
         !value ||
-        value.chainId !== 8453 ||
-        value.accountId !== "eip155:8453:" + value.address.toLowerCase() ||
+        value.chainId !== SIGNA_HOME_CHAIN_ID ||
+        value.accountId !== `eip155:${SIGNA_HOME_CHAIN_ID}:` + value.address.toLowerCase() ||
         value.expiresAt <= Math.floor(Date.now() / 1000)
       )
         return null;
@@ -60,7 +63,7 @@ export function centerAccountConnector(
     const provider = {
       async request(input: { method: string; params?: unknown[] }) {
         const current = await connection();
-        if (input.method === "eth_chainId") return "0x2105";
+        if (input.method === "eth_chainId") return homeChainHex;
         if (
           input.method === "eth_accounts" ||
           input.method === "eth_requestAccounts"
@@ -70,7 +73,7 @@ export function centerAccountConnector(
           const requested = input.params?.[0] as
             | { chainId?: string }
             | undefined;
-          if (requested?.chainId !== "0x2105") throw unsupported(true);
+          if (requested?.chainId !== homeChainHex) throw unsupported(true);
           return null;
         }
         if (reads.has(input.method)) return options.read(input);
@@ -82,7 +85,7 @@ export function centerAccountConnector(
       name: "Signa account",
       type: "juicebox-center",
       async connect(parameters) {
-        if (parameters?.chainId !== undefined && parameters.chainId !== 8453)
+        if (parameters?.chainId !== undefined && parameters.chainId !== SIGNA_HOME_CHAIN_ID)
           throw unsupported(true);
         const current = await connection();
         if (!current)
@@ -92,7 +95,7 @@ export function centerAccountConnector(
         )?.withCapabilities
           ? [{ address: current.address, capabilities: {} }]
           : [current.address];
-        return { accounts, chainId: 8453 } as never;
+        return { accounts, chainId: SIGNA_HOME_CHAIN_ID } as never;
       },
       async disconnect() {
         (await options.wallet()).disconnect();
@@ -102,7 +105,7 @@ export function centerAccountConnector(
         return current ? [current.address] : [];
       },
       async getChainId() {
-        return 8453;
+        return SIGNA_HOME_CHAIN_ID;
       },
       async getProvider() {
         return provider;
@@ -111,7 +114,7 @@ export function centerAccountConnector(
         return !!(await connection());
       },
       async switchChain({ chainId }) {
-        if (chainId !== 8453) throw unsupported(true);
+        if (chainId !== SIGNA_HOME_CHAIN_ID) throw unsupported(true);
         config.emitter.emit("change", { chainId });
         return base;
       },
@@ -120,7 +123,7 @@ export function centerAccountConnector(
         else config.emitter.emit("change", { accounts: accounts as Address[] });
       },
       onChainChanged(chainId) {
-        if (Number(chainId) !== 8453) config.emitter.emit("disconnect");
+        if (Number(chainId) !== SIGNA_HOME_CHAIN_ID) config.emitter.emit("disconnect");
       },
       onDisconnect() {
         config.emitter.emit("disconnect");

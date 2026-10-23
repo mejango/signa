@@ -2,10 +2,9 @@ import { decodeFunctionResult, encodeFunctionData, getAddress, type Address, typ
 import { RestError, type RestBlockEvidence, type RestRpc } from "../core.js";
 import { safeAbi } from "../smartAccounts/service.js";
 import { uoHash, uoObject, uoQuantity } from "../userOperations/codec.js";
+import { SIGNA_HOME_CHAIN_ID } from "./chains.js";
 import { operationRpc, walletPreflightRpcBounds } from "./operationRpc.js";
 
-/** Base is the account's home: its owners are the ones every other chain must carry. */
-const HOME_CHAIN_ID = 8453;
 
 export type WalletOwnerState =
   | { chainId: number; status: "consistent"; owners: Address[]; threshold: bigint; block: RestBlockEvidence }
@@ -48,9 +47,9 @@ const sameOwners = (a: readonly Address[], b: readonly Address[]) =>
 export async function observeWalletOwners(input: { account: Address; chains: number[]; rpc: RestRpc; store?: WalletOwnerStateStore; signal?: AbortSignal; now?: () => number }): Promise<WalletOwnerState[]> {
   const chains = [...new Set(input.chains)];
   const read = (chainId: number) => observe(input.account, chainId, input.rpc, input.now ?? Date.now, input.store, input.signal);
-  const home = read(HOME_CHAIN_ID);
+  const home = read(SIGNA_HOME_CHAIN_ID);
   home.catch(() => undefined);
-  const results = await Promise.allSettled(chains.map(chainId => chainId === HOME_CHAIN_ID ? home : read(chainId)));
+  const results = await Promise.allSettled(chains.map(chainId => chainId === SIGNA_HOME_CHAIN_ID ? home : read(chainId)));
   const expected = await home.catch(() => undefined);
   return chains.map((chainId, index): WalletOwnerState => {
     const result = results[index]!;

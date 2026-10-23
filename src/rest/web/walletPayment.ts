@@ -6,6 +6,7 @@ import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySign
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
 import { recognizeWalletV6UsdcPayment } from '../userOperations/semantics.js';
 import type { WalletPaymentCentralPublic } from '../wallet/paymentPublic.js';
+import { SIGNA_HOME_CHAIN_ID, signaChainName } from '../wallet/chains.js';
 
 // Native assertions and CSRF values stay in this page's memory. A reload recovers
 // the durable review by ID; no proof is put in storage, a URL or diagnostics.
@@ -110,11 +111,11 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   const value = record(input) as unknown as WalletPaymentCentralPublic;
   const accountId = text(value.accountId);
   if (value.version !== 'center-wallet-payment-review-v1' || uuid(value.id) !== id || value.issuer !== location.origin ||
-    value.chainId !== 8453 || !['pending', 'approved', 'cancelled'].includes(value.status)) fail();
+    value.chainId !== SIGNA_HOME_CHAIN_ID || !['pending', 'approved', 'cancelled'].includes(value.status)) fail();
   if (review && review.status !== 'pending' && value.status !== review.status) fail();
   integer(value.createdAtMs); integer(value.expiresAtMs); callback(value);
   const payment = record(value.payment);
-  if (payment.kind !== 'v6-usdc-pay' || payment.chainId !== 8453 || `eip155:8453:${address(payment.account).toLowerCase()}` !== accountId) fail();
+  if (payment.kind !== 'v6-usdc-pay' || payment.chainId !== SIGNA_HOME_CHAIN_ID || `eip155:${SIGNA_HOME_CHAIN_ID}:${address(payment.account).toLowerCase()}` !== accountId) fail();
   address(payment.token); address(payment.terminal); address(payment.beneficiary);
   decimal(payment.amount); decimal(payment.projectId); decimal(payment.minimumReturnedTokens); text(payment.memo, 32768, true);
   if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(text(payment.metadata, 65538))) fail();
@@ -129,19 +130,19 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   }
   const operation = normalizeUserOperation(value.operation);
   if (operation.sender.toLowerCase() !== String(payment.account).toLowerCase() || operation.signature !== '0x' ||
-    getUserOperationHash(operation, value.entryPoint, 8453) !== value.operationHash) fail();
-  const calls = decodeSafe7579Execution(operation.callData).map((call, index) => ({ chainId: 8453, to: call.target, value: call.value,
+    getUserOperationHash(operation, value.entryPoint, SIGNA_HOME_CHAIN_ID) !== value.operationHash) fail();
+  const calls = decodeSafe7579Execution(operation.callData).map((call, index) => ({ chainId: SIGNA_HOME_CHAIN_ID, to: call.target, value: call.value,
     data: call.callData, label: '', decoded: {}, dependsOn: index ? [index - 1] : [] }));
-  const p = value.payment, project = { chainId: 8453, projectId: p.projectId, version: 6 as const };
+  const p = value.payment, project = { chainId: SIGNA_HOME_CHAIN_ID, projectId: p.projectId, version: 6 as const };
   // The shared recognizer derives every displayed economic fact from calldata.
   // A valid SafeOp hash alone cannot bind a separately supplied display summary.
   const derived = recognizeWalletV6UsdcPayment({ draft: { operation: 'pay', account: operation.sender, project, calls, evidence: [], warnings: [],
     summary: { operation: 'pay', project, account: operation.sender, terminal: p.terminal, terminalPath: [p.terminal],
       routerGateway: null, route: 'multi-terminal', payment: { token: p.token, amount: p.amount, unit: 'token-base-units' },
       beneficiary: p.beneficiary, minimumBeneficiaryTokenCount: p.minimumReturnedTokens, metadata: p.metadata } } },
-    value.stepIndexes, { chainId: 8453, ...__SIGNA_PAYMENT_PIN__ });
+    value.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, ...__SIGNA_PAYMENT_PIN__ });
   if (!derived || uoCanonical(derived) !== uoCanonical(p)) fail();
-  const signing = safe7579PasskeyOwnerSigningPayload({ operation, chainId: 8453, entryPoint: value.entryPoint, safe7579: value.safe7579,
+  const signing = safe7579PasskeyOwnerSigningPayload({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: value.entryPoint, safe7579: value.safe7579,
     validAfter: decimal(value.signing.validAfter), validUntil: decimal(value.signing.validUntil) });
   if (signing.digest !== value.signing.digest || signing.signedData !== value.signing.signedData) fail();
   const passkey = record(value.passkey);
@@ -242,7 +243,7 @@ function goBackToApp() {
   if (returning || !review || review.status !== 'approved') return;
   returning = true;
   // Approval is the send: Center submits the operation now, and the app shows what happened to it.
-  setStatus('approved', 'Approved. Sending on Base… the app will show the result.'); render();
+  setStatus('approved', `Approved. Sending on ${signaChainName(SIGNA_HOME_CHAIN_ID)}… the app will show the result.`); render();
   // Framed inside the app, the app shows what happens next: no beat here.
   const back = callback(review); setTimeout(() => location.assign(back), framed ? 0 : 800);
 }

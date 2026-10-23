@@ -11,6 +11,7 @@ import type { WalletEnrollment } from "./enrollment.js";
 import type { WalletCentralSession } from "./login.js";
 import type { WalletAuthorityContext } from "./authority.js";
 import { verifyWalletAssertion, WalletAssertionError, type WalletAssertion } from "./webauthn.js";
+import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from "./chains.js";
 import { observeWalletOwners, type WalletOwnerStateStore } from "./ownerState.js";
 
 /** The account on more chains. The Base creation call carries no chain id, so replaying the exact
@@ -20,16 +21,10 @@ import { observeWalletOwners, type WalletOwnerStateStore } from "./ownerState.js
  * payer funds the bundle for the chains marked centerPays, within explicit caps. */
 export type WalletNetworkFamily = "mainnet" | "testnet";
 export interface WalletNetwork { chainId: number; name: string; family: WalletNetworkFamily; paymentChainId: number; centerPays: boolean; offered: boolean }
-export const walletNetworkCatalog: readonly WalletNetwork[] = Object.freeze([
-  { chainId: 1, name: "Ethereum", family: "mainnet", paymentChainId: 8453, centerPays: false, offered: false },
-  { chainId: 10, name: "Optimism", family: "mainnet", paymentChainId: 8453, centerPays: true, offered: true },
-  { chainId: 42161, name: "Arbitrum", family: "mainnet", paymentChainId: 8453, centerPays: true, offered: true },
-  { chainId: 11155111, name: "Sepolia", family: "testnet", paymentChainId: 84532, centerPays: true, offered: true },
-  { chainId: 11155420, name: "OP Sepolia", family: "testnet", paymentChainId: 84532, centerPays: true, offered: true },
-  { chainId: 421614, name: "Arbitrum Sepolia", family: "testnet", paymentChainId: 84532, centerPays: true, offered: true },
-  { chainId: 84532, name: "Base Sepolia", family: "testnet", paymentChainId: 84532, centerPays: true, offered: true },
-]);
-export const WALLET_HOME_NETWORK = Object.freeze({ chainId: 8453, name: "Base" });
+export const walletNetworkCatalog: readonly WalletNetwork[] = Object.freeze(signaChains.filter(({ chainId }) => chainId !== SIGNA_HOME_CHAIN_ID)
+  .map(({ enabled: _enabled, ...network }) => network));
+export { signaChains };
+export const WALLET_HOME_NETWORK = Object.freeze({ chainId: SIGNA_HOME_CHAIN_ID, name: signaChainName(SIGNA_HOME_CHAIN_ID) });
 /** What Center pays Relayr for one bundle, at most, per family; and how many funded bundles one account may hold per family. */
 export const WALLET_NETWORKS_MAXIMUM_PAYMENT_WEI = Object.freeze({ mainnet: 3n * 10n ** 15n, testnet: 10n ** 16n });
 export const WALLET_NETWORKS_MAXIMUM_BUNDLES_PER_FAMILY = 3;
@@ -66,7 +61,7 @@ export interface WalletNetworksDocumentInput {
  * bound by hash so the approval cannot be reused for another initializer or account. */
 export function walletNetworksDocument(input: WalletNetworksDocumentInput) {
   return {
-    domain: { name: "Juicebox Center Networks", version: "1", chainId: 8453, verifyingContract: getAddress(input.walletAddress) },
+    domain: { name: "Juicebox Center Networks", version: "1", chainId: SIGNA_HOME_CHAIN_ID, verifyingContract: getAddress(input.walletAddress) },
     types: structuredClone(documentTypes), primaryType: "WalletNetworks" as const,
     message: { accountId: input.accountId, purpose: "networks", bundleUuid: input.bundleUuid, chainIds: input.chainIds.map(chainId => BigInt(chainId)),
       factory: getAddress(input.factory), calldataHash: input.calldataHash, paymentChainId: BigInt(input.payment.chainId), paymentTo: getAddress(input.payment.to),
@@ -137,7 +132,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
     const listed = [{ chainId: WALLET_HOME_NETWORK.chainId, name: WALLET_HOME_NETWORK.name, state: "deployed" as WalletNetworkState, txHash: null as Hex | null },
       ...rows.sort((a, b) => a.chainId - b.chainId).map(row => ({ chainId: row.chainId, name: name(row.chainId), state: row.state, txHash: row.txHash }))];
     const deployed = listed.filter(network => network.state === "deployed").map(network => network.chainId);
-    const states = owners ? await observeWalletOwners({ account: getAddress(accountId.slice("eip155:8453:".length)), chains: deployed, rpc, now,
+    const states = owners ? await observeWalletOwners({ account: getAddress(accountId.slice(`eip155:${SIGNA_HOME_CHAIN_ID}:`.length)), chains: deployed, rpc, now,
       ...(options.ownerStates ? { store: options.ownerStates } : {}) }) : [];
     const networks = listed.map(network => {
       const state = states.find(item => item.chainId === network.chainId);
@@ -150,7 +145,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
   }
   async function enrollmentOf(session: WalletCentralSession) {
     const enrollment = await options.enrollments.get(session.enrollmentId);
-    if (!enrollment?.creation || enrollment.receipt?.accountId !== session.accountId || !same(enrollment.creation.address, session.accountId.slice("eip155:8453:".length))) state();
+    if (!enrollment?.creation || enrollment.receipt?.accountId !== session.accountId || !same(enrollment.creation.address, session.accountId.slice(`eip155:${SIGNA_HOME_CHAIN_ID}:`.length))) state();
     return enrollment;
   }
   async function deployedOn(chainId: number, address: Address) {

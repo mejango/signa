@@ -1,9 +1,10 @@
 import { decodeEventLog, decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionData, erc20Abi, getAddress, isAddress, zeroAddress, type Address, type Hex } from "viem";
 import type { StoredPlan, StoredReceipt, SemanticResult } from "../transactions/types.js";
+import { SIGNA_HOME_CHAIN_ID } from "../wallet/chains.js";
 
 /** Trusted host configuration; never populate these addresses from a payment request. */
 export interface WalletV6UsdcPaymentConfig {
-  chainId: 8453;
+  chainId: typeof SIGNA_HOME_CHAIN_ID;
   token: Address;
   directV6Terminal: Address;
 }
@@ -11,7 +12,7 @@ export interface WalletV6UsdcPaymentConfig {
 /** Exact call-derived review facts. Recognition conveys no execution or spending authority. */
 export interface WalletV6UsdcPayment {
   kind: "v6-usdc-pay";
-  chainId: 8453;
+  chainId: typeof SIGNA_HOME_CHAIN_ID;
   account: Address;
   token: Address;
   terminal: Address;
@@ -102,16 +103,16 @@ export function recognizeWalletV6UsdcPayment(
     const { draft } = snapshot(plan, 262_144);
     const indexes = snapshot(stepIndexes, 128);
     const trusted = snapshot(config, 1024);
-    if (trusted.chainId !== 8453 || draft.operation !== "pay") return null;
+    if (trusted.chainId !== SIGNA_HOME_CHAIN_ID || draft.operation !== "pay") return null;
     const token = address(trusted.token), terminal = address(trusted.directV6Terminal), account = address(draft.account);
     if (same(token, terminal) || same(account, terminal) || same(account, token)) return null;
     const calls = draft.calls;
     if (!Array.isArray(calls) || calls.length < 1 || calls.length > 3 || !Array.isArray(indexes) || indexes.length !== calls.length || indexes.some((v, i) => v !== i)) return null;
     const project = object(draft.project);
-    if (project.chainId !== 8453 || (project.version !== undefined && project.version !== 6) || typeof project.projectId !== "string" || !/^[1-9][0-9]*$/.test(project.projectId)) return null;
+    if (project.chainId !== SIGNA_HOME_CHAIN_ID || (project.version !== undefined && project.version !== 6) || typeof project.projectId !== "string" || !/^[1-9][0-9]*$/.test(project.projectId)) return null;
     const projectId = uint(project.projectId);
     for (const [i, call] of calls.entries()) {
-      if (call.chainId !== 8453 || call.value !== "0" || !bytes(call.data) || !Array.isArray(call.dependsOn) || call.dependsOn.length !== (i === 0 ? 0 : 1) || (i > 0 && call.dependsOn[0] !== i - 1)) return null;
+      if (call.chainId !== SIGNA_HOME_CHAIN_ID || call.value !== "0" || !bytes(call.data) || !Array.isArray(call.dependsOn) || call.dependsOn.length !== (i === 0 ? 0 : 1) || (i > 0 && call.dependsOn[0] !== i - 1)) return null;
     }
     const last = calls[calls.length - 1]!;
     if (!same(address(last.to), terminal)) return null;
@@ -127,8 +128,8 @@ export function recognizeWalletV6UsdcPayment(
       if (approval.functionName !== "approve" || !same(approval.args[0], terminal) || approval.args[1] !== (calls.length === 3 && i === 0 ? 0n : amount) || !same(encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: approval.args }), call.data)) return null;
     }
     const summary = object(draft.summary), payment = object(summary.payment), quotedProject = object(summary.project);
-    if (summary.operation !== "pay" || !same(address(summary.account), account) || summary.route !== "multi-terminal" || !same(address(summary.terminal), terminal) || summary.routerGateway !== null || !Array.isArray(summary.terminalPath) || summary.terminalPath.length !== 1 || !same(address(summary.terminalPath[0]), terminal) || quotedProject.chainId !== 8453 || quotedProject.projectId !== project.projectId || (quotedProject.version !== undefined && quotedProject.version !== 6) || !same(address(payment.token), token) || payment.amount !== String(amount) || payment.unit !== "token-base-units" || !same(address(summary.beneficiary), beneficiary) || summary.minimumBeneficiaryTokenCount !== String(minimum) || typeof summary.metadata !== "string" || !same(summary.metadata, metadata)) return null;
-    return Object.freeze({ kind: "v6-usdc-pay", chainId: 8453, account, token, terminal, projectId: String(id), amount: String(amount), beneficiary,
+    if (summary.operation !== "pay" || !same(address(summary.account), account) || summary.route !== "multi-terminal" || !same(address(summary.terminal), terminal) || summary.routerGateway !== null || !Array.isArray(summary.terminalPath) || summary.terminalPath.length !== 1 || !same(address(summary.terminalPath[0]), terminal) || quotedProject.chainId !== SIGNA_HOME_CHAIN_ID || quotedProject.projectId !== project.projectId || (quotedProject.version !== undefined && quotedProject.version !== 6) || !same(address(payment.token), token) || payment.amount !== String(amount) || payment.unit !== "token-base-units" || !same(address(summary.beneficiary), beneficiary) || summary.minimumBeneficiaryTokenCount !== String(minimum) || typeof summary.metadata !== "string" || !same(summary.metadata, metadata)) return null;
+    return Object.freeze({ kind: "v6-usdc-pay", chainId: SIGNA_HOME_CHAIN_ID, account, token, terminal, projectId: String(id), amount: String(amount), beneficiary,
       minimumReturnedTokens: String(minimum), memo, metadata, stepIndexes: Object.freeze([...indexes]), approvalStepIndexes: Object.freeze(indexes.slice(0, -1)),
       paymentStepIndex: calls.length - 1, resetAllowance: calls.length === 3 });
   } catch { return null; }
@@ -141,7 +142,7 @@ export function recognizeWalletV6UsdcPayment(
 export function walletV6UsdcPaymentDomain(plan: Pick<StoredPlan, "draft">, config: WalletV6UsdcPaymentConfig): boolean {
   try {
     const draft = plan.draft;
-    if (config.chainId !== 8453 || draft.operation !== "pay" || !Array.isArray(draft.calls) || !draft.calls.length) return false;
+    if (config.chainId !== SIGNA_HOME_CHAIN_ID || draft.operation !== "pay" || !Array.isArray(draft.calls) || !draft.calls.length) return false;
     const last = draft.calls[draft.calls.length - 1]!;
     if (!same(address(last.to), address(config.directV6Terminal))) return false;
     const decoded = decodeFunctionData({ abi: terminalAbi, data: last.data as Hex });
