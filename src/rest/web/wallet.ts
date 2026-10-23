@@ -92,7 +92,7 @@ function token(value: unknown): string {
 }
 function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; if (state === 'brand') signaBrandLink(status); }
 function render() {
-  signIn.hidden = !sessionKnown || !!session || !!pending || !!retryAction;
+  signIn.hidden = !sessionKnown || !!session || !!pending || !!retryAction || fundsPage;
   signIn.disabled = busy || frameTooSmall() || !signInVisible;
   if (openAsPage) openAsPage.hidden = !framed || !intent;
   retry.hidden = !retryAction || busy;
@@ -200,7 +200,8 @@ async function run(action: () => Promise<void>) {
 async function load() {
   nextRetry = load; setStatus("loading", "Checking your account…");
   const query = new URL(location.href);
-  if (query.hash || [...query.searchParams.keys()].some(key => !["intent", "payment"].includes(key)) || query.searchParams.size > 1) throw new InvalidResponse();
+  // The funds page carries no app return or payment review: those belong to the pages that sign.
+  if (query.hash || [...query.searchParams.keys()].some(key => !["intent", "payment"].includes(key)) || query.searchParams.size > (fundsPage ? 0 : 1)) throw new InvalidResponse();
   paymentReviewId = query.searchParams.get("payment");
   if (paymentReviewId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(paymentReviewId)) throw new InvalidResponse();
   const intentId = query.searchParams.has("intent") ? token(query.searchParams.get("intent")) : null;
@@ -262,6 +263,7 @@ async function continueSession() {
   }
   else if (session && intent) await issue();
   else if (session) setStatus("signed-in", "You are signed in.");
+  else if (fundsPage) location.replace(base || "/");
   else { const carried = notice; notice = null; setStatus(carried?.state ?? "ready", carried?.message ?? "Use Face ID, Touch ID, a screen lock, or a security key."); }
 }
 async function login() {
@@ -358,6 +360,7 @@ async function logout() {
   const result = await request(`${base}/logout`, {}, csrf);
   if (result.loggedOut !== true) throw new InvalidResponse();
   session = null; csrf = ""; pending = null; completionAttempted = false; sessionKnown = true;
+  if (fundsPage) { location.replace(base || "/"); return; }
   setStatus("ready", "You are signed out. You can sign in again with your passkey.");
 }
 function networkView(value: Json): NetworksView {
@@ -373,7 +376,7 @@ function renderNetworks() {
   // The list shows where the account is and where it is arriving; quotes and failures stay out of it.
   const shown = view ? view.networks.filter(item => item.state === "deployed" || item.state === "pending") : [];
   networksList.textContent = view ? shown.map(item => item.state === "deployed" ? item.name : `${item.name} (deploying…)`).join(", ") : "Base";
-  networksAdd.hidden = !view || !view.offered.length || networksOpen || busy;
+  networksAdd.hidden = !view || !view.offered.length || networksOpen || busy || fundsPage;
   networksForm.hidden = !view || !networksOpen;
   element<HTMLButtonElement>("wallet-networks-deploy").disabled = busy;
   // Polling runs beside the busy gate so a click is never dropped; it stops after ten minutes or when nothing is pending.
@@ -514,7 +517,9 @@ async function refreshBalances() {
 // page never sees them. It keeps only Coinbase's returning-user token (no personal data), on this device.
 const funds = element<HTMLFormElement>("wallet-funds"), fundsOpenButton = element<HTMLButtonElement>("wallet-funds-open"), applePayButton = element<HTMLButtonElement>("wallet-funds-applepay");
 const fundsInput = (id: string) => element<HTMLInputElement>(`wallet-funds-${id}`);
-let fundsOffer: { applePay: boolean } | null = null, fundsShown = false, orderTimer: ReturnType<typeof setInterval> | null = null;
+// Coinbase's frame lives only on the funds page, which can use no passkey; the account page, which signs, links to it.
+const fundsPage = location.pathname === `${base}/funds`;
+let fundsOffer: { applePay: boolean } | null = null, fundsShown = fundsPage, orderTimer: ReturnType<typeof setInterval> | null = null;
 const tokenKey = () => `signa-onramp-token:${session?.accountId ?? ""}`;
 function savedToken(): string | null { try { return localStorage.getItem(tokenKey()); } catch { return null; } }
 function saveToken(value: string) { try { localStorage.setItem(tokenKey(), value); } catch { /* Coinbase verifies again next time. */ } }
@@ -623,7 +628,7 @@ function watchOrder(orderId: string) {
     }).catch(() => { /* The next poll reads again. */ });
   }, 5_000);
 }
-fundsOpenButton.addEventListener("click", () => { closePayment(); fundsShown = true; render(); fundsInput("amount").focus(); });
+fundsOpenButton.addEventListener("click", () => { if (!fundsPage) { location.assign(`${base}/funds`); return; } closePayment(); fundsShown = true; render(); fundsInput("amount").focus(); });
 // Enter in the amount means Apple Pay when it is offered; the Coinbase account button is its own path.
 funds.addEventListener("submit", event => {
   event.preventDefault();
@@ -644,7 +649,7 @@ function deviceText(phase: string, signer: string | null = device?.view.deviceSi
 function renderDevice() {
   if (!deviceAdd || !devicePanel) return;
   const open = !!session && !!device;
-  deviceAdd.hidden = !session || open || busy;
+  deviceAdd.hidden = !session || open || busy || fundsPage;
   devicePanel.hidden = !open;
   // Approving the other device is the one thing on the page: the account details step aside.
   const approving = open && device!.view.phase === "awaiting_approval";

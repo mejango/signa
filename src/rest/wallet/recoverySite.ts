@@ -7,7 +7,7 @@ import type { createLocalWalletRecovery } from './recoveryService.js';
 import { walletRecoveryPage, walletRecoveryCss } from '../web/walletRecoveryPage.js';
 import { assertWalletHttpHost, assertWalletHttpRequest, assertWalletCsrf, readWalletCookie, readWalletJson,
   walletCookie, walletCsrfToken, walletRecoveryCookie, walletRecoveryResumeCookie, walletHttpBytes, walletHttpAssertion,
-  walletPageHeaders, type WalletCookieName } from './http.js';
+  walletSigningPageHeaders, type WalletCookieName } from './http.js';
 
 export interface WalletRecoverySiteOptions {
   origin: string; browserScript: string;
@@ -26,7 +26,7 @@ export function mountWalletRecovery(app: Hono, options: WalletRecoverySiteOption
   const { recovery, origin } = options, base = options.basePath ?? '/wallet';
   for (const path of [`${base}/recover`, `${base}/recovery/*`, `${base}/assets/wallet-recovery.*`]) app.use(path, async (c, next) => {
     assertWalletHttpHost(c.req.raw, origin);
-    for (const [name, value] of Object.entries(walletPageHeaders)) c.header(name, value);
+    for (const [name, value] of Object.entries(walletSigningPageHeaders)) c.header(name, value);
     await next();
   });
   function cookie(c: Context, name: WalletCookieName) {

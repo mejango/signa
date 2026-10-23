@@ -2,7 +2,7 @@ import { mountAssets } from '../web/assets.js';
 import type { Context, Hono } from 'hono';
 import { RestError } from '../core.js';
 import { walletAppFields } from './appGrants.js';
-import { assertWalletHttpHost, assertWalletHttpRequest, walletCookie, walletHttpAssertion, walletHttpBytes, walletPageHeaders, walletSessionCookie } from './http.js';
+import { assertWalletHttpHost, assertWalletHttpRequest, walletCookie, walletHttpAssertion, walletHttpBytes, walletSigningPageHeaders, walletSessionCookie } from './http.js';
 import type { WalletCentralSession } from './login.js';
 import type { createLocalWalletDevices } from './deviceService.js';
 import type { WalletDeviceAddition } from './deviceAddition.js';
@@ -29,7 +29,7 @@ export function mountWalletDevices(app: Hono, options: WalletDeviceSiteOptions) 
   const { devices, origin } = options, base = options.basePath ?? '/wallet';
   for (const path of [`${base}/add`, `${base}/devices/*`, `${base}/assets/wallet-device.*`]) app.use(path, async (c, next) => {
     assertWalletHttpHost(c.req.raw, origin);
-    for (const [name, value] of Object.entries(walletPageHeaders)) c.header(name, value);
+    for (const [name, value] of Object.entries(walletSigningPageHeaders)) c.header(name, value);
     await next();
   });
   async function body(c: Context, keys: string[], optional: string[] = []) {
