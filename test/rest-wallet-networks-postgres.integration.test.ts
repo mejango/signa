@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { keccak256, parseTransaction, toHex, type Hex } from "viem";
+import { encodeFunctionData, encodeFunctionResult, keccak256, parseTransaction, toHex, type Address, type Hex } from "viem";
+import { safeAbi } from "../src/rest/smartAccounts/service.js";
 import { privateKeyToAccount } from "viem/accounts";
 import { RELAYR_NATIVE_TOKEN, RELAYR_PAYMENT_ADDRESS, RELAYR_PAYMENT_SELECTOR } from "../src/rest/sponsorship/constants.js";
 import { RELAYR_PAYMENT_RUNTIME } from "./fixtures/relayr-payment.js";
@@ -50,9 +51,16 @@ describeIf("wallet networks against real PostgreSQL", () => {
         return { bundle_uuid: uuid, payment_received: true, transactions: [...entries].reverse().map((entry, i) => ({
           tx_uuid: ids[entries.length - 1 - i], request: { chain: entry.chain, target: entry.target, data: entry.data, value: entry.value },
           status: { state: deployed.has(entry.chain) ? "Included" : "Pending", data: deployed.has(entry.chain) ? { hash: keccak256(toHex(entry.chain)) } : {} } })) }; } };
+    // The account's owners per chain, as each chain's Safe reports them.
+    const owners: Record<number, Address[]> = {}, initialOwners = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000a2"] as Address[];
     const rpc = { async request(chainId: number, method: string, params: readonly unknown[]) {
       calls.push({ chainId, method, params });
       const target = String(params[0]).toLowerCase();
+      if (method === "eth_chainId") return toHex(chainId);
+      const data = (params[0] as { data?: Hex } | undefined)?.data;
+      if (method === "eth_call" && data === encodeFunctionData({ abi: safeAbi, functionName: "getOwners" }))
+        return deployed.has(chainId) || chainId === 8453 ? encodeFunctionResult({ abi: safeAbi, functionName: "getOwners", result: owners[chainId] ?? initialOwners }) : "0x";
+      if (method === "eth_call" && data === encodeFunctionData({ abi: safeAbi, functionName: "getThreshold" })) return encodeFunctionResult({ abi: safeAbi, functionName: "getThreshold", result: 1n });
       if (method === "eth_getCode") {
         if (target === RELAYR_PAYMENT_ADDRESS.toLowerCase()) return RELAYR_PAYMENT_RUNTIME;
         if (target === walletAddress) return deployed.has(chainId) ? "0x6001" : "0x";
@@ -70,15 +78,15 @@ describeIf("wallet networks against real PostgreSQL", () => {
     const payer = privateKeyToAccount(`0x${"55".repeat(32)}`);
     const dependencies: WalletNetworksDependencies = { enrollments: new PostgresWalletEnrollmentStore(pool), authority: new PostgresWalletAuthorityStore(pool),
       store: new PostgresWalletNetworksStore(pool), provider, rpc, payer: { address: payer.address, signTransaction: tx => payer.signTransaction(tx) } };
-    return { fixture, session, creation, amount, calldata, calls, sent, deployed, provider, rpc, payer, dependencies,
+    return { fixture, session, creation, amount, calldata, calls, sent, deployed, owners, provider, rpc, payer, dependencies,
       networks: createWalletNetworks(dependencies) };
   }
 
   it("quotes, approves with one passkey prompt, pays from Center's payer and records each chain as it shows the account", async () => {
-    const { fixture, session, creation, amount, calldata, calls, sent, deployed, provider, rpc, payer, networks } = await setup();
+    const { fixture, session, creation, amount, calldata, calls, sent, deployed, owners, provider, rpc, payer, networks } = await setup();
 
     const before = await networks.list(session);
-    expect(before.networks).toEqual([{ chainId: 8453, name: "Base", state: "deployed", txHash: null }]);
+    expect(before.networks).toEqual([{ chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" }]);
     expect(before.offered.map(item => item.chainId)).toEqual([10, 42161, 11155111, 11155420, 421614, 84532]);
     await expect(networks.quote(session, { chainIds: [10, 84532] })).rejects.toMatchObject({ code: "WALLET_NETWORKS_INVALID" });
     await expect(networks.quote(session, { chainIds: [1] })).rejects.toMatchObject({ code: "WALLET_NETWORKS_INVALID" });
@@ -117,6 +125,10 @@ describeIf("wallet networks against real PostgreSQL", () => {
     deployed.add(42161);
     const done = await networks.status(session);
     expect(done.networks.map(item => `${item.chainId}:${item.state}`)).toEqual(["8453:deployed", "10:deployed", "42161:deployed"]);
+    expect(done.networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "consistent", "consistent"]);
+    // A chain that has code is deployed, not up to date: Base's owners change and both other chains need an update.
+    owners[8453] = ["0x00000000000000000000000000000000000000a1", "0x00000000000000000000000000000000000000b3"];
+    expect((await networks.list(session)).networks.map(item => "owners" in item ? item.owners : null)).toEqual(["consistent", "diverged", "diverged"]);
     expect(done.pending).toEqual([]);
     expect(done.offered.map(item => item.chainId)).toEqual([11155111, 11155420, 421614, 84532]);
     // A quote above what Center covers is refused before anything is stored.

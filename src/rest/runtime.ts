@@ -82,6 +82,7 @@ import type { createLocalWalletRecovery } from './wallet/recoveryService.js';
 import { createLocalWalletDevices } from "./wallet/deviceService.js";
 import { createWalletNetworks } from "./wallet/networks.js";
 import { PostgresWalletNetworksStore } from "./wallet/networksPostgres.js";
+import { PostgresWalletOwnerStateStore } from "./wallet/ownerStatePostgres.js";
 import { PostgresWalletEnrollmentStore } from "./wallet/enrollmentPostgres.js";
 import { RelayrProvider } from "./sponsorship/provider.js";
 import { createWalletOnramp, type WalletOnrampConfig } from "./wallet/onramp.js";
@@ -234,7 +235,8 @@ export async function createRestRuntime(options: {
       onEvent: event => console.info(JSON.stringify({ service: "wallet", action: "authority_refresh", outcome: event })),
     });
     const networks = options.walletNetworksPayer ? createWalletNetworks({ enrollments: new PostgresWalletEnrollmentStore(options.pool), authority,
-      store: new PostgresWalletNetworksStore(options.pool), provider: new RelayrProvider(), rpc, payer: options.walletNetworksPayer }) : undefined;
+      store: new PostgresWalletNetworksStore(options.pool), provider: new RelayrProvider(), rpc,
+      ownerStates: new PostgresWalletOwnerStateStore(options.pool), payer: options.walletNetworksPayer }) : undefined;
     return { origin, login, policy, handoff, appGrants, authority, refresh, refreshQueue, manifestId: walletConfiguration.manifest.id,
       activatePolicy: policy.activate.bind(policy), ...(networks ? { networks } : {}) };
   })() : undefined;
@@ -478,6 +480,7 @@ export async function createRestRuntime(options: {
     ...(walletConfiguration?.payments ? { v6UsdcPayment: { chainId: 8453 as const,
       token: walletConfiguration.payments.token, directV6Terminal: walletConfiguration.payments.directV6Terminal } } : {}),
     provider: operationProvider,
+    ownerStates: new PostgresWalletOwnerStateStore(options.pool),
     ...(execution.sponsorRoutes ? {sponsorRoutes: execution.sponsorRoutes} : {}),
     policies: execution.policies,
     store: new PostgresUserOperationStore(options.pool),

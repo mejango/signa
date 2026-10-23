@@ -43,7 +43,7 @@ describe("release check cannot silently omit required verification", () => {
       "rest-wallet-authority-postgres.integration.test.ts",
       "rest-wallet-authority-refresh-postgres.integration.test.ts",
       "rest-wallet-login-postgres.integration.test.ts", "rest-wallet-handoff-postgres.integration.test.ts",
-      "rest-wallet-networks-postgres.integration.test.ts",
+      "rest-wallet-networks-postgres.integration.test.ts", "rest-wallet-owner-state-postgres.integration.test.ts",
       "rest-wallet-deployment-execution-postgres.integration.test.ts",
       "rest-wallet-deployment-dispatch-evm-postgres.integration.test.ts",
       "rest-wallet-site-postgres.integration.test.ts",

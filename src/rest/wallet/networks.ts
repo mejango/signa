@@ -11,6 +11,7 @@ import type { WalletEnrollment } from "./enrollment.js";
 import type { WalletCentralSession } from "./login.js";
 import type { WalletAuthorityContext } from "./authority.js";
 import { verifyWalletAssertion, WalletAssertionError, type WalletAssertion } from "./webauthn.js";
+import { observeWalletOwners, type WalletOwnerStateStore } from "./ownerState.js";
 
 /** The account on more chains. The Base creation call carries no chain id, so replaying the exact
  * factory call reaches the same CREATE2 address wherever the stack sits at the same addresses;
@@ -103,6 +104,7 @@ export interface WalletNetworksDependencies {
   store: WalletNetworksStore;
   provider: Pick<RelayrProvider, "createIndependent" | "status">;
   rpc: RestRpc;
+  ownerStates?: WalletOwnerStateStore;
   payer?: ServerSigner;
   now?: () => number;
   /** Approval window after a quote; the Relayr payment deadline may be shorter. */
@@ -129,10 +131,18 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
   const maximumPayment = options.maximumPaymentWei ?? WALLET_NETWORKS_MAXIMUM_PAYMENT_WEI, maximumBundles = options.maximumBundlesPerFamily ?? WALLET_NETWORKS_MAXIMUM_BUNDLES_PER_FAMILY;
   const { store, provider, rpc } = options;
   function name(chainId: number) { return chainId === WALLET_HOME_NETWORK.chainId ? WALLET_HOME_NETWORK.name : networkById.get(chainId)?.name ?? `Chain ${chainId}`; }
-  async function view(accountId: string, source = store) {
+  /** Each deployed chain carries its owner state: code on a chain says the account exists there, not that Base's owners hold it. */
+  async function view(accountId: string, source = store, owners = true) {
     const rows = await source.listNetworks(accountId), bundles = await source.listBundles(accountId);
-    const networks = [{ chainId: WALLET_HOME_NETWORK.chainId, name: WALLET_HOME_NETWORK.name, state: "deployed" as const, txHash: null as Hex | null },
+    const listed = [{ chainId: WALLET_HOME_NETWORK.chainId, name: WALLET_HOME_NETWORK.name, state: "deployed" as WalletNetworkState, txHash: null as Hex | null },
       ...rows.sort((a, b) => a.chainId - b.chainId).map(row => ({ chainId: row.chainId, name: name(row.chainId), state: row.state, txHash: row.txHash }))];
+    const deployed = listed.filter(network => network.state === "deployed").map(network => network.chainId);
+    const states = owners ? await observeWalletOwners({ account: getAddress(accountId.slice("eip155:8453:".length)), chains: deployed, rpc, now,
+      ...(options.ownerStates ? { store: options.ownerStates } : {}) }) : [];
+    const networks = listed.map(network => {
+      const state = states.find(item => item.chainId === network.chainId);
+      return state ? { ...network, owners: state.status } : network;
+    });
     const busy = new Set(rows.filter(row => row.state !== "failed").map(row => row.chainId));
     const offered = walletNetworkCatalog.filter(network => network.offered && !busy.has(network.chainId))
       .map(network => ({ chainId: network.chainId, name: network.name, family: network.family, centerPays: network.centerPays }));
@@ -234,7 +244,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
       if (!input || typeof input.bundleId !== "string") invalid("Choose the quoted bundle.");
       const bundleId = input.bundleId, bundle = await store.getBundle(session.accountId, bundleId);
       if (!bundle) state();
-      if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId) };
+      if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId, store, false) };
       if (now() >= bundle.document.expiresAtMs) { await fail(bundle, "quoted"); throw new RestError(410, "WALLET_NETWORKS_EXPIRED", "The quote expired. Get a new quote."); }
       const rows = await store.listNetworks(session.accountId);
       if (bundle.chainIds.some(chainId => !rows.some(row => row.chainId === chainId && row.bundleId === bundle.id && row.state === "quoted"))) state();
@@ -254,7 +264,7 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
         // A previous request may have completed while this one verified the passkey.
         const bundle = await funding.getBundle(session.accountId, bundleId);
         if (!bundle) state();
-        if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId, funding) };
+        if (bundle.state !== "quoted") return { bundle: publicBundle(bundle), replayed: bundle.state !== "failed", view: await view(session.accountId, funding, false) };
         if (now() >= bundle.document.expiresAtMs) { await fail(bundle, "quoted", funding); throw new RestError(410, "WALLET_NETWORKS_EXPIRED", "The quote expired. Get a new quote."); }
         if (value > maximumPayment[bundle.family]) throw new RestError(502, "WALLET_NETWORKS_QUOTE_UNSUPPORTED", "The quote exceeds what Center covers.");
         const call = { from: payer, to: payment.to, data: payment.data, value: toHex(value) };
@@ -277,9 +287,9 @@ export function createWalletNetworks(options: WalletNetworksDependencies) {
         const raw = await options.payer!.signTransaction(transaction), hash = keccak256(raw);
         bundle.state = "paying"; bundle.paymentTx = { hash, raw, nonce: payerNonce, sentAtMs: null };
         // The signed bytes are on record before they leave; a concurrent approval of the same bundle loses here and signs nothing that is sent.
-        if (!await funding.transitionBundle(bundle, "quoted", now())) { const current = (await funding.getBundle(session.accountId, bundle.id))!; return { bundle: publicBundle(current), replayed: true, view: await view(session.accountId, funding) }; }
+        if (!await funding.transitionBundle(bundle, "quoted", now())) { const current = (await funding.getBundle(session.accountId, bundle.id))!; return { bundle: publicBundle(current), replayed: true, view: await view(session.accountId, funding, false) }; }
         await broadcast(bundle, funding);
-        return { bundle: publicBundle(bundle), replayed: false, view: await view(session.accountId, funding) };
+        return { bundle: publicBundle(bundle), replayed: false, view: await view(session.accountId, funding, false) };
       });
     },
     /** Rebroadcasts a signed payment the chain has not seen, then reads the payment receipt, Relayr and code per chain. */

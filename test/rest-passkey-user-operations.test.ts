@@ -13,6 +13,7 @@ import type { ActiveActorGuard } from "../src/rest/transactions/store.js";
 import { TransactionService } from "../src/rest/transactions/service.js";
 import { MemoryTransportReservations } from "../src/rest/transactions/transport-reservations.js";
 import { ENTRY_POINT_V07_ABI } from "../src/rest/userOperations/chain.js";
+import { safeAbi } from "../src/rest/smartAccounts/service.js";
 import { getUserOperationHash, unpackUserOperation, userOperationCommitment } from "../src/rest/userOperations/codec.js";
 import { MemoryUserOperationStore } from "../src/rest/userOperations/memory.js";
 import { passkeyDummyContractSignature, passkeyDummySignature, passkeyEstimateProvider, PASSKEY_MAX_SIGNATURE_BYTES } from "../src/rest/userOperations/passkeyEstimation.js";
@@ -111,9 +112,11 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
     bundlerFees: null as { maxFeePerGas: Hex; maxPriorityFeePerGas: Hex } | null, bundlerDown: false,
     estimated: [] as UserOperationV07[], sent: undefined as UserOperationV07 | undefined,
     baseFee: "0x0" as Hex, finalGasBump: false, nonce: 0n, headLagSeconds: 0, approved: true,
+    /** The Safe's own owner reads: Base's owners unless a test changes them. */
+    safeOwners: {} as Record<number, Address[]>, safeThreshold: 1n, ownersFailure: false,
   };
-  const rpcDefault: RestRpc["request"] = async (_chain, method, params) => {
-    if (method === "eth_chainId") return toHex(8453);
+  const rpcDefault: RestRpc["request"] = async (chain, method, params) => {
+    if (method === "eth_chainId") return toHex(chain);
     if (method === "eth_getBlockByNumber") return { number: "0x64", hash: state.reorg ? h("reorg") : h("passkey-block"), timestamp: toHex(Math.floor(now / 1000) - state.headLagSeconds), baseFeePerGas: state.baseFee };
     if (method === "eth_maxPriorityFeePerGas") return "0x1";
     if (method === "eth_getCode") return state.runtimeFailure && params[0] === signer ? "0x6001" : code;
@@ -124,7 +127,13 @@ async function fixture(options: { app?: boolean; legacy?: boolean; sponsored?: b
         if (state.contractFailure) throw Error("unavailable");
         return state.contractResult;
       }
-      if (call.to.toLowerCase() === safe) return "0x";
+      if (call.to.toLowerCase() === safe) {
+        const read = [encodeFunctionData({ abi: safeAbi, functionName: "getOwners" }), encodeFunctionData({ abi: safeAbi, functionName: "getThreshold" })].indexOf(call.data);
+        if (read >= 0 && state.ownersFailure) throw Error("unavailable");
+        if (read === 0) return encodeFunctionResult({ abi: safeAbi, functionName: "getOwners", result: state.safeOwners[chain] ?? wallet.state.owners });
+        if (read === 1) return encodeFunctionResult({ abi: safeAbi, functionName: "getThreshold", result: state.safeThreshold });
+        return "0x";
+      }
       const decoded = decodeFunctionData({ abi: ENTRY_POINT_V07_ABI, data: call.data });
       // Key zero follows `state.nonce`; any other key stays at its first sequence.
       if (decoded.functionName === "getNonce") return toHex(decoded.args[1] === 0n ? state.nonce : decoded.args[1] << 64n, { size: 32 });
@@ -305,8 +314,9 @@ describe("app UserOperation owner boundary", () => {
     const f = await fixture({ app: true, paymentMetadata: "0x" }), view = await f.prepare();
     simulating(f);
     const inner = f.rpc.getMockImplementation()!;
-    f.rpc.mockImplementation(async (chain, method, params, signal) => method === "eth_call" && (params[0] as { to: string }).to.toLowerCase() === safe
-      ? Promise.reject(new Error("execution reverted")) : inner(chain, method, params, signal));
+    // The account's own owner reads still answer; the calls simulated from it revert.
+    f.rpc.mockImplementation(async (chain, method, params, signal) => method === "eth_call" && (params[0] as { to: string; data: Hex }).to.toLowerCase() === safe
+      && size((params[0] as { data: Hex }).data) > 4 ? Promise.reject(new Error("execution reverted")) : inner(chain, method, params, signal));
     const signature = encodeSafe7579PasskeyOwnerSignature({ validAfter: String(view.createdAt / 1000), validUntil: String(view.expiresAt / 1000),
       signatures: [{ kind: "ecdsa", owner: ownerKey.address, signature: await ownerKey.sign({ hash: view.signing.digest }) }] });
     await expect(f.service.submit(f.principal, view.id, signature, "submit"))
@@ -317,6 +327,59 @@ describe("app UserOperation owner boundary", () => {
     other.state.estimateFailure = true;
     await expect(other.prepare()).rejects.toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED" });
     expect(other.rpc.mock.calls.some(([, method]) => method === "eth_simulateV1")).toBe(false);
+  });
+
+  it("refuses to prepare or admit while the account's owners differ from Base's or cannot be read", async () => {
+    // Threshold one is part of the owner state every chain must carry.
+    const diverged = await fixture(); diverged.state.safeThreshold = 2n;
+    await expect(diverged.prepare()).rejects.toMatchObject({ status: 409, code: "WALLET_OWNERS_DIVERGED" });
+    const unread = await fixture(); unread.state.ownersFailure = true;
+    await expect(unread.prepare()).rejects.toMatchObject({ status: 503, code: "WALLET_OWNERS_UNKNOWN" });
+    // A change between the review and the approval refuses the approval: nothing is claimed or sent.
+    const f = await fixture({ app: true }), view = await f.prepare();
+    // The changed owners also fail the account check; the divergence is the reason given.
+    f.state.safeThreshold = 2n; f.state.bindingFailure = true;
+    const signature = encodeSafe7579PasskeyOwnerSignature({ validAfter: String(view.createdAt / 1000), validUntil: String(view.expiresAt / 1000),
+      signatures: [{ kind: "ecdsa", owner: ownerKey.address, signature: await ownerKey.sign({ hash: view.signing.digest }) }] });
+    await expect(f.service.submit(f.principal, view.id, signature, "submit")).rejects.toMatchObject({ code: "WALLET_OWNERS_DIVERGED" });
+    expect((await f.store.get(f.actor, view.id))!.submission).toBeUndefined();
+    expect(f.state.sends).toBe(0);
+    // A speculation made while the owners matched is not enough: the approval reads them again.
+    const g = await fixture({ app: true }), speculated = await g.prepare();
+    await g.service.speculate(g.actor, speculated.id);
+    g.state.ownersFailure = true;
+    const approval = encodeSafe7579PasskeyOwnerSignature({ validAfter: String(speculated.createdAt / 1000), validUntil: String(speculated.expiresAt / 1000),
+      signatures: [{ kind: "ecdsa", owner: ownerKey.address, signature: await ownerKey.sign({ hash: speculated.signing.digest }) }] });
+    await expect(g.service.submit(g.principal, speculated.id, approval, "submit")).rejects.toMatchObject({ status: 503, code: "WALLET_OWNERS_UNKNOWN" });
+    expect(g.state.sends).toBe(0);
+  });
+
+  it("refuses an operation on another chain whose owners diverge from Base, naming the divergence", async () => {
+    const f = await fixture();
+    f.preparedPlan.smartAccount!.chainId = 10; f.wallet.wallet.chainId = 10;
+    vi.spyOn(f.transactionStore, "get").mockResolvedValue(f.preparedPlan);
+    // Optimism still carries the passkey a Base recovery replaced.
+    f.state.safeOwners[8453] = [h("rotated").slice(0, 42) as Address, ownerKey.address];
+    await expect(f.prepare()).rejects.toMatchObject({ status: 409, code: "WALLET_OWNERS_DIVERGED" });
+    // Matching owners there leave the refusal to the chain's own checks (this fixture configures Base only).
+    f.state.safeOwners[8453] = f.wallet.state.owners;
+    const refused = await f.prepare().catch((error: { code: string }) => error);
+    expect(refused).toMatchObject({ code: expect.any(String) });
+    expect((refused as { code: string }).code).not.toMatch(/^WALLET_OWNERS/);
+  });
+
+  it("starts the owner reads beside the prepare reads", async () => {
+    const f = await fixture();
+    let nonceRead!: () => void;
+    const nonce = new Promise<void>(resolve => { nonceRead = resolve; });
+    f.rpc.mockImplementation(async (chain, method, params, signal) => {
+      const call = params[0] as { to?: string; data?: Hex } | undefined;
+      if (method === "eth_call" && call?.to?.toLowerCase() === entryPoint.toLowerCase() && decodeFunctionData({ abi: ENTRY_POINT_V07_ABI, data: call.data! }).functionName === "getNonce") nonceRead();
+      // An owner read answers only once the nonce read has gone out: run in sequence, this would never finish.
+      if (method === "eth_call" && call?.to?.toLowerCase() === safe && size(call.data!) === 4) await nonce;
+      return f.rpcDefault(chain, method, params, signal);
+    });
+    expect((await f.prepare()).state).toBe("prepared");
   });
 
   it("rejects a non-Base app plan before account/provider work", async () => {
@@ -458,8 +521,8 @@ describe("passkey UserOperation estimation", () => {
     const calls = (method: string) => f.rpc.mock.calls.filter(([, m]) => m === method).length;
     const provider = (method: string) => f.fetcher.mock.calls.filter(([, init]) => JSON.parse(String(init?.body)).method === method).length;
     // One head read prices the operation: the head, and the final canonical recheck beside the sponsorship;
-    // the pinned nonce read needs no recheck of its own.
-    expect(calls("eth_getBlockByNumber")).toBe(2);
+    // the pinned nonce read needs no recheck of its own. The owner check reads Base's head beside them.
+    expect(calls("eth_getBlockByNumber")).toBe(3);
     expect(BigInt(view.operation.maxFeePerGas)).toBe(2n * 0x10n + 2n);
     expect(provider("pm_getPaymasterStubData")).toBe(1);
     const again = await f.service.prepare(f.principal, { planId: f.preparedPlan.id, stepIndexes: [0] }, "prepare-2", h("prepare-2"));

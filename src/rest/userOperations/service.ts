@@ -60,6 +60,7 @@ import { assertPasskeyUserOperationEnvelope, userOperationPasskeyProfile, verify
 import { safe7579PasskeyOwnerSigningPayload } from "../smartAccounts/passkeySignatures.js";
 import { createPasskeyContractSignatureVerifier } from "../smartAccounts/passkeyContractVerifier.js";
 import { finalizeUserOperationSponsorship } from "./sponsorship.js";
+import { assertOwnersConsistent, observeWalletOwners, type WalletOwnerStateStore } from "../wallet/ownerState.js";
 import {
   digest,
   isRecoverable,
@@ -132,6 +133,8 @@ export interface UserOperationServiceDependencies {
   semanticVerifier: SemanticVerifier;
   /** Optional reviewed host profile; absent configuration retains generic batch uncertainty. */
   v6UsdcPayment?: WalletV6UsdcPaymentConfig;
+  /** The last owner observation per chain, reused while its block is still the head. */
+  ownerStates?: WalletOwnerStateStore;
   now?: () => number;
 }
 export interface UserOperationPreparationInput {
@@ -279,6 +282,13 @@ export class UserOperationService {
         "Prepare a fresh plan before requesting another operation.",
       );
     return plan;
+  }
+  /** A passkey account acts on a chain only while that chain carries Base's owners and threshold one. */
+  private async owners(plan: StoredPlan, signal?: AbortSignal): Promise<void> {
+    if (!this.options.manifestForPlan(plan).ownerProfile) return;
+    const chainId = plan.smartAccount!.chainId;
+    assertOwnersConsistent(await observeWalletOwners({ account: plan.draft.account, chains: [chainId], rpc: this.options.rpc, now: this.now,
+      ...(this.options.ownerStates ? { store: this.options.ownerStates } : {}), ...(signal ? { signal } : {}) }), chainId);
   }
   private async account(plan: StoredPlan, signal?: AbortSignal, at?: RestBlockEvidence) {
     const approved = plan.smartAccount!;
@@ -432,9 +442,15 @@ export class UserOperationService {
     }
     const stages: Record<string, number> = {};
     const stage = ((last) => (name: string) => { const now = Date.now(); stages[name] = now - last; last = now; })(Date.now());
-    const { binding, manifest } = await this.account(plan, signal);
+    // The owner reads start beside the account's and are awaited with the head reads; an account
+    // refused here reports its owner divergence first, when it has one.
+    const owners = this.owners(plan, signal);
+    owners.catch(() => undefined);
+    let account: Awaited<ReturnType<typeof this.account>>, passkeyProfile: ReturnType<typeof userOperationPasskeyProfile>;
+    try { account = await this.account(plan, signal); passkeyProfile = userOperationPasskeyProfile(account.binding, account.manifest); }
+    catch (error) { await owners; throw error; }
+    const { binding, manifest } = account;
     stage("accountMs");
-    const passkeyProfile = userOperationPasskeyProfile(binding, manifest);
     if (passkeyProfile && input.sessionId)
       fail("USER_OPERATION_PASSKEY_SESSION_UNAVAILABLE", "The passkey pilot requires fresh owner approval for every operation.", 422);
     if (passkeyProfile) this.passkeyPayMetadata(plan, input.stepIndexes);
@@ -484,7 +500,8 @@ export class UserOperationService {
       ? ahead.reads.then((reads) => reads.chainId === binding.wallet.chainId && same(reads.sender, binding.wallet.address)
           && same(reads.entryPoint, manifest.entryPoint!.address) && Date.now() - reads.readAt <= 10_000 ? reads : undefined)
       : Promise.resolve(undefined);
-    const [, { nonce, evidence, baseFeePerGas }, nodePriority, floor] = await Promise.all([
+    const [, , { nonce, evidence, baseFeePerGas }, nodePriority, floor] = await Promise.all([
+      timed("ownersMs", owners),
       timed("readinessMs", early.then((reads) => reads?.ready ? undefined : provider.readiness(binding.wallet.chainId, signal))),
       timed("nonceMs", early.then((reads) => reads?.head ?? chain.nonce(binding.wallet.chainId, binding.wallet.address, nonceKey, manifest.entryPoint!))),
       timed("priorityMs", early.then((reads) => reads?.nodePriority ?? chain.request(binding.wallet.chainId, "eth_maxPriorityFeePerGas", []))),
@@ -960,6 +977,8 @@ export class UserOperationService {
       // verification path: the exact signed operation is checked before claim. This is
       // point-in-time provider evidence; later fee changes remain possible.
       const admission = await Promise.allSettled([
+        // Carried from a speculation: the owners are read again now, beside the signature checks.
+        carried ? this.owners(plan, signal) : undefined,
         // Carried from a speculation: the EntryPoint's validation of the exact signed bytes, the
         // one head-bound check that needs the signature, runs now at that same head.
         carried ? this.chain(signal).validateSigned(this.execution(record, operation, plan, planManifest), carried.head, carried.preflight.validationOrigin ?? "0x000000000000000000000000000000000000dEaD") : undefined,
@@ -1026,9 +1045,9 @@ export class UserOperationService {
     return claimed;
   }
 
-  /** One canonical head for the whole submission. The account verification and the EntryPoint
-   * preflight are independent of each other at that head, so they run together; both must pass
-   * before the signature check, the signed estimate and the nonce claim. */
+  /** One canonical head for the whole submission. The account verification, the EntryPoint
+   * preflight and the owner reads on every chain are independent, so they run together; all must
+   * pass before the signature check, the signed estimate and the nonce claim. */
   private async verifyAtHead(input: {
     record: UserOperationRecord; plan: StoredPlan; operation: UserOperationV07; policy: ReturnType<UserOperationService["policy"]>;
     provider: UserOperationProvider; planManifest: SmartAccountManifest; signal: AbortSignal | undefined;
@@ -1041,12 +1060,14 @@ export class UserOperationService {
     const checks = await Promise.allSettled([
       this.account(plan, signal, head),
       this.chain(signal).preflight(this.execution(record, operation, plan, planManifest), policy.gas, provider, head, { signed: input.signed !== false }),
+      this.owners(plan, signal),
     ]);
     stage("checksMs");
-    // Both finished at that head; the first failure in this order is the one reported.
-    for (const check of checks) if (check.status === "rejected") throw check.reason;
-    const { binding, manifest } = (checks[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof this.account>>>).value;
-    const preflight = (checks[1] as PromiseFulfilledResult<Awaited<ReturnType<UserOperationChain["preflight"]>>>).value;
+    // All finished; an owner divergence is named first, as at preparation, then the account and the simulation.
+    const [accountCheck, preflightCheck, ownersCheck] = checks;
+    for (const check of [ownersCheck, accountCheck, preflightCheck]) if (check.status === "rejected") throw check.reason;
+    const { binding, manifest } = (accountCheck as PromiseFulfilledResult<Awaited<ReturnType<typeof this.account>>>).value;
+    const preflight = (preflightCheck as PromiseFulfilledResult<Awaited<ReturnType<UserOperationChain["preflight"]>>>).value;
     return { head, binding, manifest, preflight };
   }
   /** The admission's head-bound checks, run ahead of the approval and held per operation: keyed by the
