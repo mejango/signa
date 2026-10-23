@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import type { Pool } from "pg";
-import type { Hex } from "viem";
 import { keepUpstreamConnections } from "./keepAlive.js";
 import { migrate } from "./db/migrate.js";
 import { createPool, PostgresStore } from "./db/postgres.js";
@@ -16,6 +15,7 @@ import { readRestExecutionConfiguration } from "./rest/executionConfig.js";
 import { Metrics } from "./observability.js";
 import { createSignaApp, type SignaHttpRuntime } from "./signaApp.js";
 import { createSignaServer } from "./signaServer.js";
+import { envServerSigner } from "./rest/signer.js";
 
 function positiveInteger(name: string, fallback: number): number {
   const value = Number(process.env[name] ?? fallback);
@@ -34,11 +34,6 @@ function flag(name: string, fallback = false): boolean {
   const value = process.env[name] ?? String(fallback);
   if (value !== "true" && value !== "false") throw new Error(`${name} must be true or false`);
   return value === "true";
-}
-function signer(name: string): Hex | undefined {
-  const value = process.env[name];
-  if (value && !/^0x[0-9a-fA-F]{64}$/.test(value)) throw new Error(`${name} must be a 32-byte hex private key`);
-  return value as Hex | undefined;
 }
 
 const enabled = process.env.SIGNA_RUNTIME_ENABLED ?? "false";
@@ -61,9 +56,9 @@ async function activate(): Promise<void> {
   if (!connectionString) throw new Error("DATABASE_URL is required when Signa is enabled");
   const creation = configuredGroup(["WALLET_CREATION_SIGNER_KEY", "WALLET_CREATION_POOL_ID", "WALLET_CREATION_ALLOCATION_WEI", "WALLET_CREATION_INITIAL_NONCE"]);
   const recovery = configuredGroup(["WALLET_RECOVERY_SIGNER_KEY", "WALLET_RECOVERY_MAX_OPERATIONS", "WALLET_RECOVERY_MAX_COST_WEI"]);
-  const creationKey = signer("WALLET_CREATION_SIGNER_KEY");
-  const recoveryKey = signer("WALLET_RECOVERY_SIGNER_KEY");
-  const networksPayerKey = signer("WALLET_NETWORKS_PAYER_KEY");
+  const creationSigner = envServerSigner("WALLET_CREATION_SIGNER_KEY");
+  const recoverySigner = envServerSigner("WALLET_RECOVERY_SIGNER_KEY");
+  const networksPayer = envServerSigner("WALLET_NETWORKS_PAYER_KEY");
   const frameableAppOrigins = origins("WALLET_FRAMEABLE_APP_ORIGINS");
   const onramp = configuredGroup(["CDP_API_KEY_ID", "CDP_API_KEY_SECRET"]) ? { keyId: process.env.CDP_API_KEY_ID!,
     secret: process.env.CDP_API_KEY_SECRET!, applePay: flag("CDP_ONRAMP_APPLE_PAY", true), sandbox: flag("CDP_ONRAMP_SANDBOX") } : undefined;
@@ -79,27 +74,28 @@ async function activate(): Promise<void> {
   const stack = await createBaseWalletProductionStack();
   const wallet: RestWalletConfiguration = { origin, frameableAppOrigins,
     manifest: stack.manifest, utility: stack.utility, basePath: "", payments: stack.payments,
-    ...(networksPayerKey ? { networksPayerKey } : {}), ...(onramp ? { onramp } : {}),
+    ...(onramp ? { onramp } : {}),
     ...(process.env.CDP_APPLE_PAY_DOMAIN_FILE ? { applePayDomainFile: process.env.CDP_APPLE_PAY_DOMAIN_FILE } : {}) };
   const rpcUrl = `https://${DWELLIR_RPC_HOSTS[8453]}/${process.env.DWELLIR_API_KEY}`;
   accountRuntime = await createRestRuntime({
     surface: "wallet",
     pool, store, services: protocol.services, config: protocol.config, upstreams, audience, wallet,
     rpcSiteLimitPerMinute, metrics: new Metrics(), executionConfiguration: await readRestExecutionConfiguration(process.env),
+    ...(networksPayer ? { walletNetworksPayer: networksPayer } : {}),
     ...(creation ? { walletSignup: (context: Parameters<typeof createBaseWalletSignupHost>[0]) => createBaseWalletSignupHost(context, {
-      url: rpcUrl, signerKey: creationKey!, poolId: process.env.WALLET_CREATION_POOL_ID!,
+      url: rpcUrl, signer: creationSigner!, poolId: process.env.WALLET_CREATION_POOL_ID!,
       allocationWei: process.env.WALLET_CREATION_ALLOCATION_WEI!, initialNonce: process.env.WALLET_CREATION_INITIAL_NONCE!,
       manifest: stack.manifest, utility: stack.utility,
       onEvent: event => { if (event.stage !== "worker" || event.outcome !== "pass") console.info(JSON.stringify({ service: "signa", action: "creation", ...event })); },
     }) } : {}),
     ...(recovery ? {
       walletRecovery: (context: Parameters<typeof createBaseWalletRecoveryHost>[0]) => createBaseWalletRecoveryHost(context, {
-        url: rpcUrl, signerKey: recoveryKey!, maximumOperations: positiveInteger("WALLET_RECOVERY_MAX_OPERATIONS", 1),
+        url: rpcUrl, signer: recoverySigner!, maximumOperations: positiveInteger("WALLET_RECOVERY_MAX_OPERATIONS", 1),
         maximumCostWei: process.env.WALLET_RECOVERY_MAX_COST_WEI!, manifest: stack.manifest, utility: stack.utility,
         onEvent: event => console.info(JSON.stringify({ service: "signa", action: "recovery", ...event })),
       }),
       walletDevices: (context: Parameters<typeof createBaseWalletDeviceHost>[0]) => createBaseWalletDeviceHost(context, {
-        url: rpcUrl, signerKey: recoveryKey!, maximumOperations: positiveInteger("WALLET_RECOVERY_MAX_OPERATIONS", 1),
+        url: rpcUrl, signer: recoverySigner!, maximumOperations: positiveInteger("WALLET_RECOVERY_MAX_OPERATIONS", 1),
         maximumCostWei: process.env.WALLET_RECOVERY_MAX_COST_WEI!, manifest: stack.manifest, utility: stack.utility,
         onDeviceEvent: event => console.info(JSON.stringify({ service: "signa", action: "device", ...event })),
       }),

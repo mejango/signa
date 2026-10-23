@@ -2,6 +2,7 @@
 // initializes Base accounting once with the explicit first nonce, and mounts the worker.
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
+import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Store } from "../src/store.js";
 import { createCenterMcp } from "../src/mcp.js";
@@ -43,10 +44,10 @@ suite("hosted Base signup runtime host", () => {
     return createRestRuntime({ pool, store, services, config, upstreams: new Map(), rpc: fixture.readOnlyRpc,
       executionConfiguration: await readRestExecutionConfiguration({}), startMaintenance: false,
       wallet: { origin, manifest: fixture.manifest, utility: fixture.utility },
-      walletSignup: context => createBaseWalletSignupHost(context, { url: fixture.endpoint, genesisHash: fixture.genesisHash, signerKey,
+      walletSignup: context => createBaseWalletSignupHost(context, { url: fixture.endpoint, genesisHash: fixture.genesisHash, signer: privateKeyToAccount(signerKey),
         ...host, allocationWei: "5000000000000000", manifest: fixture.manifest, utility: fixture.utility }),
       walletRecovery: context => createBaseWalletRecoveryHost(context, { url: fixture.endpoint, genesisHash: fixture.genesisHash,
-        signerKey: `0x${"55".repeat(32)}`, maximumOperations: 10, maximumCostWei: "100000000000000000", manifest: fixture.manifest, utility: fixture.utility }) });
+        signer: privateKeyToAccount(`0x${"55".repeat(32)}`), maximumOperations: 10, maximumCostWei: "100000000000000000", manifest: fixture.manifest, utility: fixture.utility }) });
   }
 
   it("refuses a first nonce that does not match the sender's actual nonce instead of adopting the provider value", async () => {

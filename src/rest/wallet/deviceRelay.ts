@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Hex } from 'viem';
-import type { PrivateKeyAccount } from 'viem/accounts';
+import type { ServerSigner } from '../signer.js';
 import { RestError } from '../core.js';
 import type { ContractPin, SmartAccountManifest } from '../smartAccounts/types.js';
 import { stable } from '../smartAccounts/service.js';
@@ -28,7 +28,7 @@ const wire = (assertion: WalletAssertion) => ({ credentialId: assertion.credenti
 /** Adding a device through the shared owner-change relay: the primary passkey approves an owner
  * addition; afterwards the primary is unchanged and the new signer is one of the profile's devices. */
 export function createWalletDeviceRelay(options: {
-  pool: Pool; adapter: WalletRecoveryRelayAdapter; signer: PrivateKeyAccount;
+  pool: Pool; adapter: WalletRecoveryRelayAdapter; signer: ServerSigner;
   manifest: SmartAccountManifest; utility: ContractPin; maximumOperations: number; maximumCostWei: string;
 }) {
   const source: WalletOwnerRelaySource<Record, WalletDeviceAddition, WalletDeviceApproval> = {

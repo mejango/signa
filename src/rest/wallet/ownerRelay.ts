@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { keccak256, padHex, parseTransaction, recoverTransactionAddress, stringToHex, toHex, type Address, type Hex } from 'viem';
 import { PostgresSafe7579CheckpointStore } from '../smartAccounts/checkpoints.js';
-import type { PrivateKeyAccount } from 'viem/accounts';
+import type { ServerSigner } from '../signer.js';
 import { RestError, type RestBlockEvidence, type RestRpc } from '../core.js';
 import type { ContractPin, SmartAccountManifest } from '../smartAccounts/types.js';
 import { createSmartAccountService, stable } from '../smartAccounts/service.js';
@@ -98,7 +98,7 @@ const total = (fees: WalletRecoveryReceiptFees) => BigInt('totalWei' in fees ? f
  * accepts an RPC from HTTP, shares a signup treasury or handles a recovery private key. Reservations
  * never recycle; actual fees are retained and an overspend fences the lane. */
 export function createWalletOwnerRelay<Record, Review extends { safeNonce: string }, Approval>(options: {
-  pool: Pool; adapter: WalletRecoveryRelayAdapter; signer: PrivateKeyAccount;
+  pool: Pool; adapter: WalletRecoveryRelayAdapter; signer: ServerSigner;
   manifest: SmartAccountManifest; utility: ContractPin; maximumOperations: number; maximumCostWei: string;
 }, source: WalletOwnerRelaySource<Record, Review, Approval>) {
   const { pool, adapter } = options, T = source.tables;

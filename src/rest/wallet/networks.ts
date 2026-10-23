@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getAddress, hashTypedData, keccak256, toHex, type Address, type Hex, type TransactionSerializableEIP1559 } from "viem";
 import { RestError, type RestRpc } from "../core.js";
+import type { ServerSigner } from "../signer.js";
 import { RELAYR_PAYMENT_CODE_HASH, RELAYR_PAYMENT_GAS } from "../sponsorship/constants.js";
 import { assertPaymentEligible, bindIndependentQuoteStatus, parseIndependentQuoteBinding, parseIndependentStatus, type RelayrProvider } from "../sponsorship/provider.js";
 import type { RelayrIndependentEntry, RelayrPayment, RelayrQuote } from "../sponsorship/types.js";
@@ -96,14 +97,13 @@ export interface WalletNetworksStore {
   claimNetworks(accountId: string, chainIds: number[], bundleId: string, now: number): Promise<number>;
   upsertNetwork(accountId: string, row: Omit<WalletNetworkRow, "updatedAtMs">, now: number): Promise<void>;
 }
-export interface WalletNetworksPayer { address: Address; signTransaction(transaction: TransactionSerializableEIP1559): Promise<Hex> }
 export interface WalletNetworksDependencies {
   enrollments: { get(id: string): Promise<WalletEnrollment | null> };
   authority: { loadContext(accountId: string): Promise<WalletAuthorityContext> };
   store: WalletNetworksStore;
   provider: Pick<RelayrProvider, "createIndependent" | "status">;
   rpc: RestRpc;
-  payer?: WalletNetworksPayer;
+  payer?: ServerSigner;
   now?: () => number;
   /** Approval window after a quote; the Relayr payment deadline may be shorter. */
   approvalWindowMs?: number;

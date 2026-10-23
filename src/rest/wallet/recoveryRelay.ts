@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import type { Hex } from 'viem';
-import type { PrivateKeyAccount } from 'viem/accounts';
+import type { ServerSigner } from '../signer.js';
 import type { ContractPin, SmartAccountManifest } from '../smartAccounts/types.js';
 import { RestError } from '../core.js';
 import { stable } from '../smartAccounts/service.js';
@@ -27,7 +27,7 @@ const legacy = (status: LocalWalletOwnerStatus): LocalWalletRecoveryStatus => ({
 /** Recovery replaces the primary passkey's signer through the shared owner-change relay: the
  * backup owner approves a swap, the new signer must then be the profile's primary signer. */
 export function createWalletRecoveryRelay(options: {
-  pool: Pool; adapter: WalletRecoveryRelayAdapter; signer: PrivateKeyAccount;
+  pool: Pool; adapter: WalletRecoveryRelayAdapter; signer: ServerSigner;
   manifest: SmartAccountManifest; utility: ContractPin; maximumOperations: number; maximumCostWei: string;
 }) {
   const source: WalletOwnerRelaySource<Record, WalletRecoveryRotation, Approval> = {

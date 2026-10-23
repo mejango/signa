@@ -1,5 +1,6 @@
 import { isAddress, type Hex, type TransactionSerializableEIP1559 } from "viem";
 import { RestError } from "../core.js";
+import type { ServerSigner } from "../signer.js";
 import { enrollmentDigest } from "./enrollment.js";
 import { prepareWalletDeploymentTemplate, validateSignedWalletDeployment } from "./deployment.js";
 import { walletDeploymentRelayPolicy } from "./deploymentPostgres.js";
@@ -24,7 +25,7 @@ export interface WalletDeploymentExperimentalTransport {
 }
 export interface WalletDeploymentExecutionOptions {
   store: WalletDeploymentExecutionStore;
-  signer: { address: Hex; signTransaction(transaction: TransactionSerializableEIP1559): Promise<Hex> };
+  signer: ServerSigner;
   chain: { observeSigned(context: Pick<WalletDeploymentExecutionContext, "enrollment" | "operation">,
     signal?: AbortSignal, options?: { inspection?: "full" | "inclusion" }): Promise<WalletDeploymentObservation> };
   experimentalTransport?: WalletDeploymentExperimentalTransport;
