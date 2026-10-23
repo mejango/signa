@@ -55,9 +55,12 @@ describe("server-owned hosted execution configuration", () => {
       gas: {
         maximumCallGas: 1000000n,
         maximumPaymasterPostOpGas: 0n,
-        requirePaymaster: true,
+        requirePaymaster: false,
       },
     });
+    expect(result.sponsorCaps).toBeUndefined();
+    expect((await parse({ ...configured, gas: { ...gas, requirePaymaster: true } })).policies[0]?.gas.requirePaymaster).toBe(true);
+    await expect(parse({ ...configured, gas: { ...gas, requirePaymaster: "yes" } })).rejects.toMatchObject({ code: "REST_EXECUTION_CONFIG_INVALID" });
     expect(result.paymasters[0]?.address.toLowerCase()).toBe(
       result.providers[0]?.paymasterPolicy?.contract.address.toLowerCase(),
     );

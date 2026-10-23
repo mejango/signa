@@ -1,11 +1,10 @@
 import { describe, expect, test } from "vitest";
 import {
   isSponsoredChain,
-  readSponsorPolicy,
-  reservationWei,
   sponsoredChains,
   sponsorFamily,
 } from "../../src/sponsor/policy.js";
+import { readSponsorPolicy, reservationWei } from "../../src/rest/sponsorCaps.js";
 
 describe("sponsor policy", () => {
   test("family by chain set", () => {

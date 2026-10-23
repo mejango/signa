@@ -413,6 +413,7 @@ export async function observeUserOperation(
         details:
           "EntryPoint independently reports that this account execution failed.",
       },
+      actualGasCost: event.actualGasCost.toString(),
       ...(payFailure ? { payFailure } : {}),
     };
   }
@@ -434,6 +435,7 @@ export async function observeUserOperation(
     transactionHash,
     state: verified && confirmations >= options.confirmations ? "confirmed" : "confirming",
     receipt: scopedReceipt,
+    actualGasCost: event.actualGasCost.toString(),
     scopedLogs,
     semantic,
     ...(verified ? { verifiedAtBlock: evidence.blockHash } : { reason: "The account is being verified at the execution block." }),

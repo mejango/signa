@@ -52,11 +52,11 @@ import {
 import { LaneError } from "./sponsor/chain.js";
 import {
   isSponsoredChain,
-  reservationWei,
   sponsoredChains,
   sponsorFamily,
   type SponsorRuntime,
 } from "./sponsor/policy.js";
+import { reservationWei } from "./rest/sponsorCaps.js";
 import type { Intent, JbcenterEnv } from "./types.js";
 import { mountRestSite, type RestSite } from "./rest/site.js";
 import { createWalletHostMatcher } from "./walletHosts.js";
