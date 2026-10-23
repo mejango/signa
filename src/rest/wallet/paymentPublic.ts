@@ -50,7 +50,7 @@ export function publicWalletPaymentReview(view: WalletPaymentReviewView): Wallet
     app: { origin: d.grant.origin, callbackUri: d.grant.callbackUri, grantId: d.grant.id, grantIncarnation: d.grant.incarnation },
     planId: d.planId, planCommitment: d.planCommitment, operationId: d.operationId, operationCommitment: d.operationCommitment,
     operationHash: d.operationHash, stepIndexes: [...d.stepIndexes], operation: structuredClone(d.operation),
-    chainId: d.chainId, entryPoint: d.entryPoint, safe7579: d.safe7579, payment: structuredClone(d.payment),
+    chainId: d.chainId, entryPoint: d.entryPoint, safe7579: d.safe7579, payment: structuredClone(d.review.payment),
     signing: { ...d.signing }, createdAtMs: d.createdAtMs, expiresAtMs: d.expiresAtMs,
     status: view.status, approvedAtMs: view.approvedAtMs, cancelledAtMs: view.cancelledAtMs, operationState: view.operationState };
 }
@@ -62,5 +62,5 @@ export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView):
   return { ...publicWalletPaymentReview(view), notice: d.notice ?? null, passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId, credentialIds: [...view.approvers],
     challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' },
-    metadataSteps: passkeyPayMetadataSteps(d.payment.metadata) };
+    metadataSteps: passkeyPayMetadataSteps(d.review.payment.metadata) };
 }

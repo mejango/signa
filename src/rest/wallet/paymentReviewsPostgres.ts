@@ -9,7 +9,8 @@ import { getPostgresTransports } from "../transactions/transport-reservations.js
 import { assertPlan, digest, type UserOperationRecord } from "../userOperations/store.js";
 import type { WalletAssertion } from "./webauthn.js";
 import { assertWalletPaymentReviewContext, copyWalletPaymentReviewAssertion, createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft,
-  verifyWalletPaymentReviewProof, type WalletPaymentReviewApprover, type WalletPaymentReviewContext, type WalletPaymentReviewDraft } from "./paymentReviews.js";
+  walletReviewFromStored, walletReviewToStored,
+  verifyWalletPaymentReviewProof, type WalletPaymentReviewApprover, type WalletPaymentReviewContext, type WalletReviewDraft } from "./paymentReviews.js";
 import { walletSessionCredential } from "./loginPostgres.js";
 import type { WalletAuthorityDevice } from "./devices.js";
 import { parseWalletAppPrincipalId, walletAppAccount, walletAppAudience, walletAppFields,
@@ -23,7 +24,7 @@ import { validateWalletHandoffToken } from "./handoff.js";
 import { detachedFromRequest } from "../context.js";
 
 export interface WalletPaymentReviewView {
-  draft: WalletPaymentReviewDraft;
+  draft: WalletReviewDraft;
   status: "pending" | "approved" | "cancelled";
   approvedAtMs: number | null;
   cancelledAtMs: number | null;
@@ -49,7 +50,7 @@ export interface WalletPaymentReviewStoreOptions {
 interface ReviewRow {
   id: string; account_id: string; principal_id: string; operation_id: string; preparation_key: string;
   input_digest: string; ceremony_id: string; created_at_ms: string; expires_at_ms: string; retain_until_ms: string;
-  draft: WalletPaymentReviewDraft; status: WalletPaymentReviewView["status"]; session_id: string | null;
+  draft: WalletReviewDraft; status: WalletPaymentReviewView["status"]; session_id: string | null;
   proof_digest: string | null; signature: Hex | null; signed_commitment: Hex | null;
   approved_at_ms: string | null; cancelled_at_ms: string | null;
 }
@@ -73,7 +74,7 @@ function actorOf(value: RestActor): RestActor {
   if (!walletAppAccount(actor.accountId) || !parseWalletAppPrincipalId(actor.principalId)) invalid();
   return { accountId: actor.accountId, principalId: actor.principalId as string };
 }
-function actorMatches(actor: RestActor, draft: WalletPaymentReviewDraft): void {
+function actorMatches(actor: RestActor, draft: WalletReviewDraft): void {
   if (actor.accountId !== draft.grant.accountId || actor.principalId !== walletAppPrincipalId(draft.grant)) inactive();
 }
 function authorityIdentity(context: WalletAuthorityContext): string {
@@ -89,10 +90,11 @@ function operationIdentity(record: UserOperationRecord): string {
 function planIdentity(plan: StoredPlan): string {
   const { steps: _steps, revision: _revision, ...immutable } = plan; return stable(immutable);
 }
-function draftIdentity(draft: WalletPaymentReviewDraft): string {
+function draftIdentity(draft: WalletReviewDraft): string {
   const { id: _id, createdAtMs: _created, expiresAtMs: _expires, ceremony: _ceremony, ...immutable } = draft;
   return stable(immutable);
 }
+function read(row: ReviewRow): ReviewRow { return { ...row, draft: walletReviewFromStored(row.draft) }; }
 function live(row: ReviewRow, time: number): void {
   if (Number(row.created_at_ms) > time) inactive();
   if (Number(row.expires_at_ms) <= time) expired();
@@ -164,12 +166,12 @@ export class PostgresWalletPaymentReviewStore {
     if (typeof inputKey !== "string" || !/^[!-~]{1,128}$/.test(inputKey)) invalid();
     const key = inputKey, inputDigest = digest({ actor, operationId, state }).slice(2);
     const hint = (await this.pool.query<ReviewRow>(`SELECT * FROM rest_wallet_payment_reviews
-      WHERE account_id=$1 AND principal_id=$2 AND preparation_key=$3`, [actor.accountId, actor.principalId, key])).rows[0];
+      WHERE account_id=$1 AND principal_id=$2 AND preparation_key=$3`, [actor.accountId, actor.principalId, key])).rows.map(read)[0];
     if (hint && (hint.input_digest !== inputDigest || hint.operation_id !== operationId)) conflict();
     const captured = await this.capture(actor, operationId);
     const draft = hint ? this.assertHint(hint, captured) : createWalletPaymentReviewDraft(captured.context,
       { id: chosenId ?? randomUUID(), state, createdAtMs: await this.databaseNow() });
-    const expectedDraft = draftIdentity(draft), encoded = JSON.stringify(draft);
+    const expectedDraft = draftIdentity(draft), encoded = JSON.stringify(walletReviewToStored(draft));
     const result = await this.transaction(async client => {
       // Each retained table owns its admission lock: schemas may share reviews while
       // resolving distinct ceremony tables. Acquire both before account/session rows.
@@ -179,7 +181,7 @@ export class PostgresWalletPaymentReviewStore {
       const { operation, plan } = await this.lockExecution(client, captured);
       const prior = (await client.query<ReviewRow>(`SELECT * FROM rest_wallet_payment_reviews
         WHERE operation_id=$1 OR (account_id=$2 AND principal_id=$3 AND preparation_key=$4) FOR UPDATE`,
-      [operationId, actor.accountId, actor.principalId, key])).rows;
+      [operationId, actor.accountId, actor.principalId, key])).rows.map(read);
       if (prior.length) {
         if (prior.length !== 1) conflict();
         const row = prior[0]!;
@@ -197,7 +199,7 @@ export class PostgresWalletPaymentReviewStore {
         (id,account_id,principal_id,operation_id,preparation_key,input_digest,ceremony_id,created_at_ms,expires_at_ms,retain_until_ms,draft)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb) RETURNING *`,
       [draft.id, actor.accountId, actor.principalId, operationId, key, inputDigest, draft.ceremony.id,
-        draft.createdAtMs, draft.expiresAtMs, draft.expiresAtMs + this.options.receiptRetentionMs, encoded])).rows[0]!;
+        draft.createdAtMs, draft.expiresAtMs, draft.expiresAtMs + this.options.receiptRetentionMs, encoded])).rows.map(read)[0]!;
       await this.finish(client, captured, row, operation); return { view: view(row, operation, captured), row };
     });
     this.speculate(result.row);
@@ -269,7 +271,7 @@ export class PostgresWalletPaymentReviewStore {
       const updated = (await client.query<ReviewRow>(`UPDATE rest_wallet_payment_reviews SET status='approved',
         proof_digest=$2,signature=$3,signed_commitment=$4,approved_at_ms=${nowSql}
         WHERE id=$1 AND status='pending' AND expires_at_ms>${nowSql} RETURNING *`,
-      [row.id, proof.proofDigest, proof.signature, proof.signedCommitment])).rows[0];
+      [row.id, proof.proofDigest, proof.signature, proof.signedCommitment])).rows.map(read)[0];
       if (!updated) expired();
       await this.finish(client, captured, updated, operation);
       return { view: view(updated, operation, captured), replayed: false, row: updated, pending: true };
@@ -286,7 +288,7 @@ export class PostgresWalletPaymentReviewStore {
       live(row, await walletCeremonyDatabaseNow(client));
       if (row.status === "approved") conflict();
       const updated = row.status === "cancelled" ? row : (await client.query<ReviewRow>(`UPDATE rest_wallet_payment_reviews
-        SET status='cancelled',cancelled_at_ms=${nowSql} WHERE id=$1 AND status='pending' AND expires_at_ms>${nowSql} RETURNING *`, [row.id])).rows[0];
+        SET status='cancelled',cancelled_at_ms=${nowSql} WHERE id=$1 AND status='pending' AND expires_at_ms>${nowSql} RETURNING *`, [row.id])).rows.map(read)[0];
       if (!updated) expired();
       await this.finish(client, captured, updated, operation); return view(updated, operation, captured);
     });
@@ -303,7 +305,7 @@ export class PostgresWalletPaymentReviewStore {
   }
   private rowActor(row: ReviewRow): RestActor { return { accountId: row.account_id, principalId: row.principal_id }; }
   private async hint(inputId: string): Promise<ReviewRow> {
-    const row = (await this.pool.query<ReviewRow>("SELECT * FROM rest_wallet_payment_reviews WHERE id=$1", [uuid(inputId)])).rows[0];
+    const row = (await this.pool.query<ReviewRow>("SELECT * FROM rest_wallet_payment_reviews WHERE id=$1", [uuid(inputId)])).rows.map(read)[0];
     if (!row) missing();
     row.draft = validateWalletPaymentReviewDraft(row.draft); live(row, await this.databaseNow()); return row;
   }
@@ -329,7 +331,7 @@ export class PostgresWalletPaymentReviewStore {
       directV6Terminal: this.options.directV6Terminal, grant, authority, plan, operation, manifest: structuredClone(manifest) };
     return { context, authority: authorityIdentity(authority), operation: operationIdentity(operation), plan: planIdentity(plan) };
   }
-  private assertHint(row: ReviewRow, captured: Captured): WalletPaymentReviewDraft {
+  private assertHint(row: ReviewRow, captured: Captured): WalletReviewDraft {
     const draft = validateWalletPaymentReviewDraft(row.draft);
     if (draft.id !== row.id || draft.operationId !== row.operation_id || draft.ceremony.id !== row.ceremony_id ||
       draft.createdAtMs !== Number(row.created_at_ms) || draft.expiresAtMs !== Number(row.expires_at_ms)) inactive();
@@ -338,14 +340,14 @@ export class PostgresWalletPaymentReviewStore {
     return draft;
   }
   /** The asserting passkey and its own Safe owner; a device signs as its device signer. */
-  private approver(captured: Captured, draft: WalletPaymentReviewDraft, credentialId: string): WalletPaymentReviewApprover {
+  private approver(captured: Captured, draft: WalletReviewDraft, credentialId: string): WalletPaymentReviewApprover {
     const passkey = walletSessionCredential(captured.context.authority, credentialId);
     if (!passkey) throw new RestError(403, "WALLET_PAYMENT_REVIEW_PROOF_INVALID", "A matching fresh wallet payment assertion is required.");
     if (!("device" in passkey)) return { credential: draft.authority.credential, signer: draft.authority.signer };
     const { recovery: _recovery, device, ...credential } = passkey as WalletAuthorityDevice & { recovery?: unknown };
     return { credential, signer: device.signerAddress };
   }
-  private async guard(client: PoolClient, captured: Captured, draft: WalletPaymentReviewDraft): Promise<void> {
+  private async guard(client: PoolClient, captured: Captured, draft: WalletReviewDraft): Promise<void> {
     const current = await loadWalletAuthorityContextInTransaction(client, draft.authority.accountId);
     if (authorityIdentity(current) !== captured.authority) inactive();
     await assertWalletAppGrantActiveInTransaction(client, draft.grant,
@@ -362,7 +364,7 @@ export class PostgresWalletPaymentReviewStore {
     return { operation, plan };
   }
   private async lockReview(client: PoolClient, hint: ReviewRow): Promise<ReviewRow> {
-    const row = (await client.query<ReviewRow>("SELECT * FROM rest_wallet_payment_reviews WHERE id=$1 FOR UPDATE", [hint.id])).rows[0];
+    const row = (await client.query<ReviewRow>("SELECT * FROM rest_wallet_payment_reviews WHERE id=$1 FOR UPDATE", [hint.id])).rows.map(read)[0];
     if (!row || row.account_id !== hint.account_id || row.principal_id !== hint.principal_id || row.input_digest !== hint.input_digest ||
       stable(row.draft) !== stable(hint.draft)) conflict();
     return row;
