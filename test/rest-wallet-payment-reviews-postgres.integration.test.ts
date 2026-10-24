@@ -186,6 +186,16 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
     expect(await store.getForApp(context.actor, view.draft.id)).toEqual({ ...view, approval: null });
   });
 
+  it("reads a stored pre-Task-12 row and writes the same JSON shape", async () => {
+    const value = await pendingReview(), stored = (await reviewRow(value.view.draft.id)).draft;
+    expect(stored).toHaveProperty("payment.kind", "v6-usdc-pay");
+    expect(stored).not.toHaveProperty("review");
+    const { ceremony, ...legacy } = stored;
+    expect(ceremony.contextDigest).toBe(digest(["center-wallet-payment-review-context-v1", legacy]).slice(2));
+    expect(value.view.draft.review).toEqual({ kind: "v6-usdc-pay", payment: stored.payment });
+    expect(await value.store.get(value.view.draft.id)).toEqual(value.view);
+  });
+
   it("refuses a review for an operation whose full nonce another publication already holds", async () => {
     const context = await appContext(), held = await preparedOperation(context, 120_000, 7n), fresh = await preparedOperation(context, 120_000, 7n);
     // The claim writes the sender lowercase and the nonce in decimal; the review must look it up the same way.

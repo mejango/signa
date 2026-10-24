@@ -33,7 +33,9 @@ export interface WalletPaymentReviewContext {
   operation: UserOperationRecord;
   manifest: SmartAccountManifest;
 }
-export interface WalletPaymentReviewDraft {
+/** What a draft asks the owner to approve. Each kind carries its own recognized facts. */
+export type WalletReview = { kind: "v6-usdc-pay"; payment: WalletV6UsdcPayment };
+export interface WalletReviewDraft {
   version: "center-wallet-payment-review-v1";
   id: string;
   state: string;
@@ -62,7 +64,7 @@ export interface WalletPaymentReviewDraft {
   chainId: typeof SIGNA_HOME_CHAIN_ID;
   entryPoint: Address;
   safe7579: Address;
-  payment: WalletV6UsdcPayment;
+  review: WalletReview;
   /** The SDK's notice when the plan's quote could not read the pool price; absent otherwise. */
   notice?: typeof PAY_QUOTE_FAILED_MESSAGE;
   signing: { digest: Hex; signedData: Hex; validAfter: string; validUntil: string };
@@ -119,19 +121,28 @@ function freeze<T>(value: T): T {
   if (value && typeof value === "object") { for (const child of Object.values(value)) freeze(child); Object.freeze(value); }
   return value;
 }
-function signing(draft: Pick<WalletPaymentReviewDraft, "operation" | "chainId" | "entryPoint" | "safe7579">,
-  validAfter: string, validUntil: string): WalletPaymentReviewDraft["signing"] {
+function signing(draft: Pick<WalletReviewDraft, "operation" | "chainId" | "entryPoint" | "safe7579">,
+  validAfter: string, validUntil: string): WalletReviewDraft["signing"] {
   const p = safe7579PasskeyOwnerSigningPayload({ ...draft, validAfter, validUntil });
   return { digest: p.digest, signedData: p.signedData, validAfter: p.validAfter, validUntil: p.validUntil };
 }
-function contextDigest(base: Omit<WalletPaymentReviewDraft, "ceremony">): string {
-  return digest(["center-wallet-payment-review-context-v1", base]).slice(2);
+/** The stored JSON keeps the payment under `payment`: rows written by this build read in the previous one. */
+export function walletReviewToStored<T extends { review: WalletReview }>(draft: T): Omit<T, "review"> & { payment: WalletV6UsdcPayment } {
+  return Object.fromEntries(Object.entries(draft).map(([key, value]) => key === "review" ? ["payment", (value as WalletReview).payment] : [key, value])) as never;
+}
+/** Rename only; the validator decides whether the result is a valid draft. */
+export function walletReviewFromStored(stored: unknown): WalletReviewDraft {
+  if (!stored || typeof stored !== "object" || !("payment" in stored)) return stored as WalletReviewDraft;
+  return Object.fromEntries(Object.entries(stored).map(([key, value]) => key === "payment" ? ["review", { kind: "v6-usdc-pay", payment: value }] : [key, value])) as never;
+}
+function contextDigest(base: Omit<WalletReviewDraft, "ceremony">): string {
+  return digest(["center-wallet-payment-review-context-v1", walletReviewToStored(base)]).slice(2);
 }
 
 /** Server-loaded records and pinned configuration only. Clock, policy and current readiness
  * admission remain inside the store transaction; reconstruction also supports receipt recovery. */
 export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReviewContext,
-  input: { id: string; state: string; createdAtMs: number }): WalletPaymentReviewDraft {
+  input: { id: string; state: string; createdAtMs: number }): WalletReviewDraft {
   try {
     const c = snapshot(inputContext), options = snapshot(input);
     fields(c, ["issuer", "token", "directV6Terminal", "grant", "authority", "plan", "operation", "manifest"]);
@@ -179,13 +190,14 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
     // Authority identity commits the full validated lineage. The approval proof keeps
     // its original bounded key fields; current context and epochs are rechecked at admission.
     const { recovery: _recovery, ...proofCredential } = a.credential;
-    const base: Omit<WalletPaymentReviewDraft, "ceremony"> = { version: "center-wallet-payment-review-v1", ...options,
+    const base: Omit<WalletReviewDraft, "ceremony"> = { version: "center-wallet-payment-review-v1", ...options,
       issuer: c.issuer, grant: g, authority: { accountId: a.accountId, enrollmentId: a.enrollment.intent.id, credential: proofCredential,
         authorityIdentityDigest: walletAuthorityIdentityDigest(identity), authorityEpoch: current.authorityEpoch, sessionEpoch: current.sessionEpoch,
         bindingId: b.id, bindingAuthorizationDigest: b.authorization.digest, stateHash: b.state.stateHash,
         manifestRevision: c.manifest.revision, signer: address(profile.signer.address) },
       planId: p.id, planCommitment: p.commitment, operationId: r.id, operationCommitment: r.commitment, operationHash: r.operationHash,
-      stepIndexes: [...r.stepIndexes], operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address), payment,
+      stepIndexes: [...r.stepIndexes], operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address),
+      review: { kind: "v6-usdc-pay", payment },
       ...(quoteFailed ? { notice: PAY_QUOTE_FAILED_MESSAGE } : {}),
       signing: signing({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: r.entryPoint, safe7579: c.manifest.safe7579.address },
         String(Math.floor(r.createdAt / 1000)), String(Math.floor(r.expiresAt / 1000))), expiresAtMs };
@@ -194,13 +206,13 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
   } catch { return invalid(); }
 }
 
-export function validateWalletPaymentReviewDraft(input: unknown): WalletPaymentReviewDraft {
+export function validateWalletPaymentReviewDraft(input: unknown): WalletReviewDraft {
   try {
-    const d = snapshot(input) as WalletPaymentReviewDraft;
+    const d = snapshot(input) as WalletReviewDraft;
     walletAppFields(d, ["version", "id", "state", "issuer", "grant", "authority", "planId", "planCommitment", "operationId", "operationCommitment",
-      "operationHash", "stepIndexes", "operation", "chainId", "entryPoint", "safe7579", "payment", "signing", "createdAtMs", "expiresAtMs", "ceremony"], ["notice"]);
+      "operationHash", "stepIndexes", "operation", "chainId", "entryPoint", "safe7579", "review", "signing", "createdAtMs", "expiresAtMs", "ceremony"], ["notice"]);
     if ("notice" in d && d.notice !== PAY_QUOTE_FAILED_MESSAGE) invalid();
-    if (Buffer.byteLength(JSON.stringify(d)) > 65_536 || d.version !== "center-wallet-payment-review-v1" ||
+    if (Buffer.byteLength(JSON.stringify(walletReviewToStored(d))) > 65_536 || d.version !== "center-wallet-payment-review-v1" ||
       ![d.id, d.planId, d.operationId].every(value => typeof value === "string" && uuid.test(value)) || d.chainId !== SIGNA_HOME_CHAIN_ID ||
       !time(d.createdAtMs) || !time(d.expiresAtMs) || d.expiresAtMs <= d.createdAtMs || d.expiresAtMs > d.createdAtMs + walletPaymentReviewMaximumLifetimeMs) invalid();
     validateWalletHandoffToken(d.state); validateWalletPolicyOrigin(d.issuer); validateWalletAppGrant(d.grant);
@@ -226,7 +238,9 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletPaymentR
     fields(d.signing, ["digest", "signedData", "validAfter", "validUntil"]);
     if (!same(signing(d, d.signing.validAfter, d.signing.validUntil), d.signing) ||
       BigInt(d.signing.validAfter) * 1000n > BigInt(d.createdAtMs) || BigInt(d.signing.validUntil) * 1000n < BigInt(d.expiresAtMs)) invalid();
-    const payment = d.payment;
+    fields(d.review, ["kind", "payment"]);
+    if (d.review.kind !== "v6-usdc-pay") invalid();
+    const payment = d.review.payment;
     fields(payment, ["kind", "chainId", "account", "token", "terminal", "projectId", "amount", "beneficiary", "minimumReturnedTokens",
       "memo", "metadata", "stepIndexes", "approvalStepIndexes", "paymentStepIndex", "resetAllowance"]);
     const calls = decodeSafe7579Execution(d.operation.callData).map((call, index) => ({ chainId: SIGNA_HOME_CHAIN_ID, to: call.target, value: call.value,
@@ -247,7 +261,7 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletPaymentR
   } catch { return invalid(); }
 }
 
-export function assertWalletPaymentReviewContext(input: WalletPaymentReviewDraft, context: WalletPaymentReviewContext): void {
+export function assertWalletPaymentReviewContext(input: WalletReviewDraft, context: WalletPaymentReviewContext): void {
   const draft = validateWalletPaymentReviewDraft(input);
   if (!same(draft, createWalletPaymentReviewDraft(context, { id: draft.id, state: draft.state, createdAtMs: draft.createdAtMs }))) invalid();
 }
@@ -274,9 +288,9 @@ export function copyWalletPaymentReviewAssertion(assertion: WalletAssertion): Wa
 /** The passkey that approves: the draft's primary by default, or one of the account's devices,
  * which signs the same digest as its own Safe owner. The store resolves it from the session. */
 export interface WalletPaymentReviewApprover {
-  credential: WalletPaymentReviewDraft["authority"]["credential"]; signer: Address;
+  credential: WalletReviewDraft["authority"]["credential"]; signer: Address;
 }
-export function verifyWalletPaymentReviewProof(input: WalletPaymentReviewDraft, assertion: WalletAssertion, approver?: WalletPaymentReviewApprover,
+export function verifyWalletPaymentReviewProof(input: WalletReviewDraft, assertion: WalletAssertion, approver?: WalletPaymentReviewApprover,
   /** `framedBy`: the review's app origin when that app is admitted to frame the review page. */
   options: { framedBy?: string } = {}): WalletPaymentReviewProof {
   try {
