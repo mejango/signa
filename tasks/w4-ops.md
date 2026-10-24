@@ -34,3 +34,8 @@ Signa now refuses to start when a chain in `REST_ERC4337_CONFIG` has a Pimlico p
 ## Hosting-neutral environment names
 
 Signa reads `SIGNA_ENVIRONMENT` (`dev` or `production`, default production), `SIGNA_REPLICA_ID` and `SIGNA_REPLICA_REGION`, and falls back to `RAILWAY_ENVIRONMENT_NAME`, `RAILWAY_REPLICA_ID` and `RAILWAY_REPLICA_REGION`. Today's deploy needs no change. Set the three `SIGNA_*` names on each service (the dev service gets `SIGNA_ENVIRONMENT=dev`) before leaving Railway; a later PR removes the fallback.
+
+## Etherscan key for reviewed calls (Task 13, mejango/signa)
+
+Set `SIGNA_ETHERSCAN_API_KEY` on the production (and dev) Signa service: an Etherscan V2 API key (one key covers every chain). Until it is set, app call sets the SDK cannot decode show as raw calldata with "Couldn't look up this contract.", and can still be approved. The key is read once at startup and never logged. Check after deploy: prepare a reviewed call to a verified non-Juicebox contract on Base; its review shows "ABI from Etherscan, not reviewed by Juicebox".
+

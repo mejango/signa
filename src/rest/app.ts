@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { canonical as canonicalValue } from "./sponsorship/validation.js";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
-import type { Address, Hex } from "viem";
+import { getAddress, isAddress, type Address, type Hex } from "viem";
 import type { ProtocolOperations } from "@juicebox/mcp/host";
 import type { Store } from "../store.js";
 import {
@@ -45,6 +45,9 @@ import type {
 } from "./userOperations/service.js";
 import type { PostgresWalletPaymentReviewStore } from './wallet/paymentReviewsPostgres.js';
 import { publicWalletPaymentReview, publicWalletPaymentAppReview } from './wallet/paymentPublic.js';
+import { REVIEWED_CALLS_KIND, REVIEWED_CALLS_MAXIMUM, REVIEWED_CALLS_OPERATION, reviewCalls, type EtherscanAbiSource,
+  type ReviewedCallsRefusal } from './userOperations/reviewedCalls.js';
+import { SIGNA_HOME_CHAIN_ID } from './wallet/chains.js';
 import type {
   createSmartAccountService,
   createSessionPolicyReviewer,
@@ -83,6 +86,8 @@ export interface RestDependencies {
   sessions?: SessionService;
   userOperations?: UserOperationService;
   walletPayments?: Pick<PostgresWalletPaymentReviewStore, 'prepare' | 'getForApp'>;
+  /** Etherscan-verified ABIs for calls the SDK cannot decode, and the head a call set's plan is read at. */
+  reviewedCalls?: { abis: EtherscanAbiSource; head(chainId: number, signal?: AbortSignal): Promise<RestBlockEvidence> };
   omnichain?: {
     getProjectGroup(
       project: { chainId: number; projectId: string; version: 6 },
@@ -1171,12 +1176,14 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
     signal: AbortSignal,
     /** A head being read ahead; a draft waits for it (a moment) rather than reading its own. */
     head?: Promise<RestBlockEvidence>,
+    /** A draft the route builds itself, in place of the operation or contract calls named in `body`. */
+    draftOf?: () => Promise<RestPlanDraft>,
   ) => {
     const started = Date.now();
     const existing = await deps.transactions.findPlanByIdempotency(actor(principal), key, hash);
     const looked = Date.now();
     if (existing) return existing;
-    if (typeof body.operation !== "string")
+    if (!draftOf && typeof body.operation !== "string")
       throw new RestError(
         400,
         "OPERATION_REQUIRED",
@@ -1184,14 +1191,14 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       );
     // A head that fails to read leaves the draft to read its own.
     const at = head ? await head.catch(() => undefined) : undefined;
-    const draft =
+    const draft = draftOf ? await draftOf() :
       body.operation === "contract_calls"
         ? await deps.protocol.prepare(object(body.input) as unknown as PrepareInput, signal)
-        : await draftFor(body.operation, body.input, signal, at);
+        : await draftFor(body.operation as string, body.input, signal, at);
     const drafted = Date.now();
     const plan = await deps.transactions.createSmartAccountPlan(actor(principal), bindingId, draft, key, hash, at);
     // Where a plan's time goes, for the production log; the request line only has the total.
-    console.info(JSON.stringify({ service: "smart-accounts", action: "plan_stages", operation: body.operation,
+    console.info(JSON.stringify({ service: "smart-accounts", action: "plan_stages", operation: draft.operation,
       lookupMs: looked - started, draftMs: drafted - looked, accountMs: Date.now() - drafted }));
     return plan;
   };
@@ -1309,6 +1316,45 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       throw new RestError(400, 'WALLET_PAYMENT_REVIEW_INPUT', 'Choose the prepared operation and callback state.');
     const view = await service.prepare(actor(principal), { operationId: body.operationId, state: body.state, ...(body.id === undefined ? {} : { id: body.id }) }, idempotency(principal));
     return response(context, publicWalletPaymentReview(view), 201);
+  });
+  const refused: Record<ReviewedCallsRefusal, string> = {
+    'account-self-administration': "A call to the account itself is refused: its owners and modules change only through Signa's own recovery and device steps.",
+    delegatecall: 'Delegatecall executions are refused.',
+    'app-expectation-mismatch': "The calls do not match the app's expectation.",
+  };
+  // Any call set from the account, described in the one approval: decoded first-party, else with the
+  // target's Etherscan-verified ABI, else raw with a warning. The plan it stores is what the review,
+  // its page and the receipt check read.
+  app.post('/wallet/reviewed-calls', async context => {
+    query(context, []);
+    const { input, principal } = await authenticate(context, ['plan']);
+    walletPayments(principal);
+    const reviewed = deps.reviewedCalls;
+    if (!reviewed) throw new RestError(503, 'REVIEWED_CALLS_UNAVAILABLE', 'Reviewed calls are not configured.');
+    const body = object(jsonBody(input), ['bindingId', 'chainId', 'account', 'calls', 'expectation']);
+    const invalidInput = () => new RestError(400, 'REVIEWED_CALLS_INPUT', 'Name the binding, the account and 1 to 16 calls of { to, value, data }.');
+    if (!/^0x[0-9a-fA-F]{64}$/.test(String(body.bindingId)) || typeof body.account !== 'string' || !isAddress(body.account) ||
+      !Array.isArray(body.calls) || body.calls.length < 1 || body.calls.length > REVIEWED_CALLS_MAXIMUM) throw invalidInput();
+    const chainId = body.chainId ?? SIGNA_HOME_CHAIN_ID;
+    if (chainId !== SIGNA_HOME_CHAIN_ID)
+      throw new RestError(403, 'USER_OPERATION_APP_CHAIN_UNAVAILABLE', 'App wallet operations are available only on Base.');
+    const account = getAddress(body.account), calls = body.calls.map(item => {
+      const call = object(item, ['to', 'value', 'data']);
+      if (typeof call.to !== 'string' || !isAddress(call.to) || typeof call.data !== 'string' || !/^0x(?:[0-9a-fA-F]{2})*$/.test(call.data) ||
+        (call.value !== undefined && (typeof call.value !== 'string' || !/^(0|[1-9][0-9]{0,77})$/.test(call.value) || BigInt(call.value) >= 2n ** 256n)))
+        throw invalidInput();
+      return { to: getAddress(call.to), value: BigInt((call.value as string | undefined) ?? '0'), data: call.data as Hex };
+    });
+    const signal = context.get('restSignal');
+    const plan = await smartAccountPlan(principal, body.bindingId as Hex, body, idempotency(principal), requestHash(input), signal, undefined, async () => {
+      const [head, review] = await Promise.all([reviewed.head(chainId, signal),
+        reviewCalls({ chainId, account, calls, abis: reviewed.abis, ...(body.expectation === undefined ? {} : { expectation: body.expectation }) })]);
+      if (!review.ok) throw new RestError(422, 'REVIEWED_CALLS_REFUSED', `Call ${review.callIndex + 1}: ${refused[review.refusal]}`);
+      return { operation: REVIEWED_CALLS_OPERATION, account, evidence: [head], warnings: [], summary: { kind: REVIEWED_CALLS_KIND, sources: review.sources },
+        calls: calls.map((call, index) => ({ chainId, to: call.to, value: call.value.toString(), data: call.data, label: '', decoded: {},
+          dependsOn: index ? [index - 1] : [] })) };
+    });
+    return response(context, plan, 201);
   });
   app.get('/wallet/payment-reviews/:id', async context => {
     query(context, []);

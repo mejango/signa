@@ -1,12 +1,14 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
-import { formatUnits, type Address } from 'viem';
+import { formatUnits, type AbiFunction, type Address, type Hex } from 'viem';
 import { getUserOperationHash, normalizeUserOperation, uoCanonical } from '../userOperations/codec.js';
 import { checkReviewGas } from '../sponsorCaps.js';
 import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
 import { recognizeWalletV6UsdcPayment } from '../userOperations/semantics.js';
-import type { WalletPaymentCentralPublic } from '../wallet/paymentPublic.js';
+import type { WalletPaymentCentralPublic, WalletReviewedCallsCentralPublic } from '../wallet/paymentPublic.js';
+import { ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
+  reviewedCallRefusal, type CallSource } from '../userOperations/reviewedCallRules.js';
 import { SIGNA_HOME_CHAIN_ID, signaChainName } from '../wallet/chains.js';
 
 // Native assertions and CSRF values stay in this page's memory. A reload recovers
@@ -22,7 +24,8 @@ const approve = element<HTMLButtonElement>('payment-approve'), cancel = element<
 const cancelPrompt = element<HTMLButtonElement>('payment-prompt-cancel'), retry = element<HTMLButtonElement>('payment-retry');
 const returnToApp = element<HTMLAnchorElement>('payment-return'), notice = element('payment-notice'), gasRow = element('payment-gas');
 let id = '', rpId = '';
-let review: WalletPaymentCentralPublic | null = null, immutable = '', busy = false, blocked = false;
+type Review = WalletPaymentCentralPublic | WalletReviewedCallsCentralPublic;
+let review: Review | null = null, immutable = '', busy = false, blocked = false;
 let uncertain = false, canRetry = false, nativePrompt: AbortController | null = null;
 // Framed inside an app's page, this page decides the approval while the app controls what surrounds
 // it. The approve button therefore works only while the frame is large enough to show the payment
@@ -104,47 +107,77 @@ async function request(path: string, body?: unknown): Promise<Json> {
     const parsed = record(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))); withinDeadline(); return parsed;
   } finally { clearTimeout(timer); }
 }
-function callback(value: WalletPaymentCentralPublic): string {
+function callback(value: Review): string {
   const href = text(value.app.callbackUri, 4096), target = new URL(href);
   if (target.origin !== value.app.origin || target.username || target.password || target.search || target.hash || target.href !== href ||
     !['https:', 'http:'].includes(target.protocol)) fail();
   target.search = new URLSearchParams({ review: value.id, state: token(value.state), iss: value.issuer }).toString(); return target.href;
 }
-function checkReview(input: unknown): WalletPaymentCentralPublic {
-  const value = record(input) as unknown as WalletPaymentCentralPublic;
+/** A reviewed call set, re-derived here from the operation bytes: every call shown is the exact call
+ * signed, decoded with the function its source names (the stored Etherscan ABI, or the one the
+ * server's SDK decoded with), and none calls the account itself or delegatecalls. */
+function checkCalls(value: WalletReviewedCallsCentralPublic, operation: ReturnType<typeof normalizeUserOperation>) {
+  const reviewed = record(value.review), view = record(value.reviewedCalls), model = record(view.model);
+  if (reviewed.kind !== REVIEWED_CALLS_KIND || reviewed.chainId !== SIGNA_HOME_CHAIN_ID || 'payment' in value || 'metadataSteps' in value || value.notice !== null) fail();
+  const calls = decodeSafe7579Execution(operation.callData), listed = reviewed.calls, sources = reviewed.sources;
+  const modeled = model.calls, functions = view.functions;
+  for (const list of [listed, sources, modeled, functions]) if (!Array.isArray(list) || list.length !== calls.length) fail();
+  if (!Array.isArray(value.stepIndexes) || value.stepIndexes.length !== calls.length || value.stepIndexes.some((step, index) => step !== index)) fail();
+  calls.forEach((call, index) => {
+    const exact = (entry: Json) => address(entry.to).toLowerCase() === call.target.toLowerCase() && entry.value === call.value &&
+      text(entry.data, 1_048_576).toLowerCase() === call.callData.toLowerCase();
+    const entry = record((modeled as unknown[])[index]), source = record((sources as unknown[])[index]), fn = (functions as unknown[])[index];
+    if (!exact(record((listed as unknown[])[index])) || !exact(entry) || reviewedCallRefusal(operation.sender, { to: call.target, data: call.callData })) fail();
+    if (entry.contractName !== null) text(entry.contractName, 256);
+    if (!Array.isArray(entry.warnings) || entry.warnings.length > 16) fail();
+    for (const warning of entry.warnings as unknown[]) { const { code, text: line } = record(warning); text(code, 64); text(line, 512); }
+    if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return; }
+    if (source.source !== 'etherscan' && source.source !== 'first-party') fail();
+    const found = exactFunction(source.source === 'etherscan' ? source.abi : [fn], call.callData as Hex);
+    if (!found || found.item.name !== entry.functionName) fail();
+  });
+}
+function checkReview(input: unknown): Review {
+  const value = record(input) as unknown as Review;
   const accountId = text(value.accountId);
   if (value.version !== 'center-wallet-payment-review-v1' || uuid(value.id) !== id || value.issuer !== location.origin ||
     value.chainId !== SIGNA_HOME_CHAIN_ID || !['pending', 'approved', 'cancelled'].includes(value.status)) fail();
   if (review && review.status !== 'pending' && value.status !== review.status) fail();
   integer(value.createdAtMs); integer(value.expiresAtMs); callback(value);
-  const payment = record(value.payment);
-  if (payment.kind !== 'v6-usdc-pay' || payment.chainId !== SIGNA_HOME_CHAIN_ID || `eip155:${SIGNA_HOME_CHAIN_ID}:${address(payment.account).toLowerCase()}` !== accountId) fail();
-  address(payment.token); address(payment.terminal); address(payment.beneficiary);
-  decimal(payment.amount); decimal(payment.projectId); decimal(payment.minimumReturnedTokens); text(payment.memo, 32768, true);
-  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(text(payment.metadata, 65538))) fail();
-  // The server describes the metadata with the SDK's review decoder (the SDK stays off this page);
-  // the page shows those steps as text next to the raw bytes.
-  const steps = value.metadataSteps;
-  if (!Array.isArray(steps) || steps.length > 256 || (steps.length === 0) !== (payment.metadata === '0x')) fail();
-  for (const step of steps) {
-    const { title, rows } = record(step); text(title, 256);
-    if (!Array.isArray(rows) || rows.length > 64) fail();
-    for (const row of rows as unknown[]) { if (!Array.isArray(row) || row.length !== 2) fail(); const [label, value] = row as unknown[]; text(label, 256); text(value, 65538, true); }
-  }
   const operation = normalizeUserOperation(value.operation);
-  if (operation.sender.toLowerCase() !== String(payment.account).toLowerCase() || operation.signature !== '0x' ||
-    getUserOperationHash(operation, value.entryPoint, SIGNA_HOME_CHAIN_ID) !== value.operationHash) fail();
-  const calls = decodeSafe7579Execution(operation.callData).map((call, index) => ({ chainId: SIGNA_HOME_CHAIN_ID, to: call.target, value: call.value,
-    data: call.callData, label: '', decoded: {}, dependsOn: index ? [index - 1] : [] }));
-  const p = value.payment, project = { chainId: SIGNA_HOME_CHAIN_ID, projectId: p.projectId, version: 6 as const };
-  // The shared recognizer derives every displayed economic fact from calldata.
-  // A valid SafeOp hash alone cannot bind a separately supplied display summary.
-  const derived = recognizeWalletV6UsdcPayment({ draft: { operation: 'pay', account: operation.sender, project, calls, evidence: [], warnings: [],
-    summary: { operation: 'pay', project, account: operation.sender, terminal: p.terminal, terminalPath: [p.terminal],
-      routerGateway: null, route: 'multi-terminal', payment: { token: p.token, amount: p.amount, unit: 'token-base-units' },
-      beneficiary: p.beneficiary, minimumBeneficiaryTokenCount: p.minimumReturnedTokens, metadata: p.metadata } } },
-    value.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, ...__SIGNA_PAYMENT_PIN__ });
-  if (!derived || uoCanonical(derived) !== uoCanonical(p)) fail();
+  if ('review' in value) {
+    if (`eip155:${SIGNA_HOME_CHAIN_ID}:${operation.sender.toLowerCase()}` !== accountId || operation.signature !== '0x' ||
+      getUserOperationHash(operation, value.entryPoint, SIGNA_HOME_CHAIN_ID) !== value.operationHash) fail();
+    checkCalls(value, operation);
+  } else {
+    const payment = record(value.payment);
+    if (payment.kind !== 'v6-usdc-pay' || payment.chainId !== SIGNA_HOME_CHAIN_ID || `eip155:${SIGNA_HOME_CHAIN_ID}:${address(payment.account).toLowerCase()}` !== accountId) fail();
+    address(payment.token); address(payment.terminal); address(payment.beneficiary);
+    decimal(payment.amount); decimal(payment.projectId); decimal(payment.minimumReturnedTokens); text(payment.memo, 32768, true);
+    if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(text(payment.metadata, 65538))) fail();
+    // The server describes the metadata with the SDK's review decoder (the SDK stays off this page);
+    // the page shows those steps as text next to the raw bytes.
+    const steps = value.metadataSteps;
+    if (!Array.isArray(steps) || steps.length > 256 || (steps.length === 0) !== (payment.metadata === '0x')) fail();
+    for (const step of steps) {
+      const { title, rows } = record(step); text(title, 256);
+      if (!Array.isArray(rows) || rows.length > 64) fail();
+      for (const row of rows as unknown[]) { if (!Array.isArray(row) || row.length !== 2) fail(); const [label, value] = row as unknown[]; text(label, 256); text(value, 65538, true); }
+    }
+    if (operation.sender.toLowerCase() !== String(payment.account).toLowerCase() || operation.signature !== '0x' ||
+      getUserOperationHash(operation, value.entryPoint, SIGNA_HOME_CHAIN_ID) !== value.operationHash) fail();
+    const calls = decodeSafe7579Execution(operation.callData).map((call, index) => ({ chainId: SIGNA_HOME_CHAIN_ID, to: call.target, value: call.value,
+      data: call.callData, label: '', decoded: {}, dependsOn: index ? [index - 1] : [] }));
+    const p = value.payment, project = { chainId: SIGNA_HOME_CHAIN_ID, projectId: p.projectId, version: 6 as const };
+    // The shared recognizer derives every displayed economic fact from calldata.
+    // A valid SafeOp hash alone cannot bind a separately supplied display summary.
+    const derived = recognizeWalletV6UsdcPayment({ draft: { operation: 'pay', account: operation.sender, project, calls, evidence: [], warnings: [],
+      summary: { operation: 'pay', project, account: operation.sender, terminal: p.terminal, terminalPath: [p.terminal],
+        routerGateway: null, route: 'multi-terminal', payment: { token: p.token, amount: p.amount, unit: 'token-base-units' },
+        beneficiary: p.beneficiary, minimumBeneficiaryTokenCount: p.minimumReturnedTokens, metadata: p.metadata } } },
+      value.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, ...__SIGNA_PAYMENT_PIN__ });
+    if (!derived || uoCanonical(derived) !== uoCanonical(p)) fail();
+  }
   const signing = safe7579PasskeyOwnerSigningPayload({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: value.entryPoint, safe7579: value.safe7579,
     validAfter: decimal(value.signing.validAfter), validUntil: decimal(value.signing.validUntil) });
   if (signing.digest !== value.signing.digest || signing.signedData !== value.signing.signedData) fail();
@@ -177,15 +210,56 @@ function showSteps(steps: WalletPaymentCentralPublic['metadataSteps']) {
     return line;
   }));
 }
+const show = (value: unknown): string => typeof value === 'bigint' ? value.toString() : Array.isArray(value) ? `[${value.map(show).join(', ')}]`
+  : value && typeof value === 'object' ? `{ ${Object.entries(value).map(([key, item]) => `${key}: ${show(item)}`).join(', ')} }` : String(value);
+const line = (className: string, content: string) => { const node = document.createElement('div'); node.className = className; node.textContent = content; return node; };
+// Admin and permission changes lead the warnings, then calls nothing could decode.
+const warningRank = ['owner-action', 'permission-grant', 'delegatecall', 'unlimited-approval', 'raw'];
+const rank = (code: string) => { const at = warningRank.indexOf(code); return at < 0 ? warningRank.length : at; };
+/** Every call, its source and every warning in the one review the passkey approves. */
+function showCalls(value: WalletReviewedCallsCentralPublic) {
+  const calls = decodeSafe7579Execution(value.operation.callData), warnings: { code: string; text: string }[] = [];
+  let total = 0n;
+  element('payment-calls').replaceChildren(...calls.map((call, index) => {
+    const source = value.review.sources[index] as CallSource, entry = value.reviewedCalls.model.calls[index]!, item = document.createElement('li');
+    const found = source.source === 'raw' ? null
+      : exactFunction(source.source === 'etherscan' ? source.abi : [value.reviewedCalls.functions[index] as AbiFunction], call.callData as Hex)!;
+    total += BigInt(call.value);
+    item.append(line('call-title', `${found ? found.item.name : 'Raw call'} on ${entry.contractName ? `${entry.contractName} ` : ''}${call.target}`));
+    const sourceLine = line('call-source', source.source === 'first-party' ? 'Decoded with the Juicebox SDK'
+      : source.source === 'etherscan' ? `${ETHERSCAN_SOURCE_LINE}${source.implementation ? `. Implementation ${source.implementation}` : ''}`
+      : source.lookup === 'lookup-failed' ? `Raw calldata. ${LOOKUP_FAILED_LINE}` : 'Raw calldata');
+    sourceLine.dataset.source = source.source; item.append(sourceLine);
+    if (BigInt(call.value)) item.append(line('call-line', `Sends ${formatUnits(BigInt(call.value), 18)} ETH`));
+    found?.item.inputs.forEach((input, position) => item.append(line('call-line', `${input.name || `#${position}`}: ${show(found.args[position])}`)));
+    if (!found && call.callData !== '0x') item.append(line('call-line', `Calldata: ${call.callData}`));
+    const prefix = calls.length > 1 ? `Call ${index + 1}: ` : '';
+    if (source.source === 'raw' && call.callData !== '0x')
+      warnings.push({ code: 'raw', text: `${prefix}${source.lookup === 'lookup-failed' ? `${LOOKUP_FAILED_LINE} ` : ''}${RAW_CALL_WARNING}` });
+    for (const warning of entry.warnings) if (warning.code !== 'abi-unavailable') warnings.push({ code: warning.code, text: `${prefix}${warning.text}` });
+    return item;
+  }));
+  element('payment-amount').textContent = `${calls.length} ${calls.length === 1 ? 'call' : 'calls'}${total ? `, sending ${formatUnits(total, 18)} ETH` : ''}`;
+  element('payment-warnings').replaceChildren(...warnings.sort((a, b) => rank(a.code) - rank(b.code)).map(warning => {
+    const node = document.createElement('li'); node.textContent = warning.text; return node; }));
+  element('payment-warnings').hidden = !warnings.length; element('payment-calls').hidden = false;
+  for (const terms of document.querySelectorAll<HTMLElement>('.payment-terms')) terms.hidden = true;
+  document.querySelector('h1')!.textContent = 'Review transaction'; approve.textContent = 'Approve';
+  for (const [name, text] of Object.entries({ app: value.app.origin, account: value.operation.sender, operation: value.operationHash,
+    expiry: new Date(value.expiresAtMs).toLocaleString() })) element(`payment-${name}`).textContent = text;
+}
 function accept(input: unknown) {
   review = checkReview(input);
-  const payment = review.payment;
-  for (const [name, value] of Object.entries({ amount: `${formatUnits(BigInt(payment.amount), 6)} USDC`, project: payment.projectId,
-    app: review.app.origin, account: payment.account, beneficiary: payment.beneficiary, minimum: payment.minimumReturnedTokens,
-    memo: payment.memo || 'No memo', token: payment.token,
-    terminal: payment.terminal, metadata: payment.metadata, operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
-    element(`payment-${name}`).textContent = value;
-  showSteps(review.metadataSteps);
+  if ('review' in review) showCalls(review);
+  else {
+    const payment = review.payment;
+    for (const [name, value] of Object.entries({ amount: `${formatUnits(BigInt(payment.amount), 6)} USDC`, project: payment.projectId,
+      app: review.app.origin, account: payment.account, beneficiary: payment.beneficiary, minimum: payment.minimumReturnedTokens,
+      memo: payment.memo || 'No memo', token: payment.token,
+      terminal: payment.terminal, metadata: payment.metadata, operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
+      element(`payment-${name}`).textContent = value;
+    showSteps(review.metadataSteps);
+  }
   const gas = review.gas, chain = signaChainName(gas.chainId);
   gasRow.textContent = gas.payer === 'pimlico' ? 'Gas: sponsored' : gas.funded
     ? `Gas: up to ${formatUnits(BigInt(gas.maximumWei), 18)} ETH from your account` : `Needs ETH for gas on ${chain}.`;

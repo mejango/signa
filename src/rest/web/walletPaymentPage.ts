@@ -14,13 +14,15 @@ export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string
 <p id="payment-amount" class="amount"></p>
 <p id="payment-gas"></p>
 <p id="payment-notice" role="note" hidden></p>
+<ul id="payment-warnings" hidden></ul>
+<ol id="payment-calls" hidden></ol>
 <details class="quiet"><summary>Details</summary><dl>
-<dt>Juicebox project</dt><dd id="payment-project"></dd><dt>Network</dt><dd>${signaChainName(SIGNA_HOME_CHAIN_ID)}</dd>
+<div class="payment-terms"><dt>Juicebox project</dt><dd id="payment-project"></dd></div><dt>Network</dt><dd>${signaChainName(SIGNA_HOME_CHAIN_ID)}</dd>
 <dt>Requested by</dt><dd id="payment-app"></dd><dt>From your account</dt><dd id="payment-account"></dd>
-<dt>Beneficiary</dt><dd id="payment-beneficiary"></dd><dt>Minimum project tokens (base units)</dt><dd id="payment-minimum"></dd>
+<div class="payment-terms"><dt>Beneficiary</dt><dd id="payment-beneficiary"></dd><dt>Minimum project tokens (base units)</dt><dd id="payment-minimum"></dd>
 <dt>Memo</dt><dd id="payment-memo" class="exact-text"></dd>
 <dt>USDC contract</dt><dd id="payment-token"></dd><dt>Juicebox terminal</dt><dd id="payment-terminal"></dd>
-<dt>Hook requests</dt><dd id="payment-hooks"></dd><dt>Metadata</dt><dd id="payment-metadata"></dd><dt>Operation</dt><dd id="payment-operation"></dd>
+<dt>Hook requests</dt><dd id="payment-hooks"></dd><dt>Metadata</dt><dd id="payment-metadata"></dd></div><dt>Operation</dt><dd id="payment-operation"></dd>
 <dt>Approval expires</dt><dd id="payment-expiry"></dd></dl></details></section>
 <div class="actions"><button id="payment-approve" type="button" hidden>Approve payment</button>
 <button id="payment-cancel" type="button" class="link" hidden>Decline</button>
@@ -45,5 +47,9 @@ details.quiet>summary::after{content:"";display:inline-block;width:.35em;height:
 html.framed main{margin:0 auto;padding:1.25rem calc(1.6rem - 1px) 1.5rem}html.framed .brand{display:none}html.framed h1{margin-top:.5rem}html.framed #payment-status{margin:1rem 0}
 .actions button.link{margin:0}
 .action-link{display:inline-flex;align-items:center;min-height:3rem;padding:.75rem 1rem;border:1px solid #172019;color:inherit;max-width:100%;overflow-wrap:anywhere}
-@media(max-width:400px){.action-link{justify-content:center;width:100%}}`;
+@media(max-width:400px){.action-link{justify-content:center;width:100%}}
+#payment-warnings{margin:0 0 1.25rem;padding-left:1.1rem;color:#9c3028}#payment-warnings li+li{margin-top:.35rem}
+#payment-calls{margin:0 0 1.25rem;padding-left:1.4rem}#payment-calls>li{margin-bottom:1rem;overflow-wrap:anywhere}
+#payment-calls .call-title{font-weight:700}#payment-calls .call-source,#payment-calls .call-line{color:#53614f;font-size:.9rem}
+#payment-calls .call-source[data-source=raw]{color:#9c3028}#payment-calls code{font-size:.8rem;word-break:break-all}`;
 }

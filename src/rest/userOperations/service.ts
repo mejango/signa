@@ -52,6 +52,7 @@ import {
 } from "./codec.js";
 import type { ReviewGas, SponsorCapStore } from "../sponsorCaps.js";
 import { observeUserOperation } from "./execution.js";
+import { REVIEWED_CALLS_OPERATION, verifyReviewedCallsEffects } from "./reviewedCalls.js";
 import { terminalAbi, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
 import { passkeyPayMetadataSteps } from "./userPayMetadata.js";
 import { explainedRefusal, tracedPayFailure } from "./payFailure.js";
@@ -247,10 +248,11 @@ export class UserOperationService {
   }
   /** Every selected call that pays the reviewed token through the reviewed terminal carries only
    * metadata a payment review can describe, whatever the plan is labeled and whichever path prepares
-   * or submits it. */
+   * or submits it. A reviewed call set's review is the decoder's: the SDK describes the metadata, or
+   * the call shows raw with its warning. */
   private passkeyPayMetadata(plan: StoredPlan, stepIndexes: readonly number[]): void {
     const config = this.options.v6UsdcPayment;
-    if (!config) return;
+    if (!config || plan.draft.operation === REVIEWED_CALLS_OPERATION) return;
     for (const index of stepIndexes) {
       const call = plan.draft.calls[index];
       if (!call || call.chainId !== config.chainId || !same(call.to, config.directV6Terminal)) continue;
@@ -1368,6 +1370,10 @@ export class UserOperationService {
         // A pay of the configured token through the configured terminal is the strict Base pay
         // domain: a rejected one cannot downgrade into weaker legacy single-step economic
         // evidence. Pays in other tokens or to other terminals keep the generic verification.
+        // A reviewed call set is verified whole or not at all.
+        if (plan.draft.operation === REVIEWED_CALLS_OPERATION)
+          return record.stepIndexes.length === plan.draft.calls.length && record.stepIndexes.every((index, position) => index === position)
+            ? verifyReviewedCallsEffects(plan, receipt) : { status: "unknown", details: { reason: "A reviewed call set executes whole." } };
         if (this.options.v6UsdcPayment && record.chainId === this.options.v6UsdcPayment.chainId
           && walletV6UsdcPaymentDomain(plan, this.options.v6UsdcPayment)) {
           return verifyWalletV6UsdcPaymentEffects(plan, record.stepIndexes, this.options.v6UsdcPayment, receipt);
