@@ -232,7 +232,8 @@ describe('KnowledgeService', () => {
   });
 });
 
-describe('reference sync provenance', () => {
+// Each test runs real git commands, which pass 5s under a parallel run.
+describe('reference sync provenance', { timeout: 30_000 }, () => {
   it('rejects explicit source symlinks and symlinked source directories even within a repository', () => {
     const directory = mkdtempSync(join(tmpdir(), 'juicebox-source-links-'));
     directories.push(directory);
