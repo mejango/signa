@@ -72,7 +72,8 @@ function fixture() {
   };
 }
 
-describe('development source synchronization', () => {
+// Each test runs real git commands, which pass 5s under a parallel run.
+describe('development source synchronization', { timeout: 30_000 }, () => {
   it.each(['--assume-unchanged', '--skip-worktree'])(
     'records exact source and repository drift hidden by Git %s',
     (flag) => {

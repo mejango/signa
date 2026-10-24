@@ -220,6 +220,38 @@ function fixture(
   };
 }
 
+const poolKey = {
+  currency0: zeroAddress,
+  currency1: '0x7777777777777777777777777777777777777777' as Address,
+  fee: 3000,
+  tickSpacing: 60,
+  hooks: zeroAddress,
+};
+const poolId = keccak256(
+  encodeAbiParameters(parseAbiParameters('address,address,uint24,int24,address'), [
+    poolKey.currency0,
+    poolKey.currency1,
+    poolKey.fee,
+    poolKey.tickSpacing,
+    poolKey.hooks,
+  ]),
+);
+
+/** Serves the buyback pool the SDK quotes against; `readable` returns false while its reads fail. */
+async function servePool(f: ReturnType<typeof fixture>, readable: () => boolean = () => true) {
+  const original = f.readContract.getMockImplementation()!;
+  f.readContract.mockImplementation(async (request) => {
+    if (request.functionName !== 'poolKeyOf') return original(request);
+    if (!readable()) throw new Error('RPC read unavailable');
+    return poolKey;
+  });
+  Object.assign((await f.snapshot()).client, {
+    call: vi.fn(async () => ({
+      data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
+    })),
+  });
+}
+
 function payHookMetadata(
   overrides: {
     beneficiaryCount?: bigint;
@@ -711,12 +743,13 @@ describe('payment quotes and approval plans', () => {
               hook: buybackHook,
               noop: false,
               amount: 100n,
-              metadata: payHookMetadata({ skipSplits: skipSplits ?? true }),
+              metadata: payHookMetadata({ skipSplits: skipSplits ?? true, poolId }),
             },
           ],
         },
       ]) {
         const f = fixture(options);
+        await servePool(f);
         const input = skipSplits === undefined ? sdkPayInput : { ...sdkPayInput, skipSplits };
         const plan = await f.service.preparePay(input);
         const servicePreviews = f.readContract.mock.calls.filter(
@@ -733,8 +766,13 @@ describe('payment quotes and approval plans', () => {
           slippageBps: 100n,
           skipSplits: skipSplits ?? true,
         });
+        // The pool pays 1000 for the 100 swapped: the minimum is that quote less the 1% tolerance.
         expect(sdk.metadata).toBe(
-          buildUserPayMetadata({ chainId: project.chainId, skipSplits: skipSplits ?? true }),
+          buildUserPayMetadata({
+            chainId: project.chainId,
+            skipSplits: skipSplits ?? true,
+            ...('dataHook' in options ? { minimumSwapAmountOut: 990n } : {}),
+          }),
         );
         const args = decodeFunctionData({
           abi: jbMultiTerminalAbi,
@@ -775,22 +813,6 @@ describe('payment quotes and approval plans', () => {
   });
 
   it('validates the hook specs of the metadata it sends, quoted or fallen back after a tentative quote', async () => {
-    const poolKey = {
-      currency0: zeroAddress,
-      currency1: '0x7777777777777777777777777777777777777777' as Address,
-      fee: 3000,
-      tickSpacing: 60,
-      hooks: zeroAddress,
-    };
-    const poolId = keccak256(
-      encodeAbiParameters(parseAbiParameters('address,address,uint24,int24,address'), [
-        poolKey.currency0,
-        poolKey.currency1,
-        poolKey.fee,
-        poolKey.tickSpacing,
-        poolKey.hooks,
-      ]),
-    );
     const base = buildUserPayMetadata({ chainId: project.chainId, skipSplits: true });
     // The pool pays 1000 for the 100 swapped against a 200-token mint: worth quoting.
     const quoting = (swapsWhenQuoted: boolean) => {
@@ -853,84 +875,28 @@ describe('payment quotes and approval plans', () => {
     }
   });
 
-  it("warns when prepareUserPay could not read the pool's price, through quote, plan and sent-back metadata, and only while it cannot", async () => {
-    const poolKey = {
-      currency0: zeroAddress,
-      currency1: '0x7777777777777777777777777777777777777777' as Address,
-      fee: 3000,
-      tickSpacing: 60,
-      hooks: zeroAddress,
-    };
-    const poolId = keccak256(
-      encodeAbiParameters(parseAbiParameters('address,address,uint24,int24,address'), [
-        poolKey.currency0,
-        poolKey.currency1,
-        poolKey.fee,
-        poolKey.tickSpacing,
-        poolKey.hooks,
-      ]),
-    );
-    // One service whose pool turns readable.
+  it("refuses a swap quote while prepareUserPay cannot read the pool's price, and quotes once it can", async () => {
     let readable = false;
-    const f = fixture({
-      dataHook: registry,
-      beneficiaryCount: 0n,
-      payHooks: [
-        {
-          hook: buybackHook,
-          noop: false,
-          amount: 100n,
-          metadata: payHookMetadata({ skipSplits: true, poolId }),
-        },
-      ],
-    });
-    const original = f.readContract.getMockImplementation()!;
-    f.readContract.mockImplementation(async (request) => {
-      if (request.functionName !== 'poolKeyOf') return original(request);
-      if (!readable) throw new Error('RPC read unavailable');
-      return poolKey;
-    });
-    Object.assign((await f.snapshot()).client, {
-      call: vi.fn(async () => ({
-        data: encodeAbiParameters(parseAbiParameters('uint256,uint256'), [1000n, 1n]),
-      })),
-    });
+    const swapping = (metadata: Hex) =>
+      fixture({
+        dataHook: registry,
+        beneficiaryCount: 0n,
+        payHooks: [{ hook: buybackHook, noop: false, amount: 100n, metadata }],
+      });
+    const f = swapping(payHookMetadata({ skipSplits: true, poolId }));
+    await servePool(f, () => readable);
+    const refused = { code: 'PAY_SWAP_QUOTE_FAILED', retryable: true };
+    await expect(f.service.quotePay(sdkPayInput)).rejects.toMatchObject(refused);
+    await expect(f.service.preparePay(sdkPayInput)).rejects.toMatchObject(refused);
     const warned = (warnings: string[]) =>
       warnings.some((warning) => warning.startsWith(PAY_QUOTE_FAILED_MESSAGE));
-    // The pool reads fail twice: the SDK's minimum is only the mint rate, and the payer is told.
-    const sdk = await prepareUserPay((await f.snapshot()).client, {
-      chainId: project.chainId,
-      terminal,
-      projectId: BigInt(project.projectId),
-      token: NATIVE_TOKEN,
-      amount: 100n,
-      beneficiary,
-    });
-    expect(sdk.quoteFailed).toBe(true);
-    const quoted = await f.service.quotePay(sdkPayInput);
-    expect(warned(quoted.warnings)).toBe(true);
-    expect(warned((await f.service.preparePay(sdkPayInput)).warnings)).toBe(true);
-    // The quote's metadata sent back to prepare keeps its exact bytes and still says so.
-    const sentBack = await f.service.preparePay({ ...sdkPayInput, metadata: quoted.metadata });
-    expect(sentBack.summary).toMatchObject({ metadata: quoted.metadata });
-    expect(warned(sentBack.warnings)).toBe(true);
-    // Caller metadata whose buyback entry carries its own minimum is protected by it: no notice.
-    const withMinimum = fixture({
-      dataHook: registry,
-      beneficiaryCount: 0n,
-      payHooks: [
-        {
-          hook: buybackHook,
-          noop: false,
-          amount: 100n,
-          metadata: payHookMetadata({ skipSplits: true, explicit: true, poolId }),
-        },
-      ],
-    });
+    // Caller metadata whose buyback entry carries its own minimum is protected by it.
+    const withMinimum = swapping(payHookMetadata({ skipSplits: true, explicit: true, poolId }));
     expect(warned((await withMinimum.service.preparePay(payInput)).warnings)).toBe(false);
-    // Once the pool reads, the same service quotes and plans with no stale notice.
+    // Once the pool reads, the same service quotes and plans with no notice, and the quote's metadata can be sent back.
     readable = true;
-    expect(warned((await f.service.quotePay(sdkPayInput)).warnings)).toBe(false);
+    const quoted = await f.service.quotePay(sdkPayInput);
+    expect(warned(quoted.warnings)).toBe(false);
     expect(warned((await f.service.preparePay(sdkPayInput)).warnings)).toBe(false);
     expect(
       warned((await f.service.preparePay({ ...sdkPayInput, metadata: quoted.metadata })).warnings),
