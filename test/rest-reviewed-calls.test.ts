@@ -22,6 +22,10 @@ import { recognizeReviewedCalls, REVIEWED_CALLS_KIND, REVIEWED_CALLS_OPERATION, 
 import { ETHERSCAN_SOURCE_LINE, LOOKUP_FAILED_LINE, RAW_CALL_WARNING } from '../src/rest/userOperations/reviewedCallRules.js';
 import { createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft, verifyWalletPaymentReviewProof,
   walletReviewFromStored, walletReviewToStored, type WalletPaymentReviewContext } from '../src/rest/wallet/paymentReviews.js';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import { sharedSchemas } from '../src/rest/docs/schemas.js';
+import { sessionSchemas } from '../src/rest/docs/sessions.js';
+import { walletPaymentSchemas } from '../src/rest/docs/walletPayments.js';
 import { publicWalletPaymentAppReview, publicWalletPaymentCentralReview, type WalletReviewedCallsCentralPublic } from '../src/rest/wallet/paymentPublic.js';
 import { createWalletPaymentReviewContextFixture, issuer, now, recommit, rpId } from './fixtures/wallet-payment-review-context.js';
 import { signGet } from './fixtures/wallet-enrollment-crypto.js';
@@ -400,5 +404,18 @@ describe('reviewed calls approval page', () => {
     expect(central.reviewedCalls.model.calls[0]).toMatchObject({ functionName: 'stake', data });
     expect(central.reviewedCalls.functions).toEqual([stakeAbi[0]]);
     expect(() => JSON.stringify(central)).not.toThrow();
+  });
+
+  it('the documented app review schema accepts a batch beyond the three pay steps', async () => {
+    const data = encodeFunctionData({ abi: stakeAbi, functionName: 'stake', args: [5n, other] });
+    const calls = Array.from({ length: 5 }, () => ({ to: unknownContract, value: 0n, data }));
+    const result = await reviewed(calls, etherscan({ [unknownContract.toLowerCase()]: verified(stakeAbi) }).source);
+    if (!result.ok) throw new Error(result.refusal);
+    const draft = createWalletPaymentReviewDraft(reviewedContext(calls, result.sources), options());
+    const app = publicWalletPaymentAppReview({ draft, status: 'pending', approvedAtMs: null, cancelledAtMs: null, operationState: 'prepared', approvers: ['a'], approval: null });
+    const ajv = new Ajv2020({ strict: false, validateFormats: false });
+    ajv.addSchema(JSON.parse(JSON.stringify({ $id: 'urn:signa:schemas', $defs: { ...sharedSchemas([8453]), ...sessionSchemas(), ...walletPaymentSchemas() } }).replaceAll('#/components/schemas/', '#/$defs/')));
+    const validate = ajv.compile({ $ref: 'urn:signa:schemas#/$defs/WalletPaymentAppReview' });
+    expect(validate(JSON.parse(JSON.stringify(app))), JSON.stringify(validate.errors)).toBe(true);
   });
 });
