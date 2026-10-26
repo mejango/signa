@@ -30,8 +30,8 @@ export function etherscanAbiSource(input: { apiKey: string | undefined; client: 
         try {
           const response = await fetcher(url, { redirect: "error", signal: AbortSignal.timeout(TIMEOUT_MS) });
           if (!response.ok) return { ok: false, reason: "lookup-failed" };
-          const text = await response.text();
-          if (text.length > MAXIMUM_ABI_BYTES) return { ok: false, reason: "lookup-failed" };
+          const text = await cappedText(response);
+          if (text === undefined) return { ok: false, reason: "lookup-failed" };
           const body = JSON.parse(text) as { status?: unknown; result?: unknown };
           if (body.status !== "1" || typeof body.result !== "string")
             return { ok: false, reason: typeof body.result === "string" && /not verified/i.test(body.result) ? "no-abi" : "lookup-failed" };
@@ -45,4 +45,18 @@ export function etherscanAbiSource(input: { apiKey: string | undefined; client: 
       return { ok: true, abi, ...(implementation ? { implementation } : {}) };
     },
   };
+}
+
+// The fetch timeout signal also bounds this read; the cap stops buffering at the first byte over.
+async function cappedText(response: Response): Promise<string | undefined> {
+  if (!response.body) return "";
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let length = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return Buffer.concat(chunks).toString("utf8");
+    length += value.byteLength;
+    if (length > MAXIMUM_ABI_BYTES) { void reader.cancel().catch(() => {}); return undefined; }
+    chunks.push(value);
+  }
 }

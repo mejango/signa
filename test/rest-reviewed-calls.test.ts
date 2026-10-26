@@ -137,6 +137,13 @@ describe('reviewed calls from a Signa account', () => {
     expect((await reviewed([{ to: unknownContract, value: 0n, data }], source) as { sources: CallSource[] }).sources[0]!.source).toBe('raw');
     answers[unknownContract.toLowerCase()] = verified(stakeAbi);
     expect((await reviewed([{ to: unknownContract, value: 0n, data }], source) as { sources: CallSource[] }).sources[0]!.source).toBe('etherscan');
+     // An oversized body is cut off while streaming, not buffered whole.
+    let pulled = 0, cancelled = false;
+    const endless = new ReadableStream<Uint8Array>({ pull(controller) { pulled++; controller.enqueue(new Uint8Array(65_536)); }, cancel() { cancelled = true; } });
+    const flood = etherscanAbiSource({ apiKey: 'test-key', client: () => ({ getStorageAt: async () => padHex('0x0', { size: 32 }) }), fetch: (async () => new Response(endless)) as typeof globalThis.fetch });
+    expect(await flood.abiFor({ chainId: 8453, address: unknownContract })).toEqual({ ok: false, reason: 'lookup-failed' });
+    expect(cancelled).toBe(true);
+    expect(pulled).toBeLessThan(40);
   });
 
   it('refuses account self-administration and delegatecall', async () => {
