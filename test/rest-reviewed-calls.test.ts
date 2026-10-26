@@ -265,6 +265,8 @@ describe('verifyReviewedCallsEffects', () => {
 describe('reviewed calls approval page', () => {
   let server: Server, browser: Browser, page: Page, origin: string, html: string, css: string, script: string;
   let review: WalletReviewedCallsCentralPublic;
+  // Base's public RPC as the page reads it, stubbed: each token's decimals and symbol, or a failed decimals read. Never the live RPC.
+  let tokens: Record<string, { decimals: number | 'fail'; symbol: string }> = {};
   const reviewId = '77777777-7777-4777-8777-777777777777';
   const status = (value: string) => expect.poll(() => page.locator('#payment-status').getAttribute('data-state')).toBe(value);
   beforeAll(async () => {
@@ -317,9 +319,21 @@ describe('reviewed calls approval page', () => {
       (window as any).passkeyRequests = 0;
       navigator.credentials.get = async () => { (window as any).passkeyRequests++; throw new DOMException('Declined in the test', 'NotAllowedError'); };
     });
+    await page.route('https://mainnet.base.org/**', async route => {
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type' };
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      const batch = route.request().postDataJSON() as { id: number; method: string; params: [{ to: string; data: string }] }[];
+      await route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify(batch.map(({ id, method, params }) => {
+        if (method === 'eth_chainId') return { jsonrpc: '2.0', id, result: '0x2105' };
+        const token = tokens[params[0].to.toLowerCase()];
+        if (!token || (params[0].data === '0x313ce567' && token.decimals === 'fail')) return { jsonrpc: '2.0', id, error: { code: 3, message: 'execution reverted' } };
+        return { jsonrpc: '2.0', id, result: params[0].data === '0x313ce567' ? padHex(`0x${(token.decimals as number).toString(16)}`, { size: 32 })
+          : encodeAbiParameters([{ type: 'string' }], [token.symbol]) };
+      })) });
+    });
     await page.goto(`${origin}/wallet/payment?review=${reviewId}`);
   }
-  beforeEach(async () => { await page?.close(); });
+  beforeEach(async () => { await page?.close(); tokens = { [usdtLike.toLowerCase()]: { decimals: 6, symbol: 'USDT' } }; });
 
   it('describes an ETH pay, an ERC-20 pay with a USDT-style reset, a cash out, queueRulesetsOf, setSplitGroupsOf and setPermissionsFor with admin warnings first', async () => {
     const calls: SignaCall[] = [
@@ -337,7 +351,10 @@ describe('reviewed calls approval page', () => {
     expect(await page.locator('#payment-amount').textContent()).toBe('8 calls, sending 0.01 ETH');
     const titles = await page.locator('#payment-calls > li .call-title').allTextContents();
     expect(titles.map(title => title.split(' on ')[0])).toEqual(['pay', 'approve', 'approve', 'pay', 'cashOutTokensOf', 'queueRulesetsOf', 'setSplitGroupsOf', 'setPermissionsFor']);
-    expect(await page.locator('#payment-calls > li').nth(2).textContent()).toContain('amount: 2000000');
+    // Amounts format with the decimals the page itself read: ETH at 18, the token at the 6 its contract answered.
+    await expect.poll(() => page.locator('#payment-calls > li').nth(2).textContent()).toContain('amount: 2 USDT');
+    expect(await page.locator('#payment-calls > li').nth(0).textContent()).toContain('amount: 0.01 ETH');
+    expect(await page.locator('#payment-calls > li').nth(3).textContent()).toContain('amount: 2 USDT');
     expect(new Set(await page.locator('#payment-calls .call-source').allTextContents())).toEqual(new Set(['Decoded with the Juicebox SDK']));
     const warnings = await page.locator('#payment-warnings li').allTextContents();
     expect(warnings[0]).toMatch(/^Call 8: This lets another address act for you/);
@@ -362,6 +379,33 @@ describe('reviewed calls approval page', () => {
       await expect.poll(() => page.evaluate(() => (window as any).passkeyRequests)).toBe(1);
       expect(await page.locator('dialog, [role=dialog]').count()).toBe(0);
       await page.close();
+    }
+  });
+
+  it('a failed decimals read shows base units and the warning', async () => {
+    tokens[usdtLike.toLowerCase()]!.decimals = 'fail';
+    await serve([{ to: usdtLike, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [terminal, 2_000_000n] }) }]);
+    await open(); await status('ready');
+    await expect.poll(() => page.locator('#payment-calls').textContent()).toContain('amount: 2000000 base units');
+    expect(await page.locator('#payment-warnings').textContent()).toContain("Couldn't read this token's decimals, so its amount shows in base units.");
+    // The server's own decimals-unknown warning is not what the page shows; only its own read decides.
+    const warnings = await page.locator('#payment-warnings li').allTextContents();
+    expect(warnings.filter(text => /decimals/.test(text))).toEqual(["Couldn't read this token's decimals, so its amount shows in base units."]);
+  });
+
+  it('ignores decimals and a symbol the server supplies, and refuses an amount the bytes do not carry', async () => {
+    const approve = encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [terminal, 2_000_000n] });
+    await serve([{ to: usdtLike, value: 0n, data: approve }]);
+    const served = review.reviewedCalls.model.calls[0]!;
+    served.tokenAmounts = [{ ...served.tokenAmounts[0]!, decimals: 18, symbol: 'FAKE' } as typeof served.tokenAmounts[0]];
+    await open(); await status('ready');
+    await expect.poll(() => page.locator('#payment-calls').textContent()).toContain('amount: 2 USDT');
+    expect(await page.locator('#payment-calls').textContent()).not.toContain('FAKE');
+    await page.close();
+    for (const tokenAmounts of [[{ token: usdtLike, amount: '3000000' }], [{ token: other, amount: '2000000' }], [{ token: 'native', amount: '2000000' }]]) {
+      await serve([{ to: usdtLike, value: 0n, data: approve }]);
+      review.reviewedCalls.model.calls[0]!.tokenAmounts = tokenAmounts as typeof served.tokenAmounts;
+      await open(); await status('error'); await page.close();
     }
   });
 
