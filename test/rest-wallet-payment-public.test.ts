@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { publicWalletPaymentReview, publicWalletPaymentAppReview, publicWalletPaymentCentralReview } from '../src/rest/wallet/paymentPublic.js';
+import { publicWalletPaymentReview, publicWalletPaymentAppReview, publicWalletPaymentCentralReview as centralReview,
+  type WalletPaymentCentralPublic } from '../src/rest/wallet/paymentPublic.js';
+import type { WalletPaymentReviewView } from '../src/rest/wallet/paymentReviewsPostgres.js';
 import { buildUserPayMetadata } from '@bananapus/nana-sdk-core/v6';
 import { describeJBHookMetadata } from '@bananapus/nana-sdk-core/review/decode';
 import type { Hex } from 'viem';
 import { paymentProjectionFixture as fixture } from './fixtures/wallet-payment-projection.js';
 
+// A payment's central projection; the reviewed-calls kind has its own suite.
+const publicWalletPaymentCentralReview=(view:WalletPaymentReviewView)=>centralReview(view) as WalletPaymentCentralPublic;
 describe('wallet payment HTTP projection',()=>{
   it('returns the exact operation and payment for app comparison without private authority metadata',()=>{
     const source=fixture(), result=publicWalletPaymentReview(source) as any;
@@ -29,10 +33,10 @@ describe('wallet payment HTTP projection',()=>{
     const source=fixture();expect(publicWalletPaymentCentralReview(source).metadataSteps).toEqual([]);
     expect(publicWalletPaymentAppReview(source)).not.toHaveProperty('metadataSteps');
     const metadata=buildUserPayMetadata({chainId:8453,minimumSwapAmountOut:5n,tiers:{metadataIdTarget:'0x'+'11'.repeat(20) as Hex,tierIdsToMint:[2n]}});
-    (source.draft.review.payment as any).metadata=metadata;
+    ((source.draft.review as any).payment as any).metadata=metadata;
     expect(publicWalletPaymentCentralReview(source).metadataSteps).toEqual(describeJBHookMetadata('pay',metadata));
     expect(publicWalletPaymentCentralReview(source).metadataSteps.map(step=>step.title)).toEqual(['Buyback hook swap instructions','721 shop mint instructions']);
-    (source.draft.review.payment as any).metadata='0x1234';expect(()=>publicWalletPaymentCentralReview(source)).toThrow();
+    ((source.draft.review as any).payment as any).metadata='0x1234';expect(()=>publicWalletPaymentCentralReview(source)).toThrow();
   });
   it('shows the quote notice on the central review only, where the payer approves',()=>{
     const source=fixture(); expect(publicWalletPaymentCentralReview(source).notice).toBeNull();
@@ -42,7 +46,7 @@ describe('wallet payment HTTP projection',()=>{
   it('does not expose mutable internal draft objects through the projection',()=>{
     const source=fixture(), result=publicWalletPaymentAppReview(source) as any;
     result.operation.callData='changed';result.payment.amount='2';result.stepIndexes.push(9);result.signing.digest='changed';result.approval.signature='changed';
-    expect(source.draft.operation.callData).toBe('exact-call-data');expect(source.draft.review.payment.amount).toBe('1000000');
+    expect(source.draft.operation.callData).toBe('exact-call-data');expect((source.draft.review as any).payment.amount).toBe('1000000');
     expect(source.draft.stepIndexes).toEqual([0,1]);expect(source.draft.signing.digest).not.toBe('changed');expect(source.approval!.signature).toBe('0x1234');
   });
 });

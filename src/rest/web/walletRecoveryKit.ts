@@ -4,6 +4,7 @@ import { SAFE_141_PROXY_CREATION_CODE } from '../smartAccounts/safeCode.js';
 import { walletOwnerUpdateSafeTx } from './walletOwnerUpdate.js';
 import { walletOwnerChangeSafeTx, walletOwnerPlan } from './walletRecoveryReview.js';
 import { signaChains } from '../wallet/chains.js';
+import { chainRpcBatch } from './chainRpc.js';
 import { wordlist as english } from '@scure/bip39/wordlists/english';
 import { generateMnemonic, mnemonicToAccount } from 'viem/accounts';
 
@@ -72,12 +73,7 @@ export async function readChainSafe(walletAddress: string, chainId: number): Pro
   address(walletAddress);
   const rpc = signaChains.find(chain => chain.chainId === chainId)?.publicRpc ?? invalid();
   const signal = AbortSignal.timeout(10_000);
-  const batch = async (calls: readonly (readonly [string, readonly unknown[]])[]) => {
-    const response = await fetch(rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit', referrerPolicy: 'no-referrer',
-      signal, body: JSON.stringify(calls.map(([method, params], id) => ({ jsonrpc: '2.0', id, method, params }))) });
-    const replies = await response.json() as { id: number; result?: unknown }[];
-    return calls.map((_, id) => Array.isArray(replies) ? replies.find(reply => reply?.id === id)?.result : undefined);
-  };
+  const batch = (calls: readonly (readonly [string, readonly unknown[]])[]) => chainRpcBatch(rpc, calls, signal);
   // Every read is at one block, named by its hash and required to be canonical, so the owners and the nonce describe the same state.
   const [chain, head] = await batch([['eth_chainId', []], ['eth_getBlockByNumber', ['latest', false]]]);
   const hash = (head as { hash?: unknown } | null)?.hash;

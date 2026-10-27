@@ -412,6 +412,11 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin,
     description: 'Requires a current typed wallet-app grant. The server loads its existing prepared operation and derives the payment and SafeOp digest. Neither API owners nor legacy bot grants can use this route. The saved allowlist callback supplies the return location. No signature, nonce reservation or submission occurs here.',
     extra: { 'x-principal-kind': 'wallet-app' },
   });
+  add('/wallet/reviewed-calls', 'POST', 'prepareReviewedCalls', 'Prepare a plan of any calls from the account, described in its one approval', 'WalletPayments', 'plan', {
+    body: ref('PrepareReviewedCalls'), result: ref('Plan'), status: 201, idempotent: true,
+    description: 'Wallet-app grant, Base only. Each call is described by the Juicebox SDK, else its Etherscan-verified ABI (the implementation behind a proxy), else raw with a warning, all in the one approval. Calls to the account itself, delegatecalls and an expectation that differs from the decode are refused (422, naming the call). Then prepare its UserOperation over every step and its review.',
+    extra: { 'x-principal-kind': 'wallet-app' },
+  });
   add('/wallet/payment-reviews/{id}', 'GET', 'getWalletPaymentReview', 'Read the original app review and any live owner approval', 'WalletPayments', 'read', {
     parameters: [pathParameter('id', ref('ResourceId'))], result: ref('WalletPaymentAppReview'),
     description: 'Only the original current app grant and incarnation can retrieve its review. Approval requires a separate explicit passkey ceremony on the central wallet origin. A winning signature is returned only while the review and authority remain live. Submit it through the original UserOperation endpoint with unchanged fields. After review expiry, reconcile the original UserOperation; expiry does not establish a safe replacement.',

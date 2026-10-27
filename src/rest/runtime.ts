@@ -60,6 +60,8 @@ import { PostgresSessionStore } from "./sessions/postgres.js";
 import { SessionService } from "./sessions/service.js";
 import { UserOperationProvider } from "./userOperations/provider.js";
 import { UserOperationService } from "./userOperations/service.js";
+import { UserOperationChain } from "./userOperations/chain.js";
+import { etherscanAbiSource } from "./userOperations/etherscanAbi.js";
 import { PostgresUserOperationStore } from "./userOperations/postgres.js";
 import { PostgresSponsorCapStore } from "./sponsorCaps.js";
 import { PostgresTransactionStore } from "./transactions/postgres.js";
@@ -89,7 +91,7 @@ import { RelayrProvider } from "./sponsorship/provider.js";
 import { createWalletOnramp, type WalletOnrampConfig } from "./wallet/onramp.js";
 import { createWalletBalances } from "./wallet/balances.js";
 import type { ServerSigner } from "./signer.js";
-import type { Address } from "viem";
+import type { Address, Hex } from "viem";
 
 export interface RestWalletConfiguration {
   origin: string;
@@ -152,6 +154,8 @@ export async function createRestRuntime(options: {
   smartAccountPaymasters?: readonly ReviewedSessionPaymaster[];
   executionConfiguration?: RestExecutionConfiguration;
   rpc?: RestRpc;
+  /** SIGNA_ETHERSCAN_API_KEY: verified ABIs for reviewed calls the SDK cannot decode. Never logged. */
+  etherscanApiKey?: string;
   startMaintenance?: boolean;
   metrics?: Metrics;
 }): Promise<{
@@ -568,7 +572,11 @@ export async function createRestRuntime(options: {
     sessionReviewer,
     sessions,
     userOperations,
-    ...(walletPayments ? { walletPayments } : {}),
+    ...(walletPayments ? { walletPayments, reviewedCalls: {
+      abis: etherscanAbiSource({ apiKey: options.etherscanApiKey, client: chainId => ({
+        getStorageAt: async ({ address, slot }) => await rpc.request(chainId, "eth_getStorageAt", [address, slot, "latest"]) as Hex }) }),
+      head: async (chainId, signal) => (await new UserOperationChain(rpc, signal ? { signal } : {}).head(chainId)).evidence,
+    } } : {}),
     omnichain,
     openapi,
   });

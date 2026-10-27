@@ -81,6 +81,7 @@ async function activate(): Promise<void> {
     surface: "wallet",
     pool, store, services: protocol.services, config: protocol.config, upstreams, audience, wallet,
     rpcSiteLimitPerMinute, metrics: new Metrics(), executionConfiguration: await readRestExecutionConfiguration(process.env),
+    ...(process.env.SIGNA_ETHERSCAN_API_KEY ? { etherscanApiKey: process.env.SIGNA_ETHERSCAN_API_KEY } : {}),
     ...(networksPayer ? { walletNetworksPayer: networksPayer } : {}),
     ...(creation ? { walletSignup: (context: Parameters<typeof createBaseWalletSignupHost>[0]) => createBaseWalletSignupHost(context, {
       url: rpcUrl, signer: creationSigner!, poolId: process.env.WALLET_CREATION_POOL_ID!,

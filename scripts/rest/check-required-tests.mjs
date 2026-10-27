@@ -137,6 +137,8 @@ export const requiredVitestSuites = [
   "test/rest-wallet-base-host-postgres.integration.test.ts",
   "test/rest-wallet-recovery-base-postgres.integration.test.ts",
   "test/rest-wallet-v6-payment-evm.test.ts",
+  "test/rest-reviewed-calls.test.ts",
+  "test/rest-reviewed-calls-evm.test.ts",
   "test/rest-v6-payment-fixture.test.ts",
   "test/rest-wallet-http.test.ts",
   "test/rest-wallet-runtime.test.ts",

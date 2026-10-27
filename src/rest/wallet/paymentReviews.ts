@@ -13,6 +13,7 @@ import { PASSKEY_MAX_SIGNATURE_BYTES } from "../userOperations/passkeyEstimation
 import type { UserOperationV07 } from "../userOperations/types.js";
 import { recognizeWalletV6UsdcPayment, type WalletV6UsdcPayment } from "../userOperations/semantics.js";
 import { passkeyPayMetadataSteps } from "../userOperations/userPayMetadata.js";
+import { recognizeReviewedCalls, REVIEWED_CALLS_KIND, REVIEWED_CALLS_OPERATION, type ReviewedCallsReview } from "../userOperations/reviewedCalls.js";
 import { validateWalletAppGrant, walletAppFields, walletAppPrincipalId, walletAppBigint, type WalletAppGrant } from "./appGrants.js";
 import { createWalletAuthorityIdentity, validateWalletAuthorityContext, walletAuthorityIdentityDigest,
   type WalletAuthorityContext, type WalletAuthorityCredential } from "./authority.js";
@@ -35,7 +36,7 @@ export interface WalletPaymentReviewContext {
   manifest: SmartAccountManifest;
 }
 /** What a draft asks the owner to approve. Each kind carries its own recognized facts. */
-export type WalletReview = { kind: "v6-usdc-pay"; payment: WalletV6UsdcPayment };
+export type WalletReview = { kind: "v6-usdc-pay"; payment: WalletV6UsdcPayment } | ReviewedCallsReview;
 export interface WalletReviewDraft {
   version: "center-wallet-payment-review-v1";
   id: string;
@@ -131,9 +132,12 @@ function signing(draft: Pick<WalletReviewDraft, "operation" | "chainId" | "entry
   const p = safe7579PasskeyOwnerSigningPayload({ ...draft, validAfter, validUntil });
   return { digest: p.digest, signedData: p.signedData, validAfter: p.validAfter, validUntil: p.validUntil };
 }
-/** The stored JSON keeps the payment under `payment`: rows written by this build read in the previous one. */
-export function walletReviewToStored<T extends { review: WalletReview }>(draft: T): Omit<T, "review"> & { payment: WalletV6UsdcPayment } {
-  return Object.fromEntries(Object.entries(draft).map(([key, value]) => key === "review" ? ["payment", (value as WalletReview).payment] : [key, value])) as never;
+/** The stored JSON keeps a payment under `payment`, so its rows read in builds before the union;
+ * any other kind is stored under `review` as it is. */
+export function walletReviewToStored<T extends { review: WalletReview }>(draft: T): unknown {
+  const review = draft.review;
+  if (review.kind !== "v6-usdc-pay") return draft;
+  return Object.fromEntries(Object.entries(draft).map(([key, value]) => key === "review" ? ["payment", review.payment] : [key, value]));
 }
 /** Rename only; the validator decides whether the result is a valid draft. */
 export function walletReviewFromStored(stored: unknown): WalletReviewDraft {
@@ -182,9 +186,15 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
       r.commitment !== digest({ planId: r.planId, planCommitment: r.planCommitment, operation: r.operation, operationHash: r.operationHash,
         accountBindingId: r.accountBindingId, accountStateHash: r.accountStateHash, gasPolicyId: r.gasPolicyId,
         providerId: r.providerId, createdAt: r.createdAt, expiresAt: r.expiresAt })) invalid();
-    const payment = recognizeWalletV6UsdcPayment(p, r.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, token: c.token, directV6Terminal: c.directV6Terminal });
-    if (!payment) invalid();
-    passkeyPayMetadataSteps(payment.metadata);
+    // A reviewed call set needs no host token or terminal: its review describes whatever it calls.
+    let review: WalletReview;
+    if (p.draft.operation === REVIEWED_CALLS_OPERATION) review = recognizeReviewedCalls(p, r.stepIndexes) ?? invalid();
+    else {
+      const payment = recognizeWalletV6UsdcPayment(p, r.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, token: c.token, directV6Terminal: c.directV6Terminal });
+      if (!payment) invalid();
+      passkeyPayMetadataSteps(payment.metadata);
+      review = { kind: "v6-usdc-pay", payment };
+    }
     assertSafe7579Execution(r.operation.callData, r.stepIndexes.map(index => {
       const call = p.draft.calls[index]!; return { target: call.to, value: call.value, callData: call.data };
     }));
@@ -202,7 +212,7 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
         manifestRevision: c.manifest.revision, signer: address(profile.signer.address) },
       planId: p.id, planCommitment: p.commitment, operationId: r.id, operationCommitment: r.commitment, operationHash: r.operationHash,
       stepIndexes: [...r.stepIndexes], operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address),
-      review: { kind: "v6-usdc-pay", payment },
+      review,
       ...(r.gas ? { gas: checkReviewGas(r.gas, operation, SIGNA_HOME_CHAIN_ID) } : {}),
       ...(quoteFailed ? { notice: PAY_QUOTE_FAILED_MESSAGE } : {}),
       signing: signing({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: r.entryPoint, safe7579: c.manifest.safe7579.address },
@@ -250,21 +260,29 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletReviewDr
     if (!same(signing(d, d.signing.validAfter, d.signing.validUntil), d.signing) ||
       BigInt(d.signing.validAfter) * 1000n > BigInt(d.createdAtMs) || BigInt(d.signing.validUntil) * 1000n < BigInt(d.expiresAtMs)) invalid();
     if ("gas" in d ? !same(checkReviewGas(d.gas, d.operation, d.chainId), d.gas) : !d.operation.paymaster) invalid();
-    fields(d.review, ["kind", "payment"]);
-    if (d.review.kind !== "v6-usdc-pay") invalid();
-    const payment = d.review.payment;
-    fields(payment, ["kind", "chainId", "account", "token", "terminal", "projectId", "amount", "beneficiary", "minimumReturnedTokens",
-      "memo", "metadata", "stepIndexes", "approvalStepIndexes", "paymentStepIndex", "resetAllowance"]);
     const calls = decodeSafe7579Execution(d.operation.callData).map((call, index) => ({ chainId: SIGNA_HOME_CHAIN_ID, to: call.target, value: call.value,
       data: call.callData, label: "", decoded: {}, dependsOn: index ? [index - 1] : [] }));
-    const project = { chainId: SIGNA_HOME_CHAIN_ID, projectId: payment.projectId, version: 6 as const };
-    const checked = recognizeWalletV6UsdcPayment({ draft: { operation: "pay", account: d.operation.sender, project, calls, evidence: [], warnings: [],
-      summary: { operation: "pay", project, account: d.operation.sender, terminal: payment.terminal, terminalPath: [payment.terminal],
-        routerGateway: null, route: "multi-terminal", payment: { token: payment.token, amount: payment.amount, unit: "token-base-units" },
-        beneficiary: payment.beneficiary, minimumBeneficiaryTokenCount: payment.minimumReturnedTokens, metadata: payment.metadata } } },
-      d.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, token: payment.token, directV6Terminal: payment.terminal });
-    if (!checked || !same(checked, payment)) invalid();
-    passkeyPayMetadataSteps(payment.metadata);
+    if (d.review.kind === REVIEWED_CALLS_KIND) {
+      // Re-derived from the operation bytes and the stored sources, never read back as given.
+      fields(d.review, ["kind", "chainId", "calls", "sources"]);
+      const checked = recognizeReviewedCalls({ draft: { operation: REVIEWED_CALLS_OPERATION, account: d.operation.sender, calls, evidence: [],
+        warnings: [], summary: { kind: REVIEWED_CALLS_KIND, sources: d.review.sources } } }, d.stepIndexes, d.review.chainId);
+      if (!checked || !same(checked, d.review) || "notice" in d) invalid();
+    } else {
+      fields(d.review, ["kind", "payment"]);
+      if (d.review.kind !== "v6-usdc-pay") invalid();
+      const payment = d.review.payment;
+      fields(payment, ["kind", "chainId", "account", "token", "terminal", "projectId", "amount", "beneficiary", "minimumReturnedTokens",
+        "memo", "metadata", "stepIndexes", "approvalStepIndexes", "paymentStepIndex", "resetAllowance"]);
+      const project = { chainId: SIGNA_HOME_CHAIN_ID, projectId: payment.projectId, version: 6 as const };
+      const checked = recognizeWalletV6UsdcPayment({ draft: { operation: "pay", account: d.operation.sender, project, calls, evidence: [], warnings: [],
+        summary: { operation: "pay", project, account: d.operation.sender, terminal: payment.terminal, terminalPath: [payment.terminal],
+          routerGateway: null, route: "multi-terminal", payment: { token: payment.token, amount: payment.amount, unit: "token-base-units" },
+          beneficiary: payment.beneficiary, minimumBeneficiaryTokenCount: payment.minimumReturnedTokens, metadata: payment.metadata } } },
+        d.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, token: payment.token, directV6Terminal: payment.terminal });
+      if (!checked || !same(checked, payment)) invalid();
+      passkeyPayMetadataSteps(payment.metadata);
+    }
     fields(d.ceremony, ["id", "accountId", "purpose", "contextDigest", "challenge", "expiresAt"]); assertWalletCeremonyDraft(d.ceremony);
     const { ceremony, ...base } = d;
     if (ceremony.id !== d.id || ceremony.accountId !== a.accountId || ceremony.purpose !== "payment" || ceremony.expiresAt !== d.expiresAtMs ||

@@ -6,8 +6,9 @@ import { passkeyPayMetadataSteps, type PayMetadataStep } from '../userOperations
 import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 import type { ReviewGas } from '../sponsorCaps.js';
 import { reviewGas } from './paymentReviews.js';
+import { reviewedCallsView, type ReviewedCallsReview } from '../userOperations/reviewedCalls.js';
 
-export interface WalletPaymentReviewPublic {
+interface WalletReviewPublicBase {
   version: 'center-wallet-payment-review-v1';
   id: string;
   state: string;
@@ -24,7 +25,6 @@ export interface WalletPaymentReviewPublic {
   chainId: typeof SIGNA_HOME_CHAIN_ID;
   entryPoint: Address;
   safe7579: Address;
-  payment: WalletV6UsdcPayment;
   signing: { digest: Hex; signedData: Hex; validAfter: string; validUntil: string };
   createdAtMs: number;
   expiresAtMs: number;
@@ -33,39 +33,52 @@ export interface WalletPaymentReviewPublic {
   cancelledAtMs: number | null;
   operationState: string;
 }
+export interface WalletPaymentReviewPublic extends WalletReviewPublicBase { payment: WalletV6UsdcPayment }
+/** A reviewed call set carries its calls and their sources in place of a payment. */
+export interface WalletReviewedCallsPublic extends WalletReviewPublicBase { review: ReviewedCallsReview }
+export type WalletReviewPublic = WalletPaymentReviewPublic | WalletReviewedCallsPublic;
 export interface WalletPaymentAppPublic extends WalletPaymentReviewPublic {
   approval: { signature: Hex; signedCommitment: Hex } | null;
 }
-export interface WalletPaymentCentralPublic extends WalletPaymentReviewPublic {
+export type WalletReviewAppPublic = WalletPaymentAppPublic | (WalletReviewedCallsPublic & Pick<WalletPaymentAppPublic, 'approval'>);
+interface WalletCentralPublic {
   /** Shown beside approval: the quote could not read the pool price. Center's own page only. */
   notice: string | null;
   /** Who pays the gas, as the signed paymaster fields fix it. Center's own page only: an app's
    * client checks its view's exact keys. */
   gas: ReviewGas;
   passkey: { rpId: string; credentialId: string; credentialIds: string[]; challenge: string; userVerification: 'required' };
+}
+export interface WalletPaymentCentralPublic extends WalletPaymentReviewPublic, WalletCentralPublic {
   /** The pay metadata as the SDK's review decoder reads it, decoded here so the page does not bundle the SDK; empty for `0x`. */
   metadataSteps: PayMetadataStep[];
+}
+export interface WalletReviewedCallsCentralPublic extends WalletReviewedCallsPublic, WalletCentralPublic {
+  /** The SDK's model of each call and the function each decoded call used, so the page decodes the bytes itself. */
+  reviewedCalls: ReturnType<typeof reviewedCallsView>;
 }
 
 /** Project an already validated durable review. No internal authority or credential document
  * crosses the app boundary, and returned objects cannot mutate the source receipt. */
-export function publicWalletPaymentReview(view: WalletPaymentReviewView): WalletPaymentReviewPublic {
+export function publicWalletPaymentReview(view: WalletPaymentReviewView): WalletReviewPublic {
   const d = view.draft;
-  return { version: d.version, id: d.id, state: d.state, issuer: d.issuer, accountId: d.authority.accountId,
+  const base: WalletReviewPublicBase = { version: d.version, id: d.id, state: d.state, issuer: d.issuer, accountId: d.authority.accountId,
     app: { origin: d.grant.origin, callbackUri: d.grant.callbackUri, grantId: d.grant.id, grantIncarnation: d.grant.incarnation },
     planId: d.planId, planCommitment: d.planCommitment, operationId: d.operationId, operationCommitment: d.operationCommitment,
     operationHash: d.operationHash, stepIndexes: [...d.stepIndexes], operation: structuredClone(d.operation),
-    chainId: d.chainId, entryPoint: d.entryPoint, safe7579: d.safe7579, payment: structuredClone(d.review.payment),
+    chainId: d.chainId, entryPoint: d.entryPoint, safe7579: d.safe7579,
     signing: { ...d.signing }, createdAtMs: d.createdAtMs, expiresAtMs: d.expiresAtMs,
     status: view.status, approvedAtMs: view.approvedAtMs, cancelledAtMs: view.cancelledAtMs, operationState: view.operationState };
+  return d.review.kind === 'v6-usdc-pay' ? { ...base, payment: structuredClone(d.review.payment) } : { ...base, review: structuredClone(d.review) };
 }
-export function publicWalletPaymentAppReview(view: WalletPaymentReviewAppView): WalletPaymentAppPublic {
+export function publicWalletPaymentAppReview(view: WalletPaymentReviewAppView): WalletReviewAppPublic {
   return { ...publicWalletPaymentReview(view), approval: view.approval ? { ...view.approval } : null };
 }
-export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView): WalletPaymentCentralPublic {
-  const d = view.draft;
-  return { ...publicWalletPaymentReview(view), notice: d.notice ?? null, gas: reviewGas(d), passkey: { rpId: d.authority.credential.rpId,
+export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView): WalletPaymentCentralPublic | WalletReviewedCallsCentralPublic {
+  const d = view.draft, review = publicWalletPaymentReview(view);
+  const central: WalletCentralPublic = { notice: d.notice ?? null, gas: reviewGas(d), passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId, credentialIds: [...view.approvers],
-    challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' },
-    metadataSteps: passkeyPayMetadataSteps(d.review.payment.metadata) };
+    challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' } };
+  return d.review.kind === 'v6-usdc-pay' ? { ...review as WalletPaymentReviewPublic, ...central, metadataSteps: passkeyPayMetadataSteps(d.review.payment.metadata) }
+    : { ...review as WalletReviewedCallsPublic, ...central, reviewedCalls: reviewedCallsView(d.review, d.operation.sender) };
 }
