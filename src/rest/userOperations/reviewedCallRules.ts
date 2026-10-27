@@ -13,6 +13,8 @@ export type CallSource =
 export type ReviewedCallsRefusal = "account-self-administration" | "delegatecall" | "app-expectation-mismatch";
 
 export const REVIEWED_CALLS_KIND = "reviewed-calls-v1";
+/** The plan operation an app's call set is stored under. */
+export const REVIEWED_CALLS_OPERATION = "reviewed-calls";
 export const ETHERSCAN_SOURCE_LINE = "ABI from Etherscan, not reviewed by Juicebox";
 export const LOOKUP_FAILED_LINE = "Couldn't look up this contract.";
 export const RAW_CALL_WARNING = "Raw calldata: no verified ABI describes this call. Check the destination and bytes before approving.";
