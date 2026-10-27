@@ -21,8 +21,9 @@ export type SignatureFacts =
   | { kind: "safe-tx"; safe: Address; nonce: string; operation: number; refund: boolean; call: SignatureCall }
   | { kind: "message"; text: string }
   | { kind: "typed-data"; primaryType: string; fields: SignedField[] };
-/** One signed value: its path, its declared type and its value as text (an empty array is "[]"). */
-export type SignedField = [path: string, type: string, value: string];
+/** One signed value: its path, its declared type, its value as text (an empty array is "[]") and its label, which names every
+ * enclosing struct and array type, as `grant (Permit) > ids (uint256[1]) > [0]`. */
+export type SignedField = [path: string, type: string, value: string, label: string];
 
 const fail = (): never => { throw new Error("signature request"); };
 const record = (value: unknown, keys?: string[]): Record<string, unknown> => {
@@ -52,20 +53,21 @@ const KNOWN_DOMAIN: Record<string, string> = { PermitSingle: "chainId,name,verif
   ForwardRequest: "chainId,name,verifyingContract,version", SafeTx: "chainId,verifyingContract" };
 
 /** One value of `type`, checked strictly and normalized for hashing; each leaf is listed as text. */
-function value(types: Record<string, { name: string; type: string }[]>, type: string, input: unknown, path: string,
+function value(types: Record<string, { name: string; type: string }[]>, type: string, input: unknown, path: string, label: string,
   leaves: SignedField[], depth: number): unknown {
   if (depth > 8 || leaves.length > 512) fail();
   const array = /^(.+)\[(\d*)\]$/.exec(type);
   if (array) {
     if (!Array.isArray(input) || input.length > 256 || (array[2] !== "" && input.length !== Number(array[2]))) fail();
-    if (!(input as unknown[]).length) leaves.push([path, type, "[]"]);
-    return (input as unknown[]).map((item, index) => value(types, array[1]!, item, `${path}[${index}]`, leaves, depth + 1));
+    if (!(input as unknown[]).length) leaves.push([path, type, "[]", label]);
+    return (input as unknown[]).map((item, index) => value(types, array[1]!, item, `${path}[${index}]`, `${label} (${type}) > [${index}]`, leaves, depth + 1));
   }
   const struct = types[type];
   if (struct) {
     const v = record(input, struct.map(item => item.name));
-    if (!struct.length) leaves.push([path, type, "{}"]);
-    return Object.fromEntries(struct.map(item => [item.name, value(types, item.type, v[item.name], path ? `${path}.${item.name}` : item.name, leaves, depth + 1)]));
+    if (!struct.length) leaves.push([path, type, "{}", label]);
+    return Object.fromEntries(struct.map(item => [item.name, value(types, item.type, v[item.name], path ? `${path}.${item.name}` : item.name,
+      label ? `${label} (${type}) > ${item.name}` : item.name, leaves, depth + 1)]));
   }
   let out: unknown = input;
   const integer = /^(u?)int(\d*)$/.exec(type), bytes = /^bytes(\d*)$/.exec(type);
@@ -86,7 +88,7 @@ function value(types: Record<string, { name: string; type: string }[]>, type: st
     if (integer[1] ? n < 0n || n >= limit : n < -limit || n >= limit) fail();
     out = n;
   } else fail();
-  leaves.push([path, type, typeof out === "bigint" ? out.toString() : String(out)]);
+  leaves.push([path, type, typeof out === "bigint" ? out.toString() : String(out), label]);
   return out;
 }
 
@@ -110,9 +112,9 @@ export function typedDataOf(input: unknown): { typedData: TypedDataDefinition; f
   const { EIP712Domain: _domain, ...messageTypes } = structs;
   if (typeof t.primaryType !== "string" || !messageTypes[t.primaryType]) fail();
   const domainLeaves: SignedField[] = [], leaves: SignedField[] = [];
-  const normalized = value({ EIP712Domain: keys.map(key => field(key, DOMAIN_TYPES[key]!)) }, "EIP712Domain", domain, "domain", domainLeaves, 0) as Record<string, unknown>;
+  const normalized = value({ EIP712Domain: keys.map(key => field(key, DOMAIN_TYPES[key]!)) }, "EIP712Domain", domain, "domain", "domain", domainLeaves, 0) as Record<string, unknown>;
   if ("chainId" in domain && typeof domain.chainId !== "number") fail();
-  const message = value(messageTypes, t.primaryType as string, t.message, "", leaves, 0) as Record<string, unknown>;
+  const message = value(messageTypes, t.primaryType as string, t.message, "", "", leaves, 0) as Record<string, unknown>;
   const typedData = { domain: { ...normalized, ...("chainId" in normalized ? { chainId: Number(normalized.chainId) } : {}) },
     types: structs, primaryType: t.primaryType as string, message } as unknown as TypedDataDefinition;
   hashTypedData(typedData);

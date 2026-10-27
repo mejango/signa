@@ -89,10 +89,17 @@ describe('signatures from a Signa account', () => {
     const doc = (primaryType: string, type: string, extra: object = {}, extraTypes: object[] = []) => typed({ domain: { name: 'App', chainId: 8453, verifyingContract: otherSafe },
       types: { [primaryType]: [{ name: 'amount', type }, ...extraTypes] }, primaryType, message: { amount: '1', ...extra } });
     const login = (await reviewed(doc('Login', 'string'))).view.facts, permit = (await reviewed(doc('Permit', 'uint256'))).view.facts;
-    expect(login).toMatchObject({ primaryType: 'Login', fields: expect.arrayContaining([['amount', 'string', '1']]) });
-    expect(permit).toMatchObject({ primaryType: 'Permit', fields: expect.arrayContaining([['amount', 'uint256', '1']]) });
+    expect(login).toMatchObject({ primaryType: 'Login', fields: expect.arrayContaining([['amount', 'string', '1', 'amount']]) });
+    expect(permit).toMatchObject({ primaryType: 'Permit', fields: expect.arrayContaining([['amount', 'uint256', '1', 'amount']]) });
     expect((await reviewed(doc('Batch', 'uint256', { to: [] }, [{ name: 'to', type: 'address[]' }]))).view.facts)
-      .toMatchObject({ fields: expect.arrayContaining([['to', 'address[]', '[]']]) });
+      .toMatchObject({ fields: expect.arrayContaining([['to', 'address[]', '[]', 'to']]) });
+    // Enclosing structs and array dimensions are part of each value's label.
+    const labels = async (types: object, message: object) => ((await reviewed(typed({ domain: { name: 'App', chainId: 8453, verifyingContract: otherSafe },
+      types, primaryType: 'Authorization', message }))).view.facts as { fields: [string, string, string, string][] }).fields.filter(([path]) => !path.startsWith('domain.')).map(entry => entry[3]);
+    const grant = (inner: string) => labels({ Authorization: [{ name: 'grant', type: inner }], [inner]: [{ name: 'amount', type: 'uint256' }] }, { grant: { amount: '1' } });
+    expect(await grant('Login')).toEqual(['grant (Login) > amount']); expect(await grant('Permit')).toEqual(['grant (Permit) > amount']);
+    const ids = (type: string) => labels({ Authorization: [{ name: 'ids', type }] }, { ids: ['1'] });
+    expect(await ids('uint256[]')).toEqual(['ids (uint256[]) > [0]']); expect(await ids('uint256[1]')).toEqual(['ids (uint256[1]) > [0]']);
   });
 
   it('hashes the domain it shows: EIP712Domain names each domain field exactly once', () => {
@@ -126,6 +133,9 @@ describe('signatures from a Signa account', () => {
     const derived = callWarnings(found.item, found.args);
     expect(derived).toEqual({ required: ['unlimited-approval'], possible: ['permission-grant'] });
     expect(codes).toEqual(expect.arrayContaining([...derived.required, ...derived.possible]));
+    // A served ABI that calls the amount a token ID does not drop the unlimited approval: the page says it itself.
+    const renamed = { ...found.item, inputs: [found.item.inputs[0]!, { ...found.item.inputs[1]!, name: 'tokenId' }] };
+    expect(callWarnings(renamed, found.args)).toEqual({ required: [], possible: ['unlimited-approval', 'permission-grant'] });
   });
 
   it('counts a missing code observation as unknown, never as not deployed', async () => {
@@ -164,9 +174,12 @@ describe('signatures from a Signa account', () => {
       primaryType: 'Mail', message: { from: { name: 'Cow', wallet: spender }, to: [{ name: 'Bob', wallet: otherSafe }], contents: 'Hello, Bob!' } });
     const { review, view } = await reviewed(request);
     expect(view.warnings).toEqual(['unknown-typed-data']);
-    expect(view.facts).toEqual({ kind: 'typed-data', primaryType: 'Mail', fields: [['domain.name', 'string', 'Mail'], ['domain.version', 'string', '1'],
-      ['domain.chainId', 'uint256', '8453'], ['domain.verifyingContract', 'address', otherSafe], ['from.name', 'string', 'Cow'], ['from.wallet', 'address', spender],
-      ['to[0].name', 'string', 'Bob'], ['to[0].wallet', 'address', otherSafe], ['contents', 'string', 'Hello, Bob!']] });
+    const domain = 'domain (EIP712Domain) > ';
+    expect(view.facts).toEqual({ kind: 'typed-data', primaryType: 'Mail', fields: [['domain.name', 'string', 'Mail', `${domain}name`],
+      ['domain.version', 'string', '1', `${domain}version`], ['domain.chainId', 'uint256', '8453', `${domain}chainId`],
+      ['domain.verifyingContract', 'address', otherSafe, `${domain}verifyingContract`], ['from.name', 'string', 'Cow', 'from (Person) > name'],
+      ['from.wallet', 'address', spender, 'from (Person) > wallet'], ['to[0].name', 'string', 'Bob', 'to (Person[]) > [0] (Person) > name'],
+      ['to[0].wallet', 'address', otherSafe, 'to (Person[]) > [0] (Person) > wallet'], ['contents', 'string', 'Hello, Bob!', 'contents']] });
     // Approval: one passkey assertion over the SafeMessage digest is the account's ERC-1271 signature over the typed data.
     const draft = draftOf(review);
     const requestDigest = hashTypedData((request as Extract<SignatureRequest, { kind: 'typed-data' }>).typedData as never);

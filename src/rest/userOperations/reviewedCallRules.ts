@@ -75,11 +75,12 @@ const OWNER_ACTIONS = new Set(["transferOwnership", "renounceOwnership", "addOwn
   "enableModule", "setGuard", "setFallbackHandler", "transferOwnershipToProject", "setControllerOf", "setTerminalsOf"]);
 const granted = (address: unknown) => typeof address === "string" && !/^0x0{40}$/i.test(address);
 /** A decoded call's security warnings, as the SDK's review derives them from its bytes. `required` the SDK always
- * gives; `possible` is a grant to an address the SDK may know by name, which this page cannot, so it shows it itself. */
+ * gives; `possible` the page shows itself where the served model has none: a grant to an address the SDK may know by
+ * name, which this page cannot, and an unlimited amount the ABI calls a token ID, since a served parameter name is unchecked. */
 export function callWarnings(item: AbiFunction, args: readonly unknown[]): { required: string[]; possible: string[] } {
   const shape = SPENDS[`${item.name}(${item.inputs.map(input => input.type).join(",")})`], required: string[] = [], possible: string[] = [];
   const tokenId = shape && item.inputs[shape.amount]!.name === "tokenId";
-  if (shape && !tokenId && args[shape.amount] === (1n << BigInt(item.inputs[shape.amount]!.type.slice(4) || 256)) - 1n) required.push("unlimited-approval");
+  if (shape && args[shape.amount] === (1n << BigInt(item.inputs[shape.amount]!.type.slice(4) || 256)) - 1n) (tokenId ? possible : required).push("unlimited-approval");
   if (OWNER_ACTIONS.has(item.name)) required.push("owner-action");
   if (item.name === "setPermissionsFor") required.push("permission-grant");
   else if (item.name === "setApprovalForAll" ? args[1] === true && granted(args[0]) : shape && granted(args[shape.spender]) && (tokenId || args[shape.amount] !== 0n))

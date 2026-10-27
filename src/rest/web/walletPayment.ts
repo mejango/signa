@@ -314,7 +314,7 @@ const SIGNATURE_WARNINGS: Record<string, string> = { 'unknown-typed-data': "Sign
   'safe-gas-nonzero': 'This Safe transaction pays a gas refund from the Safe.', 'unlimited-approval': PAYMENT_WARNINGS['unlimited-approval']! };
 const when = (seconds: string) => BigInt(seconds) >= 2n ** 47n ? 'never' : new Date(Number(seconds) * 1000).toLocaleString();
 // Each signed value with its declared type, strings quoted: two documents that hash differently read differently.
-const signedRow = ([path, type, value]: SignedField): [string, string] => [`${path} (${type})`, type === 'string' ? JSON.stringify(value) : value];
+const signedRow = ([, type, value, label]: SignedField): [string, string] => [`${label} (${type})`, type === 'string' ? JSON.stringify(value) : value];
 /** What a signature authorizes, as rows read from the request; Permit2 amounts wait for their token reads. */
 function signatureItems(value: WalletSignatureCentralPublic, pending: { node: HTMLElement; name: string; token: string; value: bigint; prefix: string; headline: boolean }[]) {
   const f = facts!, item = document.createElement('li'), rows = (entries: [string, string][]) => entries.map(([name, text]) => item.appendChild(line('call-line', `${name}: ${text}`)));

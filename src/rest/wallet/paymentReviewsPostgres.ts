@@ -48,6 +48,8 @@ export interface WalletPaymentReviewStoreOptions {
   maxRecords?: number;
   maxAccountRecords?: number;
   receiptRetentionMs?: number;
+  /** How long a signature review stays open for its one approval; five minutes, the most a review may live. */
+  signatureReviewLifetimeMs?: number;
   /** App origins admitted to frame their reviews: their approvals may be cross-origin assertions naming them. */
   frameableAppOrigins?: string[];
   /** The account's ERC-1271 check on its chain, run on an approved signature before it is kept. */
@@ -102,10 +104,14 @@ function draftIdentity(draft: WalletAnyReviewDraft): string {
   return stable(immutable);
 }
 function read(row: ReviewRow): ReviewRow { return { ...row, draft: walletReviewFromStored(row.draft) }; }
-function live(row: ReviewRow, time: number): void {
+/** `kept`: an approved signature, which its app may still fetch past the review window (below). */
+function live(row: ReviewRow, time: number, kept = false): void {
   if (Number(row.created_at_ms) > time) inactive();
-  if (Number(row.expires_at_ms) <= time) expired();
+  if (!kept && Number(row.expires_at_ms) <= time) expired();
 }
+/** An approved signature stays its app's to fetch, under current authority, for as long as its receipt and passkey
+ * challenge are kept: a lost callback must not strand a signature whose request can't be asked again in that time. */
+const kept = (row: ReviewRow, time: number) => row.status === "approved" && isSignatureReview(row.draft) && Number(row.retain_until_ms) > time;
 function view(row: ReviewRow, operation: UserOperationRecord | null, captured: Captured): WalletPaymentReviewView {
   const authority = captured.context.authority;
   return { draft: row.draft, status: row.status, approvers: [authority.credential.credentialId, ...(authority.devices ?? []).map(device => device.credentialId)],
@@ -142,7 +148,7 @@ export class PostgresWalletPaymentReviewStore {
   private readonly frameable: Set<string>;
   constructor(private readonly pool: Pool, input: WalletPaymentReviewStoreOptions) {
     const v = fields(input, ["issuer", "audience", "token", "directV6Terminal", "manifestFor"],
-      ["maxRecords", "maxAccountRecords", "receiptRetentionMs", "frameableAppOrigins", "verifySignature"]);
+      ["maxRecords", "maxAccountRecords", "receiptRetentionMs", "signatureReviewLifetimeMs", "frameableAppOrigins", "verifySignature"]);
     if (v.verifySignature !== undefined && typeof v.verifySignature !== "function") invalid();
     const frameableAppOrigins = v.frameableAppOrigins === undefined ? [] : v.frameableAppOrigins;
     if (!Array.isArray(frameableAppOrigins) || frameableAppOrigins.some(value => typeof value !== "string")) invalid();
@@ -154,13 +160,14 @@ export class PostgresWalletPaymentReviewStore {
     for (const key of ["token", "directV6Terminal"] as const)
       if (typeof v[key] !== "string" || !isAddress(v[key]) || BigInt(v[key]) <= 1n) invalid();
     const maxRecords = (v.maxRecords ?? 100_000) as number, maxAccountRecords = (v.maxAccountRecords ?? 128) as number;
-    const receiptRetentionMs = (v.receiptRetentionMs ?? 86_400_000) as number;
+    const receiptRetentionMs = (v.receiptRetentionMs ?? 86_400_000) as number, signatureReviewLifetimeMs = (v.signatureReviewLifetimeMs ?? 300_000) as number;
     for (const [name, value, minimum, maximum] of [["maxRecords", maxRecords, 1, 1_000_000],
-      ["maxAccountRecords", maxAccountRecords, 1, 10_000], ["receiptRetentionMs", receiptRetentionMs, 100, 86_400_000]] as const)
+      ["maxAccountRecords", maxAccountRecords, 1, 10_000], ["receiptRetentionMs", receiptRetentionMs, 100, 86_400_000],
+      ["signatureReviewLifetimeMs", signatureReviewLifetimeMs, 1000, 300_000]] as const)
       if ((Object.hasOwn(v, name) && typeof v[name] !== "number") || !Number.isSafeInteger(value) || value < minimum || value > maximum) invalid();
     this.options = { issuer, audience, token: (v.token as string).toLowerCase() as Address,
       directV6Terminal: (v.directV6Terminal as string).toLowerCase() as Address,
-      manifestFor: v.manifestFor as WalletPaymentReviewStoreOptions["manifestFor"], maxRecords, maxAccountRecords, receiptRetentionMs, frameableAppOrigins: [...frameable],
+      manifestFor: v.manifestFor as WalletPaymentReviewStoreOptions["manifestFor"], maxRecords, maxAccountRecords, receiptRetentionMs, signatureReviewLifetimeMs, frameableAppOrigins: [...frameable],
       verifySignature: (v.verifySignature ?? (async () => false)) as Required<WalletPaymentReviewStoreOptions>["verifySignature"] };
     this.authority = new PostgresWalletAuthorityStore(pool); this.ceremonies = new PostgresWalletCeremonyStore(pool);
     this.frameable = frameable;
@@ -195,7 +202,7 @@ export class PostgresWalletPaymentReviewStore {
     if (hint && hint.input_digest !== inputDigest) conflict();
     const captured = await this.capture(actor, null);
     const draft = hint ? this.assertHint(hint, captured) : createWalletSignatureReviewDraft(captured.context,
-      { id: chosenId ?? randomUUID(), state, createdAtMs: await this.databaseNow(), review: v.review as ReviewedSignatureReview });
+      { id: chosenId ?? randomUUID(), state, createdAtMs: await this.databaseNow(), review: v.review as ReviewedSignatureReview, lifetimeMs: this.options.signatureReviewLifetimeMs });
     return this.issue(actor, captured, draft, { key, inputDigest });
   }
   private async issue(actor: RestActor, captured: Captured, draft: WalletAnyReviewDraft, input: { key: string; inputDigest: string }): Promise<WalletPaymentReviewView> {
@@ -235,12 +242,12 @@ export class PostgresWalletPaymentReviewStore {
     return { ...result.view, draft: validateWalletAnyReviewDraft(result.view.draft) };
   }
   async getForApp(inputActor: RestActor, inputId: string): Promise<WalletPaymentReviewAppView> {
-    const actor = actorOf(inputActor), hint = await this.hint(inputId); actorMatches(actor, hint.draft);
+    const actor = actorOf(inputActor), hint = await this.hint(inputId, true); actorMatches(actor, hint.draft);
     const captured = await this.capture(actor, hint.operation_id), draft = this.assertHint(hint, captured);
     return this.transaction(async client => {
-      await this.guard(client, captured, draft);
+      await this.guard(client, captured, draft, kept(hint, await walletCeremonyDatabaseNow(client)));
       const { operation } = await this.lockExecution(client, captured), row = await this.lockReview(client, hint);
-      await this.finish(client, captured, row, operation);
+      await this.finish(client, captured, row, operation, kept(row, await walletCeremonyDatabaseNow(client)));
       return { ...view(row, operation, captured), approval: row.status === "approved" ? { signature: row.signature!, signedCommitment: row.signed_commitment! } : null };
     });
   }
@@ -341,10 +348,11 @@ export class PostgresWalletPaymentReviewStore {
       DELETE FROM rest_wallet_payment_reviews r USING expired e WHERE r.id=e.id`, [limit])).rowCount ?? 0);
   }
   private rowActor(row: ReviewRow): RestActor { return { accountId: row.account_id, principalId: row.principal_id }; }
-  private async hint(inputId: string): Promise<ReviewRow> {
+  private async hint(inputId: string, keep = false): Promise<ReviewRow> {
     const row = (await this.pool.query<ReviewRow>("SELECT * FROM rest_wallet_payment_reviews WHERE id=$1", [uuid(inputId)])).rows.map(read)[0];
     if (!row) missing();
-    row.draft = validateWalletAnyReviewDraft(row.draft); live(row, await this.databaseNow()); return row;
+    row.draft = validateWalletAnyReviewDraft(row.draft);
+    const time = await this.databaseNow(); live(row, time, keep && kept(row, time)); return row;
   }
   private async databaseNow(): Promise<number> {
     const time = Number((await this.pool.query<{ now: string }>(`SELECT ${nowSql} AS now`)).rows[0]!.now);
@@ -380,7 +388,7 @@ export class PostgresWalletPaymentReviewStore {
     try {
       if (!isSignatureReview(draft)) assertWalletPaymentReviewContext(draft, captured.context);
       else if (stable(validateWalletSignatureReviewDraft(draft)) !== stable(createWalletSignatureReviewDraft(captured.context,
-        { id: draft.id, state: draft.state, createdAtMs: draft.createdAtMs, review: draft.review }))) inactive();
+        { id: draft.id, state: draft.state, createdAtMs: draft.createdAtMs, review: draft.review, lifetimeMs: draft.expiresAtMs - draft.createdAtMs }))) inactive();
     } catch { return inactive(); }
     return draft;
   }
@@ -392,12 +400,12 @@ export class PostgresWalletPaymentReviewStore {
     const { recovery: _recovery, device, ...credential } = passkey as WalletAuthorityDevice & { recovery?: unknown };
     return { credential, signer: device.signerAddress };
   }
-  private async guard(client: PoolClient, captured: Captured, draft: WalletAnyReviewDraft): Promise<void> {
+  private async guard(client: PoolClient, captured: Captured, draft: WalletAnyReviewDraft, keep = false): Promise<void> {
     const current = await loadWalletAuthorityContextInTransaction(client, draft.authority.accountId);
     if (authorityIdentity(current) !== captured.authority) inactive();
     await assertWalletAppGrantActiveInTransaction(client, draft.grant,
       { kind: "actor", principalId: walletAppPrincipalId(draft.grant), audience: this.options.audience });
-    if (draft.expiresAtMs <= await walletCeremonyDatabaseNow(client)) expired();
+    if (!keep && draft.expiresAtMs <= await walletCeremonyDatabaseNow(client)) expired();
   }
   private async lockExecution(client: PoolClient, captured: Captured): Promise<{ operation: UserOperationRecord | null; plan: StoredPlan | null }> {
     if (captured.operation === null) return { operation: null, plan: null };
@@ -425,14 +433,14 @@ export class PostgresWalletPaymentReviewStore {
       [operation.chainId, operation.sender.toLowerCase(), BigInt(operation.operation.nonce).toString()]);
     if (nonce.rows.length) conflict();
   }
-  private async finish(client: PoolClient, captured: Captured, row: ReviewRow, operation: UserOperationRecord | null): Promise<void> {
+  private async finish(client: PoolClient, captured: Captured, row: ReviewRow, operation: UserOperationRecord | null, keep = false): Promise<void> {
     if (row.status === "approved") {
       if (!row.signature || !row.signed_commitment || !row.proof_digest) inactive();
       if (operation?.submission && !isSignatureReview(row.draft) && (operation.submission.commitment !== row.signed_commitment ||
         stable(operation.submission.operation) !== stable({ ...row.draft.operation, signature: row.signature }))) conflict();
     }
-    await this.guard(client, captured, row.draft);
-    live(row, await walletCeremonyDatabaseNow(client));
+    await this.guard(client, captured, row.draft, keep);
+    live(row, await walletCeremonyDatabaseNow(client), keep);
   }
   private async transaction<T>(run: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();

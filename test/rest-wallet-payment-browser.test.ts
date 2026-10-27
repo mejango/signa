@@ -316,6 +316,10 @@ describe('central payment review browser, virtual authenticator', () => {
     await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
     expect(await page.locator('#payment-approve').isVisible()).toBe(false);
     expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0);
+    // A served ABI naming the amount a token ID cannot drop the unlimited approval either: the page says both itself.
+    const renamed = await approve(maxUint256), call = renamed.reviewedSignature.call!;
+    call.model.calls[0]!.warnings = []; (call.functions[0] as any).inputs[1].name = 'tokenId'; review = renamed as never; await load();
+    expect(await page.locator('#payment-warnings li').allTextContents()).toEqual(['This lets another address act for you.', 'This approves an unlimited amount.']);
     // A grant only the server could name: with its warning dropped, the page still says it.
     const limited = await approve(5n); limited.reviewedSignature.call!.model.calls[0]!.warnings = []; review = limited as never;
     for (const viewport of [{ width: 1280, height: 800 }, { width: 360, height: 780 }]) {
@@ -341,8 +345,22 @@ describe('central payment review browser, virtual authenticator', () => {
     }
     expect(shown[0]).toContain('Type: Login'); expect(shown[0]).toContain('amount (string): "1"');
     expect(shown[1]).toContain('Type: Permit'); expect(shown[1]).toContain('amount (uint256): 1');
-    for (const text of shown) for (const row of ['domain.version (string): "2"', `domain.salt (bytes32): 0x${'11'.repeat(32)}`, 'to (address[]): []']) expect(text).toContain(row);
+    for (const text of shown) for (const row of ['domain (EIP712Domain) > version (string): "2"', `domain (EIP712Domain) > salt (bytes32): 0x${'11'.repeat(32)}`, 'to (address[]): []']) expect(text).toContain(row);
     expect(shown[0]).not.toBe(shown[1]);
+    // Enclosing structs and array dimensions read differently too.
+    const nested = (inner: string, ids: string) => typedRequest({ domain: { name: 'App', chainId: 8453, verifyingContract: '0x9999999999999999999999999999999999999999' },
+      types: { Authorization: [{ name: 'grant', type: inner }, { name: 'ids', type: ids }], [inner]: [{ name: 'amount', type: 'uint256' }] }, primaryType: 'Authorization',
+      message: { grant: { amount: '1' }, ids: ['1'] } });
+    const rendered: string[] = [];
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 360, height: 780 }]) {
+      await page.setViewportSize(viewport);
+      for (const [inner, ids] of [['Login', 'uint256[]'], ['Permit', 'uint256[1]']]) {
+        review = await signatureReview(nested(inner!, ids!)) as never; await load(); rendered.push(await signatureText());
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+    }
+    expect(rendered[0]).toContain('grant (Login) > amount (uint256): 1'); expect(rendered[0]).toContain('ids (uint256[]) > [0] (uint256): 1');
+    expect(rendered[1]).toContain('grant (Permit) > amount (uint256): 1'); expect(rendered[1]).toContain('ids (uint256[1]) > [0] (uint256): 1');
     // A recognized Permit2 lists every value it signs under Details, and an expiration of 0 is the block it runs in.
     review = await signatureReview(typedRequest({ domain: { name: 'Permit2', chainId: 8453, verifyingContract: '0x000000000022D473030F116dDEE9F6B43aC78BA3' },
       types: { PermitSingle: [{ name: 'details', type: 'PermitDetails' }, { name: 'spender', type: 'address' }, { name: 'sigDeadline', type: 'uint256' }],
@@ -351,7 +369,7 @@ describe('central payment review browser, virtual authenticator', () => {
         spender: '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad', sigDeadline: '1800003600' } })) as never;
     await load();
     expect(await signatureText()).toContain('Allowance expires: when it runs');
-    expect(await page.locator('#payment-signed').textContent()).toContain('details.nonce (uint48): 4');
+    expect(await page.locator('#payment-signed').textContent()).toContain('details (PermitDetails) > nonce (uint48): 4');
     expect(approvals()).toHaveLength(0);
   });
 

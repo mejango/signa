@@ -336,14 +336,15 @@ function signatureContextDigest(base: Omit<WalletSignatureReviewDraft, "ceremony
   return digest(["center-wallet-signature-review-context-v1", base]).slice(2);
 }
 export function createWalletSignatureReviewDraft(inputContext: Pick<WalletPaymentReviewContext, "issuer" | "grant" | "authority" | "manifest">,
-  input: { id: string; state: string; createdAtMs: number; review: ReviewedSignatureReview }): WalletSignatureReviewDraft {
+  input: { id: string; state: string; createdAtMs: number; review: ReviewedSignatureReview; lifetimeMs?: number }): WalletSignatureReviewDraft {
   try {
     const { issuer, grant, authority: context, manifest } = inputContext;
-    const c = snapshot({ issuer, grant, authority: context, manifest }), { review, ...options } = snapshot(input);
+    const c = snapshot({ issuer, grant, authority: context, manifest }), { review, lifetimeMs = walletPaymentReviewMaximumLifetimeMs, ...options } = snapshot(input);
+    if (!Number.isSafeInteger(lifetimeMs) || lifetimeMs <= 0 || lifetimeMs > walletPaymentReviewMaximumLifetimeMs) invalid();
     const { a, g, b, authority } = reviewAuthority(c, options), account = address(b.wallet.address);
     const checked = recognizeReviewedSignature(review, account);
     if (!checked || !same(checked, review) || a.accountId !== `eip155:${SIGNA_HOME_CHAIN_ID}:${account}`) invalid();
-    const expiresAtMs = Math.min(g.expiresAt * 1000, options.createdAtMs + walletPaymentReviewMaximumLifetimeMs);
+    const expiresAtMs = Math.min(g.expiresAt * 1000, options.createdAtMs + lifetimeMs);
     if (expiresAtMs <= options.createdAtMs) invalid();
     const base: Omit<WalletSignatureReviewDraft, "ceremony"> = { version: "center-wallet-payment-review-v1", ...options, issuer: c.issuer, grant: g,
       authority, operationId: signatureRow(options.id), chainId: SIGNA_HOME_CHAIN_ID, review: checked, signing: signatureSigning(account, checked.request), expiresAtMs };

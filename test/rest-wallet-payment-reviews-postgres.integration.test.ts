@@ -292,6 +292,26 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
     expect((await reviewRow(declined.draft.id)).status).toBe("cancelled");
   });
 
+  it("lets the app fetch an approved signature past the review window, under current authority, and nothing else", async () => {
+    const context = await appContext(), account = context.actor.accountId.split(":")[2] as Address;
+    const store = new PostgresWalletPaymentReviewStore(pool, { ...options(), signatureReviewLifetimeMs: 1500, verifySignature: async () => true });
+    const review = (message: string) => ({ kind: REVIEWED_SIGNATURE_KIND, chainId: 8453, request: signatureRequestOf({ kind: "message", chainId: 8453, message }), sources: [] }) as never;
+    const approvedView = await store.prepareSignature(context.actor, { review: review("Sign in to example.com\nNonce: 21"), state: token() }, "signature:kept");
+    const pending = await store.prepareSignature(context.actor, { review: review("Sign in to example.com\nNonce: 22"), state: token() }, "signature:open");
+    expect(approvedView.draft.expiresAtMs - approvedView.draft.createdAtMs).toBe(1500);
+    await store.approve(approvedView.draft.id, signGet({ ...context.login.credential, challenge: signatureSigning(account, (approvedView.draft.review as any).request).digest, rpId: walletLoginFixtureRpId, origin: issuer }));
+    const approval = (await store.getForApp(context.actor, approvedView.draft.id)).approval;
+    await waitPast(Math.max(approvedView.draft.expiresAtMs, pending.draft.expiresAtMs));
+    // A lost callback does not strand the signature: the app fetches it again while its receipt is kept.
+    expect((await store.getForApp(context.actor, approvedView.draft.id)).approval).toEqual(approval);
+    // Anything else past the window is expired: a review never approved, and the approval page itself.
+    await expect(store.getForApp(context.actor, pending.draft.id)).rejects.toMatchObject({ status: 410 });
+    await expect(store.get(approvedView.draft.id)).rejects.toMatchObject({ status: 410 });
+    // The grant that asked must still be current.
+    await pool.query("UPDATE rest_wallet_app_grants SET revoked_at=floor(extract(epoch FROM clock_timestamp())) WHERE id=$1", [context.grant.id]);
+    await expect(store.getForApp(context.actor, approvedView.draft.id)).rejects.toThrow();
+  });
+
   it("records one genuine SafeOp approval and recovers the same original envelope with a fresh signature", async () => {
     const value = await pendingReview(), firstProof = verifyWalletPaymentReviewProof(value.view.draft, value.assertion);
     const approved = await value.store.approve(value.view.draft.id, value.assertion);
