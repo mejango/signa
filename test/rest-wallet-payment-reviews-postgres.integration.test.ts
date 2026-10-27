@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
-import { keccak256, toHex, type Hex } from "viem";
+import { keccak256, toHex, type Address, type Hex } from "viem";
 import { migrate } from "../src/db/migrate.js";
 import type { RestActor } from "../src/rest/core.js";
 import { PostgresUserOperationStore } from "../src/rest/userOperations/postgres.js";
@@ -22,7 +22,8 @@ import { digest } from "../src/rest/sponsorship/validation.js";
 import { PostgresWalletPaymentReviewStore, type WalletPaymentReviewStoreOptions } from "../src/rest/wallet/paymentReviewsPostgres.js";
 import { verifyWalletPaymentReviewProof } from "../src/rest/wallet/paymentReviews.js";
 import { PostgresWalletLoginStore } from "../src/rest/wallet/loginPostgres.js";
-import { decodeSafe7579PasskeyOwnerSignature } from "../src/rest/smartAccounts/passkeySignatures.js";
+import { decodeSafe7579MessageSignature, decodeSafe7579PasskeyOwnerSignature } from "../src/rest/smartAccounts/passkeySignatures.js";
+import { REVIEWED_SIGNATURE_KIND, signatureRequestOf, signatureSigning } from "../src/rest/userOperations/reviewedSignatureRules.js";
 import type { WalletAssertion } from "../src/rest/wallet/webauthn.js";
 import { userOperationCommitment } from "../src/rest/userOperations/codec.js";
 
@@ -252,6 +253,63 @@ suite("PostgreSQL payment reviews with genuine passkey login and app grants", ()
     const second = await preparedOperation(value, 120_000, 2n);
     await expect(value.store.prepare(value.actor, { operationId: second.record.id, state: value.state }, value.key)).rejects.toMatchObject({ status: 409 });
     expect(await counts()).toMatchObject({ reviews: 1, ceremonies: 1, consumed: 0, operations: 2, nonces: 0 });
+  });
+
+  it("approves a signature once with the account's ERC-1271 signature, kept only after its chain accepts it", async () => {
+    const context = await appContext(), account = context.actor.accountId.split(":")[2] as Address;
+    const request = signatureRequestOf({ kind: "message", chainId: 8453, message: "Sign in to example.com\nNonce: 7" });
+    const checks: { hash: Hex; signature: Hex }[] = [];
+    let accepts = false;
+    const store = new PostgresWalletPaymentReviewStore(pool, { ...options(), verifySignature: async input => {
+      expect(input).toMatchObject({ chainId: 8453, account }); checks.push(input); return accepts; } });
+    const view = await store.prepareSignature(context.actor, { review: { kind: REVIEWED_SIGNATURE_KIND, chainId: 8453, request, sources: [] }, state: token() }, "signature:1");
+    const { requestDigest, digest: challenge } = signatureSigning(account, request);
+    expect(view).toMatchObject({ status: "pending", operationState: null, draft: { operationId: `signature:${view.draft.id}`, signing: { digest: challenge, requestDigest } } });
+    expect((await store.get(view.draft.id)).status).toBe("pending");
+    const assertion = signGet({ ...context.login.credential, challenge, rpId: walletLoginFixtureRpId, origin: issuer });
+    // A signature the account's chain does not accept is never kept, and the review stays open.
+    await expect(store.approve(view.draft.id, assertion)).rejects.toMatchObject({ code: "WALLET_SIGNATURE_UNVERIFIED" });
+    expect((await reviewRow(view.draft.id)).status).toBe("pending");
+    accepts = true;
+    const approved = await store.approve(view.draft.id, assertion);
+    expect(approved).toMatchObject({ replayed: false, view: { status: "approved" } });
+    const app = await store.getForApp(context.actor, view.draft.id);
+    expect(app.approval!.signedCommitment).toBe(requestDigest);
+    expect(checks.at(-1)).toEqual({ chainId: 8453, account, hash: requestDigest, signature: app.approval!.signature });
+    expect(decodeSafe7579MessageSignature(app.approval!.signature, 1)).toHaveLength(1);
+    expect((await store.approve(view.draft.id, assertion)).replayed).toBe(true);
+    // The same key returns the same review; another request under it is a conflict.
+    expect((await store.prepareSignature(context.actor, { review: view.draft.review as never, state: view.draft.state }, "signature:1")).draft.id).toBe(view.draft.id);
+    await expect(store.prepareSignature(context.actor, { review: { kind: REVIEWED_SIGNATURE_KIND, chainId: 8453, request: { ...request, message: "other" } as never, sources: [] },
+      state: view.draft.state }, "signature:1")).rejects.toMatchObject({ code: "WALLET_PAYMENT_REVIEW_CONFLICT" });
+    // One passkey challenge per request: the same request under a new key is refused, as a payment's operation is.
+    await expect(store.prepareSignature(context.actor, { review: view.draft.review as never, state: token() }, "signature:2")).rejects.toMatchObject({ status: 409 });
+    const other = signatureRequestOf({ kind: "message", chainId: 8453, message: "Sign in to example.com\nNonce: 8" });
+    const declined = await store.prepareSignature(context.actor, { review: { kind: REVIEWED_SIGNATURE_KIND, chainId: 8453, request: other, sources: [] }, state: token() }, "signature:3");
+    expect((await store.cancel(declined.draft.id)).status).toBe("cancelled");
+    const late = signGet({ ...context.login.credential, challenge: declined.draft.signing.digest, rpId: walletLoginFixtureRpId, origin: issuer });
+    await expect(store.approve(declined.draft.id, late)).rejects.toThrow();
+    expect((await reviewRow(declined.draft.id)).status).toBe("cancelled");
+  });
+
+  it("lets the app fetch an approved signature past the review window, under current authority, and nothing else", async () => {
+    const context = await appContext(), account = context.actor.accountId.split(":")[2] as Address;
+    const store = new PostgresWalletPaymentReviewStore(pool, { ...options(), signatureReviewLifetimeMs: 1500, verifySignature: async () => true });
+    const review = (message: string) => ({ kind: REVIEWED_SIGNATURE_KIND, chainId: 8453, request: signatureRequestOf({ kind: "message", chainId: 8453, message }), sources: [] }) as never;
+    const approvedView = await store.prepareSignature(context.actor, { review: review("Sign in to example.com\nNonce: 21"), state: token() }, "signature:kept");
+    const pending = await store.prepareSignature(context.actor, { review: review("Sign in to example.com\nNonce: 22"), state: token() }, "signature:open");
+    expect(approvedView.draft.expiresAtMs - approvedView.draft.createdAtMs).toBe(1500);
+    await store.approve(approvedView.draft.id, signGet({ ...context.login.credential, challenge: signatureSigning(account, (approvedView.draft.review as any).request).digest, rpId: walletLoginFixtureRpId, origin: issuer }));
+    const approval = (await store.getForApp(context.actor, approvedView.draft.id)).approval;
+    await waitPast(Math.max(approvedView.draft.expiresAtMs, pending.draft.expiresAtMs));
+    // A lost callback does not strand the signature: the app fetches it again while its receipt is kept.
+    expect((await store.getForApp(context.actor, approvedView.draft.id)).approval).toEqual(approval);
+    // Anything else past the window is expired: a review never approved, and the approval page itself.
+    await expect(store.getForApp(context.actor, pending.draft.id)).rejects.toMatchObject({ status: 410 });
+    await expect(store.get(approvedView.draft.id)).rejects.toMatchObject({ status: 410 });
+    // The grant that asked must still be current.
+    await pool.query("UPDATE rest_wallet_app_grants SET revoked_at=floor(extract(epoch FROM clock_timestamp())) WHERE id=$1", [context.grant.id]);
+    await expect(store.getForApp(context.actor, approvedView.draft.id)).rejects.toThrow();
   });
 
   it("records one genuine SafeOp approval and recovers the same original envelope with a fresh signature", async () => {

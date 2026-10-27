@@ -9,10 +9,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
 import { buildUserPayMetadata, PAY_QUOTE_FAILED_MESSAGE } from '@bananapus/nana-sdk-core/v6';
 import { passkeyPayMetadataSteps } from '../src/rest/userOperations/userPayMetadata.js';
-import type { Hex } from 'viem';
+import { encodeFunctionData, erc20Abi, maxUint256, type Address, type Hex } from 'viem';
+import { getJBContractAddress, jbMultiTerminalAbi } from '@bananapus/nana-sdk-core';
 import { getUserOperationHash } from '../src/rest/userOperations/codec.js';
 import { safe7579PasskeyOwnerSigningPayload } from '../src/rest/smartAccounts/passkeySignatures.js';
-import type { WalletPaymentCentralPublic } from '../src/rest/wallet/paymentPublic.js';
+import type { WalletPaymentCentralPublic, WalletSignatureCentralPublic } from '../src/rest/wallet/paymentPublic.js';
+import { reviewedSignatureView, reviewSignature } from '../src/rest/userOperations/reviewedSignatures.js';
+import { signatureRequestOf, signatureSigning, type SignatureRequest } from '../src/rest/userOperations/reviewedSignatureRules.js';
 import { parseWalletRegistration, type WalletRegistrationCandidate } from '../src/rest/wallet/registration.js';
 import { verifyWalletAssertion } from '../src/rest/wallet/webauthn.js';
 import { operationCallsView } from '../src/rest/userOperations/reviewedCalls.js';
@@ -229,6 +232,145 @@ describe('central payment review browser, virtual authenticator', () => {
     tamper(calls => { calls.functions[0] = { ...calls.functions[0]!, inputs: [{ type: 'address', name: 'spender,uint256 amount' }] }; }); await refused();
     tamper(calls => { calls.functions[0] = { ...calls.functions[0]!, type: 'event' } as never; }); await refused();
     review.reviewedCalls = served; await load(); expect(approvals()).toHaveLength(0);
+  });
+
+  /** A signature review as Center serves it, described by the server's own review of the request. */
+  async function signatureReview(request: SignatureRequest): Promise<WalletSignatureCentralPublic> {
+    const account = review.accountId.split(':')[2] as Address;
+    const result = await reviewSignature({ account, request, chain: { deployed: async () => true, owners: async () => 'consistent' },
+      abis: { abiFor: async () => { throw new Error('No lookup expected'); } } });
+    if (!result.ok) throw new Error(result.refusal);
+    const signing = signatureSigning(account, request);
+    return { version: review.version, id: reviewId, state, issuer: origin, accountId: review.accountId, app: review.app, chainId: 8453,
+      review: result.review, signing, createdAtMs: review.createdAtMs, expiresAtMs: review.expiresAtMs, status: 'pending', approvedAtMs: null, cancelledAtMs: null,
+      passkey: { ...review.passkey, challenge: encode(Buffer.from(signing.digest.slice(2), 'hex')) },
+      reviewedSignature: JSON.parse(JSON.stringify(reviewedSignatureView(result.review, account))) };
+  }
+  const message = (text: string) => signatureRequestOf({ kind: 'message', chainId: 8453, message: text });
+  const forwardRequest = (from: Address, call?: { to: Address; data: Hex }) => signatureRequestOf({ kind: 'typed-data', chainId: 8453, typedData: {
+    domain: { name: 'Juicebox', version: '1', chainId: 8453, verifyingContract: '0xc29d6995ab3b0df4650ad643adeac55e7acbb566' },
+    types: { ForwardRequest: [{ name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'gas', type: 'uint256' },
+      { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint48' }, { name: 'data', type: 'bytes' }] },
+    primaryType: 'ForwardRequest', message: { from, to: call?.to ?? getJBContractAddress('JBMultiTerminal', 6, 8453), value: '0', gas: '300000', nonce: '0', deadline: 1_800_003_600,
+      data: call?.data ?? encodeFunctionData({ abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, review.payment.token, 5n, from, 0n, 'hi', '0x'] }) } } });
+  const typedRequest = (typedData: object) => signatureRequestOf({ kind: 'typed-data', chainId: 8453, typedData });
+  const signatureText = async () => (await page.locator('#payment-calls').textContent())!;
+
+  it('one passkey prompt per signature request', async () => {
+    let rpcReads = 0;
+    await page.route('https://mainnet.base.org/**', route => { rpcReads++; return route.abort(); });
+    review = await signatureReview(message('Sign in to example.com\nNonce: 7')) as never;
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 360, height: 780 }]) {
+      await page.setViewportSize(viewport); await load();
+      expect(await page.locator('h1').textContent()).toBe('Review signature');
+      expect(await page.locator('#payment-calls').textContent()).toContain('Sign in to example.com\nNonce: 7');
+      expect(await page.locator('#payment-approve').textContent()).toBe('Sign');
+      expect(await page.locator('#payment-gas').isVisible()).toBe(false);
+      expect(await page.locator('#payment-warnings').isVisible()).toBe(false);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    expect(await page.evaluate(() => (window as any).passkeyRequests)).toEqual([]);
+    await page.locator('#payment-approve').click(); await status('approved');
+    expect(await page.evaluate(() => (window as any).passkeyRequests)).toHaveLength(1);
+    await approved(); expect(approvals()).toHaveLength(1);
+    expect(rpcReads).toBe(0); expect(errors).toEqual([]);
+  });
+
+  it('the page refuses a served model that differs from its own decode', async () => {
+    const account = review.accountId.split(':')[2] as Address;
+    const valid = await signatureReview(message('Sign in to example.com')), other = await signatureReview(message('Send everything'));
+    const forward = await signatureReview(forwardRequest(account));
+    const refused = async (change: (served: WalletSignatureCentralPublic) => void, from = valid) => {
+      const served = structuredClone(from); change(served); review = served as never;
+      await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+      expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+      expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0);
+    };
+    await refused(served => { served.reviewedSignature.facts = other.reviewedSignature.facts; });
+    await refused(served => { served.reviewedSignature.warnings = ['unknown-typed-data']; });
+    await refused(served => { served.review.request = other.review.request; });
+    await refused(served => { served.signing.digest = other.signing.digest; });
+    await refused(served => { served.signing.requestDigest = other.signing.requestDigest; });
+    await refused(served => { served.passkey.challenge = other.passkey.challenge; });
+    // A Safe transaction for the account itself is self-administration, whatever the server served.
+    await refused(served => { served.review.request = signatureRequestOf({ kind: 'typed-data', chainId: 8453, typedData: { domain: { chainId: 8453, verifyingContract: account },
+      types: { SafeTx: [{ name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'data', type: 'bytes' }, { name: 'operation', type: 'uint8' },
+        { name: 'safeTxGas', type: 'uint256' }, { name: 'baseGas', type: 'uint256' }, { name: 'gasPrice', type: 'uint256' }, { name: 'gasToken', type: 'address' },
+        { name: 'refundReceiver', type: 'address' }, { name: 'nonce', type: 'uint256' }] }, primaryType: 'SafeTx',
+      message: { to: account, value: '0', data: '0x', operation: 0, safeTxGas: 0, baseGas: 0, gasPrice: 0, gasToken: account, refundReceiver: account, nonce: 0 } } }); });
+    // The call a forward request lets someone run is checked as a reviewed call is.
+    await refused(served => { served.reviewedSignature.call!.functions = []; }, forward);
+    await refused(served => { served.reviewedSignature.call!.model.calls[0]!.functionName = 'addToBalanceOf'; }, forward);
+    await refused(served => { served.reviewedSignature.call = null; }, forward);
+    review = forward as never; await load();
+    expect(await page.locator('#payment-calls').textContent()).toContain('pay');
+    expect(approvals()).toHaveLength(0);
+  });
+
+  it("refuses a forwarded call whose served warnings drop one the page derives, and says a grant itself", async () => {
+    const account = review.accountId.split(':')[2] as Address, spender = '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad' as Address, usdc = review.payment.token as Address;
+    const approve = (amount: bigint) => signatureReview(forwardRequest(account, { to: usdc, data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, amount] }) }));
+    const unlimited = await approve(maxUint256);
+    expect(unlimited.reviewedSignature.call!.model.calls[0]!.warnings.map(warning => warning.code)).toEqual(expect.arrayContaining(['unlimited-approval', 'permission-grant']));
+    unlimited.reviewedSignature.call!.model.calls[0]!.warnings = []; review = unlimited as never;
+    await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+    expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+    expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0);
+    // A served ABI naming the amount a token ID cannot drop the unlimited approval either: the page says both itself.
+    const renamed = await approve(maxUint256), call = renamed.reviewedSignature.call!;
+    call.model.calls[0]!.warnings = []; (call.functions[0] as any).inputs[1].name = 'tokenId'; review = renamed as never; await load();
+    expect(await page.locator('#payment-warnings li').allTextContents()).toEqual(['This lets another address act for you.', 'This approves an unlimited amount.']);
+    // A grant only the server could name: with its warning dropped, the page still says it.
+    const limited = await approve(5n); limited.reviewedSignature.call!.model.calls[0]!.warnings = []; review = limited as never;
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 360, height: 780 }]) {
+      await page.setViewportSize(viewport); await load();
+      expect(await page.locator('#payment-warnings li').allTextContents()).toEqual(['This lets another address act for you.']);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    expect(approvals()).toHaveLength(0);
+  });
+
+  it('shows each signed value with its type, so documents that hash differently read differently', async () => {
+    await page.route('https://mainnet.base.org/**', route => route.abort());
+    const usdc = review.payment.token;
+    const doc = (primaryType: string, type: string) => typedRequest({ domain: { name: 'App', version: '2', chainId: 8453, verifyingContract: '0x9999999999999999999999999999999999999999',
+      salt: `0x${'11'.repeat(32)}` }, types: { [primaryType]: [{ name: 'amount', type }, { name: 'to', type: 'address[]' }] }, primaryType, message: { amount: '1', to: [] } });
+    const shown: string[] = [];
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 360, height: 780 }]) {
+      await page.setViewportSize(viewport);
+      for (const [primaryType, type] of [['Login', 'string'], ['Permit', 'uint256']]) {
+        review = await signatureReview(doc(primaryType!, type!)) as never; await load(); shown.push(await signatureText());
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+    }
+    expect(shown[0]).toContain('Type: Login'); expect(shown[0]).toContain('amount (string): "1"');
+    expect(shown[1]).toContain('Type: Permit'); expect(shown[1]).toContain('amount (uint256): 1');
+    for (const text of shown) for (const row of ['domain (EIP712Domain) > version (string): "2"', `domain (EIP712Domain) > salt (bytes32): 0x${'11'.repeat(32)}`, 'to (address[]): []']) expect(text).toContain(row);
+    expect(shown[0]).not.toBe(shown[1]);
+    // Enclosing structs and array dimensions read differently too.
+    const nested = (inner: string, ids: string) => typedRequest({ domain: { name: 'App', chainId: 8453, verifyingContract: '0x9999999999999999999999999999999999999999' },
+      types: { Authorization: [{ name: 'grant', type: inner }, { name: 'ids', type: ids }], [inner]: [{ name: 'amount', type: 'uint256' }] }, primaryType: 'Authorization',
+      message: { grant: { amount: '1' }, ids: ['1'] } });
+    const rendered: string[] = [];
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 360, height: 780 }]) {
+      await page.setViewportSize(viewport);
+      for (const [inner, ids] of [['Login', 'uint256[]'], ['Permit', 'uint256[1]']]) {
+        review = await signatureReview(nested(inner!, ids!)) as never; await load(); rendered.push(await signatureText());
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      }
+    }
+    expect(rendered[0]).toContain('grant (Login) > amount (uint256): 1'); expect(rendered[0]).toContain('ids (uint256[]) > [0] (uint256): 1');
+    expect(rendered[1]).toContain('grant (Permit) > amount (uint256): 1'); expect(rendered[1]).toContain('ids (uint256[1]) > [0] (uint256): 1');
+    // A recognized Permit2 lists every value it signs under Details, and an expiration of 0 is the block it runs in.
+    review = await signatureReview(typedRequest({ domain: { name: 'Permit2', chainId: 8453, verifyingContract: '0x000000000022D473030F116dDEE9F6B43aC78BA3' },
+      types: { PermitSingle: [{ name: 'details', type: 'PermitDetails' }, { name: 'spender', type: 'address' }, { name: 'sigDeadline', type: 'uint256' }],
+        PermitDetails: [{ name: 'token', type: 'address' }, { name: 'amount', type: 'uint160' }, { name: 'expiration', type: 'uint48' }, { name: 'nonce', type: 'uint48' }] },
+      primaryType: 'PermitSingle', message: { details: { token: usdc, amount: '1000000', expiration: 0, nonce: 4 },
+        spender: '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad', sigDeadline: '1800003600' } })) as never;
+    await load();
+    expect(await signatureText()).toContain('Allowance expires: when it runs');
+    expect(await page.locator('#payment-signed').textContent()).toContain('details (PermitDetails) > nonce (uint48): 4');
+    expect(approvals()).toHaveLength(0);
   });
 
   it('shows the server-described hook metadata as text and refuses steps that do not fit the metadata', async () => {

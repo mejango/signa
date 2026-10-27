@@ -65,3 +65,25 @@ export function tokenAmountOf(item: AbiFunction, args: readonly unknown[], targe
   const token = String(shape.token === undefined ? target : args[shape.token]).toLowerCase();
   return { token: token === NATIVE_TOKEN ? "native" : token, position: shape.amount };
 }
+
+// The SDK review's approval shapes and owner actions (its TOKEN_CALLS spender entries and OWNER_ACTIONS), held to it by a parity test.
+const SPENDS: Record<string, { spender: number; amount: number }> = {
+  "approve(address,uint256)": { spender: 0, amount: 1 }, "increaseAllowance(address,uint256)": { spender: 0, amount: 1 },
+  "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)": { spender: 1, amount: 2 }, "approve(address,address,uint160,uint48)": { spender: 1, amount: 2 },
+};
+const OWNER_ACTIONS = new Set(["transferOwnership", "renounceOwnership", "addOwnerWithThreshold", "removeOwner", "swapOwner", "changeThreshold",
+  "enableModule", "setGuard", "setFallbackHandler", "transferOwnershipToProject", "setControllerOf", "setTerminalsOf"]);
+const granted = (address: unknown) => typeof address === "string" && !/^0x0{40}$/i.test(address);
+/** A decoded call's security warnings, as the SDK's review derives them from its bytes. `required` the SDK always
+ * gives; `possible` the page shows itself where the served model has none: a grant to an address the SDK may know by
+ * name, which this page cannot, and an unlimited amount the ABI calls a token ID, since a served parameter name is unchecked. */
+export function callWarnings(item: AbiFunction, args: readonly unknown[]): { required: string[]; possible: string[] } {
+  const shape = SPENDS[`${item.name}(${item.inputs.map(input => input.type).join(",")})`], required: string[] = [], possible: string[] = [];
+  const tokenId = shape && item.inputs[shape.amount]!.name === "tokenId";
+  if (shape && args[shape.amount] === (1n << BigInt(item.inputs[shape.amount]!.type.slice(4) || 256)) - 1n) (tokenId ? possible : required).push("unlimited-approval");
+  if (OWNER_ACTIONS.has(item.name)) required.push("owner-action");
+  if (item.name === "setPermissionsFor") required.push("permission-grant");
+  else if (item.name === "setApprovalForAll" ? args[1] === true && granted(args[0]) : shape && granted(args[shape.spender]) && (tokenId || args[shape.amount] !== 0n))
+    possible.push("permission-grant");
+  return { required, possible };
+}

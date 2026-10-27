@@ -1,13 +1,15 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
-import { decodeAbiParameters, erc20Abi, formatUnits, type AbiFunction, type Address, type Hex } from 'viem';
+import { decodeAbiParameters, erc20Abi, formatUnits, getAddress, type AbiFunction, type Address, type Hex } from 'viem';
 import { getUserOperationHash, normalizeUserOperation, uoCanonical } from '../userOperations/codec.js';
 import { checkReviewGas } from '../sponsorCaps.js';
 import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
 import { recognizeWalletV6UsdcPayment, terminalAbi } from '../userOperations/semantics.js';
-import type { WalletPaymentCentralPublic, WalletReviewedCallsCentralPublic } from '../wallet/paymentPublic.js';
-import { ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
+import type { WalletPaymentCentralPublic, WalletReviewedCallsCentralPublic, WalletSignatureCentralPublic } from '../wallet/paymentPublic.js';
+import { REVIEWED_SIGNATURE_KIND, signatureFacts, signatureRefusal, signatureRequestOf, signatureSigning, signatureWarnings, typedDataOf,
+  type SignatureFacts, type SignedField } from '../userOperations/reviewedSignatureRules.js';
+import { callWarnings, ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
   reviewedCallRefusal, tokenAmountOf, type CallSource } from '../userOperations/reviewedCallRules.js';
 import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from '../wallet/chains.js';
 import { chainRpcBatch } from './chainRpc.js';
@@ -25,7 +27,10 @@ const approve = element<HTMLButtonElement>('payment-approve'), cancel = element<
 const cancelPrompt = element<HTMLButtonElement>('payment-prompt-cancel'), retry = element<HTMLButtonElement>('payment-retry');
 const returnToApp = element<HTMLAnchorElement>('payment-return'), notice = element('payment-notice'), gasRow = element('payment-gas');
 let id = '', rpId = '';
-type Review = WalletPaymentCentralPublic | WalletReviewedCallsCentralPublic;
+type Review = WalletPaymentCentralPublic | WalletReviewedCallsCentralPublic | WalletSignatureCentralPublic;
+type Operated = Exclude<Review, WalletSignatureCentralPublic>;
+const signed = (value: Review | null): value is WalletSignatureCentralPublic => !!value && 'reviewedSignature' in value;
+let facts: SignatureFacts | null = null;
 let review: Review | null = null, immutable = '', busy = false, blocked = false, readingTokens = false;
 let uncertain = false, canRetry = false, nativePrompt: AbortController | null = null;
 // Framed inside an app's page, this page decides the approval while the app controls what surrounds
@@ -74,7 +79,7 @@ function token(value: unknown): string { return decode(value).length === 32 ? va
 function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; }
 function expired() { return !!review && review.expiresAtMs <= Date.now(); }
 // An account that cannot prefund its own gas: the review stays readable and declinable, never signable.
-const unfunded = () => review?.gas.payer === 'account' && !review.gas.funded;
+const unfunded = () => !!review && !signed(review) && review.gas.payer === 'account' && !review.gas.funded;
 function render() {
   const actionable = review?.status === 'pending' && !expired() && !uncertain && !blocked && status.dataset.state === 'ready';
   approve.hidden = !actionable || unfunded(); approve.disabled = busy || readingTokens || frameTooSmall() || !approveVisible;
@@ -118,6 +123,7 @@ const approveFunction = erc20Abi.find(item => item.type === 'function' && item.n
 /** Where each call's description comes from. A payment's calls are its exact approvals and pay, so
  * this bundle decodes them with its own functions; a reviewed call set names a source per call. */
 function described(value: Review): { sources: unknown; functions: unknown } {
+  if (signed(value)) return { sources: value.review.sources, functions: value.reviewedSignature.call?.functions ?? [] };
   if ('review' in value) return { sources: value.review.sources, functions: value.reviewedCalls.functions };
   const count = value.stepIndexes.length;
   return { sources: Array.from({ length: count }, () => ({ source: 'first-party' })),
@@ -126,7 +132,7 @@ function described(value: Review): { sources: unknown; functions: unknown } {
 /** The calls shown, re-derived here from the operation bytes: every call shown is the exact call
  * signed, decoded with the function its source names (the stored Etherscan ABI, or the one the
  * server's SDK decoded with), and none calls the account itself or delegatecalls. */
-function checkCalls(value: Review, operation: ReturnType<typeof normalizeUserOperation>) {
+function checkCalls(value: Operated, operation: ReturnType<typeof normalizeUserOperation>) {
   const view = record(value.reviewedCalls), model = record(view.model), { sources, functions } = described(value);
   const calls = decodeSafe7579Execution(operation.callData), modeled = model.calls, listed = 'review' in value ? record(value.review).calls : modeled;
   for (const list of [listed, sources, modeled, functions]) if (!Array.isArray(list) || list.length !== calls.length) fail();
@@ -142,16 +148,50 @@ function checkCalls(value: Review, operation: ReturnType<typeof normalizeUserOpe
       text(entry.data, 1_048_576).toLowerCase() === call.callData.toLowerCase();
     const entry = record((modeled as unknown[])[index]), source = record((sources as unknown[])[index]), fn = (functions as unknown[])[index];
     if (!exact(record((listed as unknown[])[index])) || !exact(entry) || reviewedCallRefusal(operation.sender, { to: call.target, data: call.callData })) fail();
-    if (entry.contractName !== null) text(entry.contractName, 256);
-    if (!Array.isArray(entry.roles)) fail();
-    for (const role of entry.roles as unknown[]) { const { role: name, address: at, name: label } = record(role); text(name, 16); address(at); if (label !== null) text(label, 256); }
-    if (!Array.isArray(entry.warnings) || entry.warnings.length > 16) fail();
-    for (const warning of entry.warnings as unknown[]) { const { code, text: line } = record(warning); text(code, 64); text(line, 512); }
-    if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return; }
-    if (source.source !== 'etherscan' && source.source !== 'first-party') fail();
-    const found = exactFunction(source.source === 'etherscan' ? source.abi : [fn], call.callData as Hex);
-    if (!found || found.item.name !== entry.functionName) fail();
+    checkDescribed(entry, source, fn, call.callData);
   });
+}
+/** One served call's description: well-formed, and decoding its exact bytes with the function its source names. */
+function checkDescribed(entry: Json, source: Json, fn: unknown, data: string): ReturnType<typeof exactFunction> {
+  if (entry.contractName !== null) text(entry.contractName, 256);
+  if (!Array.isArray(entry.roles)) fail();
+  for (const role of entry.roles as unknown[]) { const { role: name, address: at, name: label } = record(role); text(name, 16); address(at); if (label !== null) text(label, 256); }
+  if (!Array.isArray(entry.warnings) || entry.warnings.length > 16) fail();
+  for (const warning of entry.warnings as unknown[]) { const { code, text: line } = record(warning); text(code, 64); text(line, 512); }
+  if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return null; }
+  if (source.source !== 'etherscan' && source.source !== 'first-party') fail();
+  const found = exactFunction(source.source === 'etherscan' ? source.abi : [fn], data as Hex);
+  if (!found || found.item.name !== entry.functionName) fail();
+  return found;
+}
+/** A signature's description, re-derived here from the exact request: its facts, its warning codes, the digest
+ * its ERC-1271 signature is for and the SafeMessage digest the passkey signs. A served one that differs is refused. */
+function checkSignature(value: WalletSignatureCentralPublic): string {
+  const account = /^eip155:8453:(0x[0-9a-f]{40})$/.exec(text(value.accountId))?.[1] as Address ?? fail();
+  const reviewed = record(value.review), served = record(value.reviewedSignature);
+  let request, own: SignatureFacts, signing;
+  try {
+    request = signatureRequestOf(reviewed.request);
+    if (signatureRefusal(account, request)) fail();
+    own = signatureFacts(account, request); signing = signatureSigning(account, request);
+  } catch { return fail(); }
+  if (reviewed.kind !== REVIEWED_SIGNATURE_KIND || reviewed.chainId !== SIGNA_HOME_CHAIN_ID || request.chainId !== SIGNA_HOME_CHAIN_ID ||
+    uoCanonical(served.facts) !== uoCanonical(own) || uoCanonical(served.warnings) !== uoCanonical(signatureWarnings(own)) ||
+    value.signing.digest !== signing.digest || value.signing.requestDigest !== signing.requestDigest || !Array.isArray(reviewed.sources)) fail();
+  const call = 'call' in own ? own.call : null;
+  if ((reviewed.sources as unknown[]).length !== (call ? 1 : 0) || (served.call === null) !== !call) fail();
+  if (call) {
+    const view = record(served.call), model = record(view.model);
+    if (!Array.isArray(model.calls) || model.calls.length !== 1 || !Array.isArray(view.functions) || view.functions.length !== 1) fail();
+    const entry = record((model.calls as unknown[])[0]);
+    if (address(entry.to).toLowerCase() !== call.to || entry.value !== call.value || text(entry.data, 1_048_576).toLowerCase() !== call.data) fail();
+    const found = checkDescribed(entry, record((reviewed.sources as unknown[])[0]), (view.functions as unknown[])[0], call.data);
+    // The call's own security warnings are derived here: a served model that drops one is refused.
+    const codes = (entry.warnings as { code: string }[]).map(warning => warning.code);
+    if (found && callWarnings(found.item, found.args).required.some(code => !codes.includes(code))) fail();
+  }
+  facts = own;
+  return signing.digest;
 }
 type TokenInfo = { decimals: number; symbol: string };
 // The pinned Base USDC is known without a read, as the SDK's review knows it, so a payment's amount needs no RPC.
@@ -178,11 +218,27 @@ async function readTokens(all: string[]): Promise<Map<string, TokenInfo | null>>
 }
 function checkReview(input: unknown): Review {
   const value = record(input) as unknown as Review;
-  const accountId = text(value.accountId);
   if (value.version !== 'center-wallet-payment-review-v1' || uuid(value.id) !== id || value.issuer !== location.origin ||
     value.chainId !== SIGNA_HOME_CHAIN_ID || !['pending', 'approved', 'cancelled'].includes(value.status)) fail();
   if (review && review.status !== 'pending' && value.status !== review.status) fail();
   integer(value.createdAtMs); integer(value.expiresAtMs); callback(value);
+  const digest = signed(value) ? checkSignature(value) : checkOperation(value);
+  const passkey = record(value.passkey);
+  if (passkey.rpId !== rpId || passkey.userVerification !== 'required' || decode(passkey.challenge).length !== 32 ||
+    `0x${Array.from(decode(passkey.challenge), byte => byte.toString(16).padStart(2, '0')).join('')}` !== digest) fail();
+  decode(passkey.credentialId);
+  const approvers = passkey.credentialIds;
+  if (!Array.isArray(approvers) || approvers.length > 16 || !approvers.includes(passkey.credentialId)) fail();
+  for (const id of approvers as unknown[]) decode(id);
+  // Status may advance, but the displayed terms, exact operation and selected
+  // credential cannot change while recovering an interrupted approval.
+  const { status: ignoredStatus, approvedAtMs, cancelledAtMs, operationState, ...stable } = value as Operated;
+  const next = JSON.stringify(stable); if (immutable && immutable !== next) fail();
+  immutable = next; return structuredClone(value);
+}
+/** A payment or call set: every fact shown re-derived from the operation's bytes. Returns the digest the passkey signs. */
+function checkOperation(value: Operated): string {
+  const accountId = text(value.accountId);
   const operation = normalizeUserOperation(value.operation);
   if ('review' in value) {
     if (`eip155:${SIGNA_HOME_CHAIN_ID}:${operation.sender.toLowerCase()}` !== accountId || operation.signature !== '0x' ||
@@ -226,19 +282,8 @@ function checkReview(input: unknown): Review {
   // The gas row names the payer the signed paymaster fields fix, never one the response merely claims.
   try { if (uoCanonical(checkReviewGas(value.gas, operation, SIGNA_HOME_CHAIN_ID)) !== uoCanonical(value.gas)) fail(); }
   catch { fail(); }
-  const passkey = record(value.passkey);
-  if (passkey.rpId !== rpId || passkey.userVerification !== 'required' || decode(passkey.challenge).length !== 32 ||
-    `0x${Array.from(decode(passkey.challenge), byte => byte.toString(16).padStart(2, '0')).join('')}` !== signing.digest) fail();
-  decode(passkey.credentialId);
-  const approvers = passkey.credentialIds;
-  if (!Array.isArray(approvers) || approvers.length > 16 || !approvers.includes(passkey.credentialId)) fail();
-  for (const id of approvers as unknown[]) decode(id);
   if (value.notice !== null) text(value.notice, 256);
-  // Status may advance, but the displayed terms, exact operation and selected
-  // credential cannot change while recovering an interrupted approval.
-  const { status: ignoredStatus, approvedAtMs, cancelledAtMs, operationState, ...stable } = value;
-  const next = JSON.stringify(stable); if (immutable && immutable !== next) fail();
-  immutable = next; return structuredClone(value);
+  return signing.digest;
 }
 /** One line per hook entry: its title, then its labeled values. These are requests the metadata
  * carries; only the terminal minimum is enforced whatever the project's hooks do. */
@@ -263,23 +308,61 @@ const PAYMENT_WARNINGS: Record<string, string> = { 'unlimited-approval': 'This a
   'unknown-contract': 'This destination is not a contract Signa recognizes. Check the address before approving.' };
 const warningRank = ['owner-action', 'permission-grant', 'delegatecall', 'unlimited-approval', 'raw'];
 const rank = (code: string) => { const at = warningRank.indexOf(code); return at < 0 ? warningRank.length : at; };
+// A signature's warnings in this page's own words.
+const SIGNATURE_WARNINGS: Record<string, string> = { 'unknown-typed-data': "Signa can't tell what this typed data does. Check every field: a signature can move funds or grant access.",
+  delegatecall: "This Safe transaction runs another contract's code as the Safe (DELEGATECALL). Only sign it if you trust that contract.",
+  'safe-gas-nonzero': 'This Safe transaction pays a gas refund from the Safe.', 'unlimited-approval': PAYMENT_WARNINGS['unlimited-approval']! };
+const when = (seconds: string) => BigInt(seconds) >= 2n ** 47n ? 'never' : new Date(Number(seconds) * 1000).toLocaleString();
+// Each signed value with its declared type, strings quoted: two documents that hash differently read differently.
+const signedRow = ([, type, value, label]: SignedField): [string, string] => [`${label} (${type})`, type === 'string' ? JSON.stringify(value) : value];
+/** What a signature authorizes, as rows read from the request; Permit2 amounts wait for their token reads. */
+function signatureItems(value: WalletSignatureCentralPublic, pending: { node: HTMLElement; name: string; token: string; value: bigint; prefix: string; headline: boolean }[]) {
+  const f = facts!, item = document.createElement('li'), rows = (entries: [string, string][]) => entries.map(([name, text]) => item.appendChild(line('call-line', `${name}: ${text}`)));
+  const titles = { permit2: 'Permit2 allowance', 'forward-request': 'Forwarded call', 'safe-tx': 'Safe transaction', message: 'Message', 'typed-data': 'Typed data' };
+  element('payment-amount').textContent = `Sign: ${titles[f.kind]}`;
+  item.append(line('call-title', f.kind === 'message' ? 'Exact text' : `${titles[f.kind]} on ${signaChainName(value.chainId)}`));
+  if (f.kind === 'message') item.append(line('call-line', f.text));
+  else if (f.kind === 'typed-data') rows([['Type', f.primaryType], ...f.fields.map(signedRow)]);
+  else if (f.kind === 'permit2') {
+    for (const token of f.tokens) {
+      const [node] = rows([['Amount', 'reading token']]);
+      pending.push({ node: node!, name: 'Amount', token: token.token, value: BigInt(token.amount), prefix: '', headline: false });
+      // Permit2 reads an expiration of 0 as the block the permit runs in.
+      rows([['Token', getAddress(token.token)], ...(token.expiration === null ? [] : [['Allowance expires', token.expiration === '0' ? 'when it runs' : when(token.expiration)] as [string, string]])]);
+    }
+    rows([['Spender', getAddress(f.spender)], ['Signature valid until', when(f.deadline)]]);
+  } else if (f.kind === 'forward-request') rows([['Forwarder', getAddress(f.forwarder)], ['Valid until', when(f.deadline)]]);
+  else rows([['Safe', getAddress(f.safe)], ['Safe nonce', f.nonce]]);
+  // A recognized document lists every value it signs under Details, as a payment's calls are.
+  const request = value.review.request, signedData = element('payment-signed');
+  if (request.kind === 'typed-data' && f.kind !== 'typed-data')
+    signedData.replaceChildren(...[['Type', request.typedData.primaryType] as [string, string], ...typedDataOf(request.typedData).fields.map(signedRow)]
+      .map(([name, text]) => line('call-line', `${name}: ${text}`)));
+  (signedData.parentElement as HTMLElement).hidden = !signedData.childElementCount;
+  return item;
+}
 /** Every call, its source and every warning in the one review the passkey approves. A payment
- * leads with the amount its pay call moves. */
+ * leads with the amount its pay call moves; a signature with what it authorizes, then any call it lets someone run. */
 function showCalls(value: Review) {
-  const calls = decodeSafe7579Execution(value.operation.callData), warnings: { code: string; text: string }[] = [];
-  const payment = !('review' in value), { sources, functions } = described(value) as { sources: CallSource[]; functions: (AbiFunction | null)[] };
-  // A payment names its pinned addresses itself; the server's names are not shown for it.
-  const pinned = payment && new Map([[__SIGNA_PAYMENT_PIN__.token.toLowerCase(), 'USDC'],
-    [__SIGNA_PAYMENT_PIN__.directV6Terminal.toLowerCase(), 'JBMultiTerminal'], [value.operation.sender.toLowerCase(), 'your account']]);
+  const signature = signed(value) ? value : null, payment = !signature && !('review' in value);
+  const calls = signature ? ('call' in facts! ? [{ target: facts.call.to, value: facts.call.value, callData: facts.call.data }] : [])
+    : decodeSafe7579Execution((value as Operated).operation.callData);
+  const models = signature ? signature.reviewedSignature.call?.model.calls ?? [] : (value as Operated).reviewedCalls.model.calls;
+  const sender = signature ? signature.accountId.split(':')[2]! : (value as Operated).operation.sender;
+  const warnings: { code: string; text: string }[] = signature ? signatureWarnings(facts!).map(code => ({ code, text: SIGNATURE_WARNINGS[code]! })) : [];
+  const { sources, functions } = described(value) as { sources: CallSource[]; functions: (AbiFunction | null)[] };
+  // A payment names its pinned addresses itself, and a signature only the account; the server's names are not shown for either.
+  const pinned = (payment || signature) && new Map([...(payment ? [[__SIGNA_PAYMENT_PIN__.token.toLowerCase(), 'USDC'],
+    [__SIGNA_PAYMENT_PIN__.directV6Terminal.toLowerCase(), 'JBMultiTerminal']] as const : []), [sender.toLowerCase(), 'your account']]);
   let total = 0n;
   const pending: { node: HTMLElement; name: string; token: string; value: bigint; prefix: string; headline: boolean }[] = [];
-  element('payment-calls').replaceChildren(...calls.map((call, index) => {
-    const source = sources[index]!, entry = value.reviewedCalls.model.calls[index]!, item = document.createElement('li');
+  element('payment-calls').replaceChildren(...(signature ? [signatureItems(signature, pending)] : []), ...calls.map((call, index) => {
+    const source = sources[index]!, entry = models[index]!, item = document.createElement('li');
     const found = source.source === 'raw' ? null
       : exactFunction(source.source === 'etherscan' ? source.abi : [functions[index]], call.callData as Hex)!;
     total += BigInt(call.value);
     const contract = pinned ? pinned.get(call.target.toLowerCase()) : entry.contractName;
-    item.append(line('call-title', `${found ? found.item.name : 'Raw call'} on ${contract ? `${contract} ` : ''}${call.target}`));
+    item.append(line('call-title', `${signature ? 'It runs: ' : ''}${found ? found.item.name : 'Raw call'} on ${contract ? `${contract} ` : ''}${call.target}`));
     const sourceLine = line('call-source', source.source === 'first-party' ? 'Decoded with the Juicebox SDK'
       : source.source === 'etherscan' ? `${ETHERSCAN_SOURCE_LINE}${source.implementation ? `. Implementation ${source.implementation}` : ''}`
       : source.lookup === 'lookup-failed' ? `Raw calldata. ${LOOKUP_FAILED_LINE}` : 'Raw calldata');
@@ -301,10 +384,13 @@ function showCalls(value: Review) {
     if (source.source === 'raw' && call.callData !== '0x')
       warnings.push({ code: 'raw', text: `${prefix}${source.lookup === 'lookup-failed' ? `${LOOKUP_FAILED_LINE} ` : ''}${RAW_CALL_WARNING}` });
     for (const warning of entry.warnings) if (warning.code !== 'abi-unavailable' && warning.code !== 'decimals-unknown')
-      warnings.push({ code: warning.code, text: `${prefix}${payment ? PAYMENT_WARNINGS[warning.code] ?? 'Check this call before approving.' : warning.text}` });
+      warnings.push({ code: warning.code, text: `${prefix}${pinned ? PAYMENT_WARNINGS[warning.code] ?? 'Check this call before approving.' : warning.text}` });
+    // A grant the server names no warning for is still said, in this page's words, under a signature.
+    if (signature && found) for (const code of callWarnings(found.item, found.args).possible)
+      if (!entry.warnings.some(warning => warning.code === code)) warnings.push({ code, text: `${prefix}${PAYMENT_WARNINGS[code]}` });
     return item;
   }));
-  if (!payment) element('payment-amount').textContent = `${calls.length} ${calls.length === 1 ? 'call' : 'calls'}${total ? `, sending ${formatUnits(total, 18)} ETH` : ''}`;
+  if (!payment && !signature) element('payment-amount').textContent = `${calls.length} ${calls.length === 1 ? 'call' : 'calls'}${total ? `, sending ${formatUnits(total, 18)} ETH` : ''}`;
   const showWarnings = () => {
     element('payment-warnings').replaceChildren(...warnings.sort((a, b) => rank(a.code) - rank(b.code)).map(warning => {
       const node = document.createElement('li'); node.textContent = warning.text; return node; }));
@@ -325,26 +411,32 @@ function showCalls(value: Review) {
     showWarnings(); readingTokens = false; render();
   });
   // A payment keeps its amount and Approve in view; its decoded calls open under Details, where its terms always were.
-  if (payment) { showSteps(value.metadataSteps); document.querySelector('#payment-review summary')!.after(element('payment-calls')); }
+  if (payment) { showSteps((value as WalletPaymentCentralPublic).metadataSteps); document.querySelector('#payment-review summary')!.after(element('payment-calls')); }
   else {
-    for (const terms of document.querySelectorAll<HTMLElement>('.payment-terms')) terms.hidden = true;
-    document.querySelector('h1')!.textContent = 'Review transaction'; approve.textContent = 'Approve';
+    for (const terms of document.querySelectorAll<HTMLElement>(signature ? '.payment-terms,.payment-operation' : '.payment-terms')) terms.hidden = true;
+    document.querySelector('h1')!.textContent = signature ? 'Review signature' : 'Review transaction'; approve.textContent = signature ? 'Sign' : 'Approve';
   }
-  for (const [name, text] of Object.entries({ app: value.app.origin, account: value.operation.sender, operation: value.operationHash,
+  for (const [name, text] of Object.entries({ app: value.app.origin, account: sender, ...(signature ? {} : { operation: (value as Operated).operationHash }),
     expiry: new Date(value.expiresAtMs).toLocaleString() })) element(`payment-${name}`).textContent = text;
 }
 function accept(input: unknown) {
   review = checkReview(input); showCalls(review);
-  const gas = review.gas, chain = signaChainName(gas.chainId);
-  gasRow.textContent = gas.payer === 'pimlico' ? 'Gas: sponsored' : gas.funded
-    ? `Gas: up to ${formatUnits(BigInt(gas.maximumWei), 18)} ETH from your account` : `Needs ETH for gas on ${chain}.`;
-  gasRow.dataset.state = unfunded() ? 'error' : '';
+  // A signature spends no gas and carries no notice.
+  if (!signed(review)) {
+    const gas = review.gas, chain = signaChainName(gas.chainId);
+    gasRow.textContent = gas.payer === 'pimlico' ? 'Gas: sponsored' : gas.funded
+      ? `Gas: up to ${formatUnits(BigInt(gas.maximumWei), 18)} ETH from your account` : `Needs ETH for gas on ${chain}.`;
+    gasRow.dataset.state = unfunded() ? 'error' : '';
+  }
+  gasRow.hidden = signed(review);
   // Beside approval, not in the details: the minimum protects less than usual.
-  notice.textContent = review.notice ?? ''; notice.hidden = review.notice === null;
+  const note = signed(review) ? null : review.notice;
+  notice.textContent = note ?? ''; notice.hidden = note === null;
   returnToApp.href = callback(review);
-  if (review.status === 'approved') { pending = null; uncertain = false; setStatus('approved', 'Approved. Check the result in the app.'); }
-  else if (review.status === 'cancelled') { pending = null; uncertain = false; setStatus('cancelled', 'Payment declined. No new approval was issued.'); }
-  else if (expired()) setStatus('expired', 'This payment approval expired. Return to your app to review a fresh payment.');
+  const what = signed(review) ? 'signature' : 'payment';
+  if (review.status === 'approved') { pending = null; uncertain = false; setStatus('approved', signed(review) ? 'Signed. Return to the app.' : 'Approved. Check the result in the app.'); }
+  else if (review.status === 'cancelled') { pending = null; uncertain = false; setStatus('cancelled', signed(review) ? 'Declined. Nothing was signed.' : 'Payment declined. No new approval was issued.'); }
+  else if (expired()) setStatus('expired', `This ${what} approval expired. Return to your app to review a fresh ${what}.`);
   else setStatus('ready', '');
 }
 // The configuration and the review do not depend on one another here: they go out together and
@@ -405,7 +497,7 @@ function goBackToApp() {
   if (returning || !review || review.status !== 'approved') return;
   returning = true;
   // Approval is the send: Center submits the operation now, and the app shows what happened to it.
-  setStatus('approved', `Approved. Sending on ${signaChainName(SIGNA_HOME_CHAIN_ID)}… the app will show the result.`); render();
+  setStatus('approved', signed(review) ? 'Signed. Returning to the app…' : `Approved. Sending on ${signaChainName(SIGNA_HOME_CHAIN_ID)}… the app will show the result.`); render();
   // Framed inside the app, the app shows what happens next: no beat here.
   const back = callback(review); setTimeout(() => location.assign(back), framed ? 0 : 800);
 }

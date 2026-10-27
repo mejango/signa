@@ -5,8 +5,9 @@ import { expect, it } from "vitest";
 import { webBuildOptions } from "../scripts/rest/build-web.mjs";
 
 // Gzip bytes each served page may load. Raise a budget only for code the page itself needs.
+// wallet-payment decodes and hashes signature requests itself (EIP-712, Permit2, forward requests, SafeTx).
 const budgets: Record<string, number> = {
-  "wallet-recovery": 20_500, "wallet-device": 11_000, "wallet-signup": 16_500, "wallet-payment": 26_000,
+  "wallet-recovery": 20_500, "wallet-device": 11_000, "wallet-signup": 16_500, "wallet-payment": 30_000,
   wallet: 13_000, "wallet-qr": 2_500, accounts: 15_500, docs: 1_000, "wallet-recovery-kit": 49_000, "accounts-signed-in": 62_500,
 };
 
