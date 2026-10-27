@@ -199,6 +199,10 @@ describe('central payment review browser, virtual authenticator', () => {
     tamper(calls => { calls.model.calls[1]!.functionName = 'addToBalanceOf'; }); await refused();
     tamper(calls => { calls.model.calls.pop(); }); await refused();
     tamper(calls => { calls.model.calls[0]!.roles = [{ role: 'spender', address: 'not an address' as never, name: 'JBMultiTerminal' }]; }); await refused();
+    // The functions served for a payment must be the approve and pay this bundle decodes with.
+    tamper(calls => { calls.functions = []; }); await refused();
+    tamper(calls => { const pay = calls.functions[1]!; calls.functions[1] = { ...pay, inputs: pay.inputs.map((input, index) =>
+      ({ ...input, name: index === 2 ? 'minReturnedTokens' : index === 4 ? 'amount' : input.name })) }; }); await refused();
     review.reviewedCalls = served; await load(); expect(approvals()).toHaveLength(0);
   });
 

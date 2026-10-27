@@ -131,13 +131,18 @@ function checkCalls(value: Review, operation: ReturnType<typeof normalizeUserOpe
   const calls = decodeSafe7579Execution(operation.callData), modeled = model.calls, listed = 'review' in value ? record(value.review).calls : modeled;
   for (const list of [listed, sources, modeled, functions]) if (!Array.isArray(list) || list.length !== calls.length) fail();
   if (!Array.isArray(value.stepIndexes) || value.stepIndexes.length !== calls.length || value.stepIndexes.some((step, index) => step !== index)) fail();
+  // A payment's served functions must be the ones this bundle decodes with: same names, same parameters.
+  const shape = (fn: unknown) => { const { name, inputs } = record(fn);
+    return `${text(name, 256)}(${(Array.isArray(inputs) ? inputs : fail()).map(input => { const { type, name } = record(input); return `${text(type, 64)} ${text(name, 64, true)}`; })})`; };
+  if (!('review' in value) && (!Array.isArray(view.functions) || view.functions.length !== calls.length ||
+    view.functions.some((fn, index) => shape(fn) !== shape((functions as unknown[])[index])))) fail();
   calls.forEach((call, index) => {
     const exact = (entry: Json) => address(entry.to).toLowerCase() === call.target.toLowerCase() && entry.value === call.value &&
       text(entry.data, 1_048_576).toLowerCase() === call.callData.toLowerCase();
     const entry = record((modeled as unknown[])[index]), source = record((sources as unknown[])[index]), fn = (functions as unknown[])[index];
     if (!exact(record((listed as unknown[])[index])) || !exact(entry) || reviewedCallRefusal(operation.sender, { to: call.target, data: call.callData })) fail();
     if (entry.contractName !== null) text(entry.contractName, 256);
-    if (!Array.isArray(entry.roles) || entry.roles.length > 16) fail();
+    if (!Array.isArray(entry.roles)) fail();
     for (const role of entry.roles as unknown[]) { const { role: name, address: at, name: label } = record(role); text(name, 16); address(at); if (label !== null) text(label, 256); }
     if (!Array.isArray(entry.warnings) || entry.warnings.length > 16) fail();
     for (const warning of entry.warnings as unknown[]) { const { code, text: line } = record(warning); text(code, 64); text(line, 512); }
