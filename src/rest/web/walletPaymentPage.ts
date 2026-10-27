@@ -17,12 +17,9 @@ export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string
 <ul id="payment-warnings" hidden></ul>
 <ol id="payment-calls" hidden></ol>
 <details class="quiet"><summary>Details</summary><dl>
-<div class="payment-terms"><dt>Juicebox project</dt><dd id="payment-project"></dd></div><dt>Network</dt><dd>${signaChainName(SIGNA_HOME_CHAIN_ID)}</dd>
+<dt>Network</dt><dd>${signaChainName(SIGNA_HOME_CHAIN_ID)}</dd>
 <dt>Requested by</dt><dd id="payment-app"></dd><dt>From your account</dt><dd id="payment-account"></dd>
-<div class="payment-terms"><dt>Beneficiary</dt><dd id="payment-beneficiary"></dd><dt>Minimum project tokens (base units)</dt><dd id="payment-minimum"></dd>
-<dt>Memo</dt><dd id="payment-memo" class="exact-text"></dd>
-<dt>USDC contract</dt><dd id="payment-token"></dd><dt>Juicebox terminal</dt><dd id="payment-terminal"></dd>
-<dt>Hook requests</dt><dd id="payment-hooks"></dd><dt>Metadata</dt><dd id="payment-metadata"></dd></div><dt>Operation</dt><dd id="payment-operation"></dd>
+<div class="payment-terms"><dt>Hook requests</dt><dd id="payment-hooks"></dd></div><dt>Operation</dt><dd id="payment-operation"></dd>
 <dt>Approval expires</dt><dd id="payment-expiry"></dd></dl></details></section>
 <div class="actions"><button id="payment-approve" type="button" hidden>Approve payment</button>
 <button id="payment-cancel" type="button" class="link" hidden>Decline</button>
@@ -35,7 +32,7 @@ export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string
 export function walletPaymentCss(): string {
   return `#payment-status{min-height:3rem;margin:1.75rem 0;color:#53614f}
 #payment-status[data-state=error],#payment-status[data-state=unknown],#payment-status[data-state=expired]{color:#9c3028}
-.amount{font-size:clamp(1.8rem,7vw,2.5rem);font-weight:700;margin:1.5rem 0}.exact-text{white-space:pre-wrap}
+.amount{font-size:clamp(1.8rem,7vw,2.5rem);font-weight:700;margin:1.5rem 0}
 details{margin:1.5rem 0}summary{cursor:pointer;text-decoration:underline;line-height:1.5}details dl{margin-top:1rem}
 details.quiet>summary{list-style:none;display:inline-block;color:#53614f;font-size:.9rem;text-underline-offset:.15em}details.quiet>summary::-webkit-details-marker{display:none}details.quiet>summary:hover{color:#172019}
 details.quiet>summary::after{content:"";display:inline-block;width:.35em;height:.35em;margin:0 0 .1em .55em;border:solid currentColor;border-width:0 1px 1px 0;transform:rotate(-45deg);transition:transform .15s}details.quiet[open]>summary::after{transform:rotate(45deg);margin-bottom:.2em}
@@ -49,7 +46,7 @@ html.framed main{margin:0 auto;padding:1.25rem calc(1.6rem - 1px) 1.5rem}html.fr
 .action-link{display:inline-flex;align-items:center;min-height:3rem;padding:.75rem 1rem;border:1px solid #172019;color:inherit;max-width:100%;overflow-wrap:anywhere}
 @media(max-width:400px){.action-link{justify-content:center;width:100%}}
 #payment-warnings{margin:0 0 1.25rem;padding-left:1.1rem;color:#9c3028}#payment-warnings li+li{margin-top:.35rem}
-#payment-calls{margin:0 0 1.25rem;padding-left:1.4rem}#payment-calls>li{margin-bottom:1rem;overflow-wrap:anywhere}
-#payment-calls .call-title{font-weight:700}#payment-calls .call-source,#payment-calls .call-line{color:#53614f;font-size:.9rem}
+#payment-calls{margin:0 0 1.25rem;padding-left:1.4rem}details #payment-calls{margin-top:1rem}#payment-calls>li{margin-bottom:1rem;overflow-wrap:anywhere}
+#payment-calls .call-title{font-weight:700}#payment-calls .call-source,#payment-calls .call-line{color:#53614f;font-size:.9rem}#payment-calls .call-line{white-space:pre-wrap}
 #payment-calls .call-source[data-source=raw]{color:#9c3028}#payment-calls code{font-size:.8rem;word-break:break-all}`;
 }

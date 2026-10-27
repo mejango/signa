@@ -2,6 +2,7 @@ import { buildReviewModel, decodeReviewCall, type ReviewModel, type TransactionR
 import { getAddress, isAddress, type Abi, type AbiFunction, type Address, type Hex } from "viem";
 import type { SemanticResult, StoredPlan, StoredReceipt } from "../transactions/types.js";
 import { SIGNA_HOME_CHAIN_ID } from "../wallet/chains.js";
+import { decodeSafe7579Execution } from "../smartAccounts/accountExecution.js";
 import { exactFunction, REVIEWED_CALLS_KIND, reviewedCallRefusal, type CallSource, type ReviewedCallsRefusal,
   type SignaCall } from "./reviewedCallRules.js";
 
@@ -71,9 +72,17 @@ export function reviewedCallsView(review: ReviewedCallsReview, account: Address)
   const decoded = decodedCalls(review, account), model = reviewedCallsModel(review, account);
   return {
     model: { id: model.id, calls: model.calls.map(call => ({ to: call.to, value: call.value.toString(), data: call.data,
-      contractName: call.contractName, functionName: call.functionName, warnings: call.warnings.map(warning => ({ ...warning })) })) },
+      contractName: call.contractName, functionName: call.functionName, roles: call.roles.map(role => ({ ...role })),
+      warnings: call.warnings.map(warning => ({ ...warning })) })) },
     functions: decoded.map(call => (call.abi?.[0] as AbiFunction | undefined) ?? null),
   };
+}
+/** The view of an operation's own calls as the SDK describes them: what a payment review shows,
+ * read from the bytes the passkey signs rather than from any plan summary. */
+export function operationCallsView(operation: { sender: Address; callData: Hex }) {
+  const calls = decodeSafe7579Execution(operation.callData).map(call => ({ to: getAddress(call.target), value: call.value, data: call.callData.toLowerCase() as Hex }));
+  return reviewedCallsView({ kind: REVIEWED_CALLS_KIND, chainId: SIGNA_HOME_CHAIN_ID, calls, sources: calls.map(() => ({ source: "first-party" as const })) },
+    operation.sender);
 }
 
 /** The exact call set a reviewed-calls plan stores, without decoding it. */

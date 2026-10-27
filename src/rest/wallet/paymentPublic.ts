@@ -6,7 +6,7 @@ import { passkeyPayMetadataSteps, type PayMetadataStep } from '../userOperations
 import { SIGNA_HOME_CHAIN_ID } from './chains.js';
 import type { ReviewGas } from '../sponsorCaps.js';
 import { reviewGas } from './paymentReviews.js';
-import { reviewedCallsView, type ReviewedCallsReview } from '../userOperations/reviewedCalls.js';
+import { operationCallsView, reviewedCallsView, type ReviewedCallsReview } from '../userOperations/reviewedCalls.js';
 
 interface WalletReviewPublicBase {
   version: 'center-wallet-payment-review-v1';
@@ -48,15 +48,14 @@ interface WalletCentralPublic {
    * client checks its view's exact keys. */
   gas: ReviewGas;
   passkey: { rpId: string; credentialId: string; credentialIds: string[]; challenge: string; userVerification: 'required' };
+  /** The SDK's model of each call and the function each decoded call used, so the page decodes the bytes itself. */
+  reviewedCalls: ReturnType<typeof reviewedCallsView>;
 }
 export interface WalletPaymentCentralPublic extends WalletPaymentReviewPublic, WalletCentralPublic {
   /** The pay metadata as the SDK's review decoder reads it, decoded here so the page does not bundle the SDK; empty for `0x`. */
   metadataSteps: PayMetadataStep[];
 }
-export interface WalletReviewedCallsCentralPublic extends WalletReviewedCallsPublic, WalletCentralPublic {
-  /** The SDK's model of each call and the function each decoded call used, so the page decodes the bytes itself. */
-  reviewedCalls: ReturnType<typeof reviewedCallsView>;
-}
+export interface WalletReviewedCallsCentralPublic extends WalletReviewedCallsPublic, WalletCentralPublic {}
 
 /** Project an already validated durable review. No internal authority or credential document
  * crosses the app boundary, and returned objects cannot mutate the source receipt. */
@@ -76,9 +75,11 @@ export function publicWalletPaymentAppReview(view: WalletPaymentReviewAppView): 
 }
 export function publicWalletPaymentCentralReview(view: WalletPaymentReviewView): WalletPaymentCentralPublic | WalletReviewedCallsCentralPublic {
   const d = view.draft, review = publicWalletPaymentReview(view);
-  const central: WalletCentralPublic = { notice: d.notice ?? null, gas: reviewGas(d), passkey: { rpId: d.authority.credential.rpId,
+  const central: Omit<WalletCentralPublic, 'reviewedCalls'> = { notice: d.notice ?? null, gas: reviewGas(d), passkey: { rpId: d.authority.credential.rpId,
     credentialId: d.authority.credential.credentialId, credentialIds: [...view.approvers],
     challenge: Buffer.from(d.signing.digest.slice(2), 'hex').toString('base64url'), userVerification: 'required' } };
-  return d.review.kind === 'v6-usdc-pay' ? { ...review as WalletPaymentReviewPublic, ...central, metadataSteps: passkeyPayMetadataSteps(d.review.payment.metadata) }
+  return d.review.kind === 'v6-usdc-pay' ? { ...review as WalletPaymentReviewPublic, ...central, metadataSteps: passkeyPayMetadataSteps(d.review.payment.metadata),
+    // Described from the operation's own bytes, never the stored payment or the plan's summary.
+    reviewedCalls: operationCallsView(d.operation) }
     : { ...review as WalletReviewedCallsPublic, ...central, reviewedCalls: reviewedCallsView(d.review, d.operation.sender) };
 }
