@@ -148,6 +148,31 @@ function contextDigest(base: Omit<WalletReviewDraft, "ceremony">): string {
   return digest(["center-wallet-payment-review-context-v1", walletReviewToStored(base)]).slice(2);
 }
 
+/** The account authority a review records, checked against its app grant and manifest when it is created. */
+function reviewAuthority(c: Pick<WalletPaymentReviewContext, "issuer" | "grant" | "authority" | "manifest">, options: { id: string; state: string; createdAtMs: number }) {
+  if (!uuid.test(options.id) || !time(options.createdAtMs)) invalid();
+  validateWalletHandoffToken(options.state); validateWalletPolicyOrigin(c.issuer);
+  const a = validateWalletAuthorityContext(c.authority), g = validateWalletAppGrant(c.grant);
+  const b = a.binding, current = a.prior, identity = current?.identity;
+  if (!current || !identity || current.bootstrapRequired || !same(c.manifest, a.enrollment.intent.manifest) ||
+    c.manifest.mode !== "execution-candidate" || !c.manifest.entryPoint || c.manifest.entryPoint.version !== "0.7" ||
+    c.issuer !== a.enrollment.intent.origin || a.accountId !== g.accountId ||
+    g.authorityEpoch !== current.authorityEpoch || g.sessionEpoch !== current.sessionEpoch || g.revokedAt !== null ||
+    options.createdAtMs < g.createdAt * 1000 || options.createdAtMs < a.credential.verifiedAtMs ||
+    !same(createWalletAuthorityIdentity(a, { stateHash: b.state.stateHash, sessionAdministration: identity.sessionAdministration,
+      creationTransaction: identity.creationTransaction }), identity)) invalid();
+  const profile = userOperationPasskeyProfile(b, c.manifest);
+  if (!profile || !b.state.moduleConfigurationVerified) invalid();
+  // Authority identity commits the full validated lineage. The approval proof keeps
+  // its original bounded key fields; current context and epochs are rechecked at admission.
+  const { recovery: _recovery, ...proofCredential } = a.credential;
+  const authority: WalletReviewDraft["authority"] = { accountId: a.accountId, enrollmentId: a.enrollment.intent.id, credential: proofCredential,
+    authorityIdentityDigest: walletAuthorityIdentityDigest(identity), authorityEpoch: current.authorityEpoch, sessionEpoch: current.sessionEpoch,
+    bindingId: b.id, bindingAuthorizationDigest: b.authorization.digest, stateHash: b.state.stateHash,
+    manifestRevision: c.manifest.revision, signer: address(profile.signer.address) };
+  return { a, g, b, authority };
+}
+
 /** Server-loaded records and pinned configuration only. Clock, policy and current readiness
  * admission remain inside the store transaction; reconstruction also supports receipt recovery. */
 export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReviewContext,
@@ -156,26 +181,15 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
     const c = snapshot(inputContext), options = snapshot(input);
     fields(c, ["issuer", "token", "directV6Terminal", "grant", "authority", "plan", "operation", "manifest"]);
     fields(options, ["id", "state", "createdAtMs"]);
-    if (!uuid.test(options.id) || !time(options.createdAtMs)) invalid();
-    validateWalletHandoffToken(options.state); validateWalletPolicyOrigin(c.issuer);
     address(c.token); address(c.directV6Terminal);
-    const a = validateWalletAuthorityContext(c.authority), g = validateWalletAppGrant(c.grant), p = c.plan, r = c.operation;
-    const b = a.binding, current = a.prior, identity = current?.identity;
-    if (!current || !identity || current.bootstrapRequired || !same(c.manifest, a.enrollment.intent.manifest) ||
-      c.manifest.mode !== "execution-candidate" || !c.manifest.entryPoint || c.manifest.entryPoint.version !== "0.7" ||
-      c.issuer !== a.enrollment.intent.origin || a.accountId !== g.accountId ||
-      g.authorityEpoch !== current.authorityEpoch || g.sessionEpoch !== current.sessionEpoch || g.revokedAt !== null ||
-      options.createdAtMs < g.createdAt * 1000 || options.createdAtMs < r.createdAt || options.createdAtMs < a.credential.verifiedAtMs ||
-      !same(createWalletAuthorityIdentity(a, { stateHash: b.state.stateHash, sessionAdministration: identity.sessionAdministration,
-        creationTransaction: identity.creationTransaction }), identity)) invalid();
-    const profile = userOperationPasskeyProfile(b, c.manifest);
+    const { a, g, b, authority } = reviewAuthority(c, options), p = c.plan, r = c.operation;
     // A historical ownership binding can predate execution qualification. The prepared
     // operation and ordinary signed submission retain their canonical execution checks.
-    if (!profile || !b.state.moduleConfigurationVerified || r.session ||
+    if (options.createdAtMs < r.createdAt || r.session ||
       r.actor.accountId !== g.accountId || r.actor.principalId !== walletAppPrincipalId(g) || !same(r.actor, p.actor) ||
       r.chainId !== SIGNA_HOME_CHAIN_ID || p.id !== r.planId || p.commitment !== r.planCommitment || r.accountBindingId !== b.id ||
       r.accountStateHash !== b.state.stateHash || address(r.sender) !== address(b.wallet.address) ||
-      address(r.operation.sender) !== address(b.wallet.address) || address(r.entryPoint) !== address(c.manifest.entryPoint.address) ||
+      address(r.operation.sender) !== address(b.wallet.address) || address(r.entryPoint) !== address(c.manifest.entryPoint?.address) ||
       r.expiresAt > p.expiresAt || r.createdAt < p.createdAt || !p.smartAccount ||
       !same(p.smartAccount, { bindingId: b.id, stateHash: b.state.stateHash, chainId: SIGNA_HOME_CHAIN_ID,
         address: b.wallet.address, manifestRevision: c.manifest.revision })) invalid();
@@ -202,14 +216,8 @@ export function createWalletPaymentReviewDraft(inputContext: WalletPaymentReview
     const quoteFailed = p.draft.warnings.some(warning => typeof warning === "string" && warning.startsWith(PAY_QUOTE_FAILED_MESSAGE));
     const expiresAtMs = Math.min(Math.floor(r.expiresAt / 1000) * 1000, g.expiresAt * 1000, options.createdAtMs + walletPaymentReviewMaximumLifetimeMs);
     if (expiresAtMs <= options.createdAtMs) invalid();
-    // Authority identity commits the full validated lineage. The approval proof keeps
-    // its original bounded key fields; current context and epochs are rechecked at admission.
-    const { recovery: _recovery, ...proofCredential } = a.credential;
     const base: Omit<WalletReviewDraft, "ceremony"> = { version: "center-wallet-payment-review-v1", ...options,
-      issuer: c.issuer, grant: g, authority: { accountId: a.accountId, enrollmentId: a.enrollment.intent.id, credential: proofCredential,
-        authorityIdentityDigest: walletAuthorityIdentityDigest(identity), authorityEpoch: current.authorityEpoch, sessionEpoch: current.sessionEpoch,
-        bindingId: b.id, bindingAuthorizationDigest: b.authorization.digest, stateHash: b.state.stateHash,
-        manifestRevision: c.manifest.revision, signer: address(profile.signer.address) },
+      issuer: c.issuer, grant: g, authority,
       planId: p.id, planCommitment: p.commitment, operationId: r.id, operationCommitment: r.commitment, operationHash: r.operationHash,
       stepIndexes: [...r.stepIndexes], operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: address(r.entryPoint), safe7579: address(c.manifest.safe7579.address),
       review,
@@ -236,24 +244,10 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletReviewDr
     if (Buffer.byteLength(JSON.stringify(walletReviewToStored(d))) > 65_536 || d.version !== "center-wallet-payment-review-v1" ||
       ![d.id, d.planId, d.operationId].every(value => typeof value === "string" && uuid.test(value)) || d.chainId !== SIGNA_HOME_CHAIN_ID ||
       !time(d.createdAtMs) || !time(d.expiresAtMs) || d.expiresAtMs <= d.createdAtMs || d.expiresAtMs > d.createdAtMs + walletPaymentReviewMaximumLifetimeMs) invalid();
-    validateWalletHandoffToken(d.state); validateWalletPolicyOrigin(d.issuer); validateWalletAppGrant(d.grant);
-    fields(d.authority, ["accountId", "enrollmentId", "credential", "authorityIdentityDigest", "authorityEpoch", "sessionEpoch", "bindingId",
-      "bindingAuthorizationDigest", "stateHash", "manifestRevision", "signer"]);
-    const a = d.authority, c = a.credential;
-    fields(c, ["accountId", "enrollmentId", "rpId", "credentialId", "userHandle", "publicKey", "backupEligible", "verifiedAtMs", "supersededAtMs"]);
-    fields(c.publicKey, ["x", "y"]);
-    for (const value of [d.planCommitment, d.operationCommitment, d.operationHash, a.authorityIdentityDigest, a.bindingId,
-      a.bindingAuthorizationDigest, a.stateHash, a.manifestRevision, c.publicKey.x, c.publicKey.y])
-      if (typeof value !== "string" || !word.test(value)) invalid();
-    if (!uuid.test(a.enrollmentId) || c.enrollmentId !== a.enrollmentId || c.accountId !== a.accountId || a.accountId !== d.grant.accountId ||
-      typeof c.rpId !== "string" || c.rpId.length > 253 || typeof c.credentialId !== "string" || !/^[A-Za-z0-9_-]{1,1364}$/.test(c.credentialId) ||
-      Buffer.from(c.credentialId, "base64url").toString("base64url") !== c.credentialId ||
-      typeof c.backupEligible !== "boolean" || c.supersededAtMs !== null || !time(c.verifiedAtMs) || c.verifiedAtMs > d.createdAtMs ||
-      !walletAppBigint(a.authorityEpoch) || !walletAppBigint(a.sessionEpoch) || a.authorityEpoch !== d.grant.authorityEpoch ||
-      a.sessionEpoch !== d.grant.sessionEpoch || d.createdAtMs < d.grant.createdAt * 1000 ||
-      d.expiresAtMs > d.grant.expiresAt * 1000 || d.grant.revokedAt !== null) invalid();
-    validateWalletHandoffToken(c.userHandle); validateWalletRpConfiguration({ rpId: c.rpId, origin: d.issuer });
-    for (const value of [d.entryPoint, d.safe7579, a.signer]) if (address(value) !== value) invalid();
+    validateReviewAuthority(d);
+    for (const value of [d.planCommitment, d.operationCommitment, d.operationHash]) if (typeof value !== "string" || !word.test(value)) invalid();
+    for (const value of [d.entryPoint, d.safe7579]) if (address(value) !== value) invalid();
+    const a = d.authority;
     if (!same(normalizeUserOperation(d.operation), d.operation) || d.operation.signature !== "0x" ||
       `eip155:${SIGNA_HOME_CHAIN_ID}:${d.operation.sender}` !== a.accountId || getUserOperationHash(d.operation, d.entryPoint, d.chainId) !== d.operationHash) invalid();
     fields(d.signing, ["digest", "signedData", "validAfter", "validUntil"]);
@@ -283,12 +277,37 @@ export function validateWalletPaymentReviewDraft(input: unknown): WalletReviewDr
       if (!checked || !same(checked, payment)) invalid();
       passkeyPayMetadataSteps(payment.metadata);
     }
-    fields(d.ceremony, ["id", "accountId", "purpose", "contextDigest", "challenge", "expiresAt"]); assertWalletCeremonyDraft(d.ceremony);
-    const { ceremony, ...base } = d;
-    if (ceremony.id !== d.id || ceremony.accountId !== a.accountId || ceremony.purpose !== "payment" || ceremony.expiresAt !== d.expiresAtMs ||
-      ceremony.contextDigest !== contextDigest(base) || ceremony.challenge !== Buffer.from(d.signing.digest.slice(2), "hex").toString("base64url")) invalid();
+    validateReviewCeremony(d, contextDigest);
     return freeze(d);
   } catch { return invalid(); }
+}
+/** The grant, the approving authority and its credential every review kind records. */
+function validateReviewAuthority(d: Pick<WalletReviewDraft, "state" | "issuer" | "grant" | "authority" | "createdAtMs" | "expiresAtMs">): void {
+  validateWalletHandoffToken(d.state); validateWalletPolicyOrigin(d.issuer); validateWalletAppGrant(d.grant);
+  fields(d.authority, ["accountId", "enrollmentId", "credential", "authorityIdentityDigest", "authorityEpoch", "sessionEpoch", "bindingId",
+    "bindingAuthorizationDigest", "stateHash", "manifestRevision", "signer"]);
+  const a = d.authority, c = a.credential;
+  fields(c, ["accountId", "enrollmentId", "rpId", "credentialId", "userHandle", "publicKey", "backupEligible", "verifiedAtMs", "supersededAtMs"]);
+  fields(c.publicKey, ["x", "y"]);
+  for (const value of [a.authorityIdentityDigest, a.bindingId, a.bindingAuthorizationDigest, a.stateHash, a.manifestRevision, c.publicKey.x, c.publicKey.y])
+    if (typeof value !== "string" || !word.test(value)) invalid();
+  if (!uuid.test(a.enrollmentId) || c.enrollmentId !== a.enrollmentId || c.accountId !== a.accountId || a.accountId !== d.grant.accountId ||
+    typeof c.rpId !== "string" || c.rpId.length > 253 || typeof c.credentialId !== "string" || !/^[A-Za-z0-9_-]{1,1364}$/.test(c.credentialId) ||
+    Buffer.from(c.credentialId, "base64url").toString("base64url") !== c.credentialId ||
+    typeof c.backupEligible !== "boolean" || c.supersededAtMs !== null || !time(c.verifiedAtMs) || c.verifiedAtMs > d.createdAtMs ||
+    !walletAppBigint(a.authorityEpoch) || !walletAppBigint(a.sessionEpoch) || a.authorityEpoch !== d.grant.authorityEpoch ||
+    a.sessionEpoch !== d.grant.sessionEpoch || d.createdAtMs < d.grant.createdAt * 1000 ||
+    d.expiresAtMs > d.grant.expiresAt * 1000 || d.grant.revokedAt !== null) invalid();
+  validateWalletHandoffToken(c.userHandle); validateWalletRpConfiguration({ rpId: c.rpId, origin: d.issuer });
+  if (address(a.signer) !== a.signer) invalid();
+}
+/** The review's own ceremony: its id, account, lifetime, context and the digest the passkey signs. */
+function validateReviewCeremony<T extends { id: string; expiresAtMs: number; authority: { accountId: string }; signing: { digest: Hex };
+  ceremony: WalletCeremonyDraft }>(d: T, contextOf: (base: Omit<T, "ceremony">) => string): void {
+  fields(d.ceremony, ["id", "accountId", "purpose", "contextDigest", "challenge", "expiresAt"]); assertWalletCeremonyDraft(d.ceremony);
+  const { ceremony, ...base } = d;
+  if (ceremony.id !== d.id || ceremony.accountId !== d.authority.accountId || ceremony.purpose !== "payment" || ceremony.expiresAt !== d.expiresAtMs ||
+    ceremony.contextDigest !== contextOf(base) || ceremony.challenge !== Buffer.from(d.signing.digest.slice(2), "hex").toString("base64url")) invalid();
 }
 
 export function assertWalletPaymentReviewContext(input: WalletReviewDraft, context: WalletPaymentReviewContext): void {

@@ -130,6 +130,17 @@ function expectationMismatch(calls: TransactionReviewCall[], expectation: unknow
   return null;
 }
 
+/** Where one call's description comes from: the SDK, else the Etherscan-verified ABI of its target, else raw. */
+export async function callSource(chainId: number, call: { to: Address; data: Hex }, abis: EtherscanAbiSource): Promise<CallSource> {
+  if (decodeReviewCall({ chainId, to: call.to, data: call.data }).abi) return { source: "first-party" };
+  if (!/^0x[0-9a-fA-F]{8}/.test(call.data)) return { source: "raw", lookup: "no-abi" };
+  const found = await abis.abiFor({ chainId, address: call.to }).catch(() => ({ ok: false, reason: "lookup-failed" }) as const);
+  if (!found.ok) return { source: "raw", lookup: found.reason };
+  const fn = exactFunction(found.abi, call.data);
+  return fn ? { source: "etherscan", abi: [fn.item], ...(found.implementation ? { implementation: found.implementation } : {}) }
+    : { source: "raw", lookup: "no-abi" };
+}
+
 /** Describes any call set from a Signa account in the one approval: the SDK first, then the
  * Etherscan-verified ABI of the target (its implementation, behind a proxy), else raw with a
  * warning. Self-calls and delegatecalls are refused from the raw calls before any decode or lookup.
@@ -141,15 +152,7 @@ export async function reviewCalls(input: { chainId: number; account: Address; ca
     const refusal = reviewedCallRefusal(account, call);
     if (refusal) return { ok: false, refusal, callIndex };
   }
-  const sources = await Promise.all(calls.map(async (call): Promise<CallSource> => {
-    if (decodeReviewCall({ chainId, to: call.to, data: call.data }).abi) return { source: "first-party" };
-    if (!/^0x[0-9a-fA-F]{8}/.test(call.data)) return { source: "raw", lookup: "no-abi" };
-    const found = await input.abis.abiFor({ chainId, address: call.to }).catch(() => ({ ok: false, reason: "lookup-failed" }) as const);
-    if (!found.ok) return { source: "raw", lookup: found.reason };
-    const fn = exactFunction(found.abi, call.data);
-    return fn ? { source: "etherscan", abi: [fn.item], ...(found.implementation ? { implementation: found.implementation } : {}) }
-      : { source: "raw", lookup: "no-abi" };
-  }));
+  const sources = await Promise.all(calls.map(call => callSource(chainId, call, input.abis)));
   const review: ReviewedCallsReview = { kind: REVIEWED_CALLS_KIND, chainId, sources,
     calls: calls.map(call => ({ to: getAddress(call.to), value: call.value.toString(), data: call.data.toLowerCase() as Hex })) };
   if (input.expectation !== undefined) {
