@@ -1,12 +1,13 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { encodeFunctionData, getAddress, hashMessage, hashTypedData, maxUint160, zeroAddress, type Address, type Hex } from 'viem';
+import { encodeFunctionData, erc20Abi, getAddress, hashMessage, hashTypedData, maxUint160, maxUint256, zeroAddress, type Address, type Hex } from 'viem';
 import { getJBContractAddress, jbMultiTerminalAbi } from '@bananapus/nana-sdk-core';
 import { decodeSafe7579MessageSignature, safe7579MessageSigningPayload } from '../src/rest/smartAccounts/passkeySignatures.js';
 import type { EtherscanAbiSource } from '../src/rest/userOperations/reviewedCalls.js';
-import { recognizeReviewedSignature, reviewedSignatureView, reviewSignature, type ReviewedSignatureReview,
+import { recognizeReviewedSignature, reviewedSignatureView, reviewSignature, signatureChain, type ReviewedSignatureReview,
   type SignatureChain } from '../src/rest/userOperations/reviewedSignatures.js';
 import { signatureRequestOf, type SignatureRequest } from '../src/rest/userOperations/reviewedSignatureRules.js';
+import { callWarnings, exactFunction } from '../src/rest/userOperations/reviewedCallRules.js';
 import { createWalletSignatureReviewDraft, validateWalletAnyReviewDraft, validateWalletSignatureReviewDraft, verifyWalletPaymentReviewProof,
   type WalletPaymentReviewContext } from '../src/rest/wallet/paymentReviews.js';
 import { publicWalletPaymentAppReview, publicWalletPaymentCentralReview, type WalletSignatureCentralPublic } from '../src/rest/wallet/paymentPublic.js';
@@ -39,10 +40,10 @@ const safeTx = (verifyingContract: Address, operation = 0, data: Hex = '0x') => 
     { name: 'refundReceiver', type: 'address' }, { name: 'nonce', type: 'uint256' }] },
   primaryType: 'SafeTx', message: { to: spender, value: '0', data, operation, safeTxGas: 0, baseGas: 0, gasPrice: 0, gasToken: zeroAddress, refundReceiver: zeroAddress, nonce: 3 } });
 const payData = () => encodeFunctionData({ abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, token, 5n, account, 0n, 'hi', '0x'] });
-const forwardRequest = (from: Address = account) => typed({ domain: { name: 'Juicebox', version: '1', chainId: 8453, verifyingContract: forwarder },
+const forwardRequest = (from: Address = account, to: Address = terminal, data: Hex = payData()) => typed({ domain: { name: 'Juicebox', version: '1', chainId: 8453, verifyingContract: forwarder },
   types: { ForwardRequest: [{ name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'gas', type: 'uint256' },
     { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint48' }, { name: 'data', type: 'bytes' }] },
-  primaryType: 'ForwardRequest', message: { from, to: terminal, value: '0', gas: '300000', nonce: '0', deadline: 1_800_003_600, data: payData() } });
+  primaryType: 'ForwardRequest', message: { from, to, value: '0', gas: '300000', nonce: '0', deadline: 1_800_003_600, data } });
 async function reviewed(request: SignatureRequest, chain = consistent, abis = noLookups) {
   const result = await reviewSignature({ account, request, chain, abis });
   if (!result.ok) throw new Error(result.refusal);
@@ -84,6 +85,57 @@ describe('signatures from a Signa account', () => {
     expect(view.warnings).toEqual(['delegatecall']);
   });
 
+  it('tells apart documents that hash differently: primary type, declared types and empty arrays are shown', async () => {
+    const doc = (primaryType: string, type: string, extra: object = {}, extraTypes: object[] = []) => typed({ domain: { name: 'App', chainId: 8453, verifyingContract: otherSafe },
+      types: { [primaryType]: [{ name: 'amount', type }, ...extraTypes] }, primaryType, message: { amount: '1', ...extra } });
+    const login = (await reviewed(doc('Login', 'string'))).view.facts, permit = (await reviewed(doc('Permit', 'uint256'))).view.facts;
+    expect(login).toMatchObject({ primaryType: 'Login', fields: expect.arrayContaining([['amount', 'string', '1']]) });
+    expect(permit).toMatchObject({ primaryType: 'Permit', fields: expect.arrayContaining([['amount', 'uint256', '1']]) });
+    expect((await reviewed(doc('Batch', 'uint256', { to: [] }, [{ name: 'to', type: 'address[]' }]))).view.facts)
+      .toMatchObject({ fields: expect.arrayContaining([['to', 'address[]', '[]']]) });
+  });
+
+  it('hashes the domain it shows: EIP712Domain names each domain field exactly once', () => {
+    const mail = (EIP712Domain: object[]) => () => typed({ domain: { name: 'Mail', chainId: 8453, verifyingContract: otherSafe },
+      types: { EIP712Domain, M: [{ name: 'a', type: 'uint256' }] }, primaryType: 'M', message: { a: 1 } });
+    const name = { name: 'name', type: 'string' }, chainId = { name: 'chainId', type: 'uint256' }, contract = { name: 'verifyingContract', type: 'address' };
+    expect(mail([name, chainId, contract])).not.toThrow();
+    expect(mail([name, name, chainId])).toThrow();
+    expect(mail([name, chainId])).toThrow();
+    expect(mail([name, chainId, contract, { name: 'version', type: 'string' }])).toThrow();
+  });
+
+  it('recognizes Permit2 whatever the order of its types, and with unused ones', async () => {
+    const transferFrom = (types: object) => typed({ domain: { name: 'Permit2', chainId: 8453, verifyingContract: permit2 }, types, primaryType: 'PermitTransferFrom',
+      message: { permitted: { token, amount: maxUint256.toString() }, spender, nonce: '0', deadline: '1800003600' } });
+    const permitted = [{ name: 'token', type: 'address' }, { name: 'amount', type: 'uint256' }];
+    const struct = [{ name: 'permitted', type: 'TokenPermissions' }, { name: 'spender', type: 'address' }, { name: 'nonce', type: 'uint256' }, { name: 'deadline', type: 'uint256' }];
+    for (const types of [{ TokenPermissions: permitted, PermitTransferFrom: struct }, { PermitTransferFrom: struct, TokenPermissions: permitted, Unused: [{ name: 'x', type: 'bool' }] }]) {
+      const { view } = await reviewed(transferFrom(types));
+      expect(view.facts.kind).toBe('permit2'); expect(view.warnings).toEqual(['unlimited-approval']);
+    }
+    // A domain field Permit2 does not sign with is shown as typed data, not summarized away.
+    expect((await reviewed(typed({ ...(permitSingle() as Extract<SignatureRequest, { kind: 'typed-data' }>).typedData,
+      domain: { name: 'Permit2', version: '1', chainId: 8453, verifyingContract: permit2 } }))).view.facts.kind).toBe('typed-data');
+  });
+
+  it("holds a forwarded call's security warnings to the SDK's", async () => {
+    const approve = encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [spender, maxUint256] });
+    const { view } = await reviewed(forwardRequest(account, token, approve));
+    const codes = view.call!.model.calls[0]!.warnings.map(warning => warning.code), found = exactFunction(erc20Abi, approve)!;
+    const derived = callWarnings(found.item, found.args);
+    expect(derived).toEqual({ required: ['unlimited-approval'], possible: ['permission-grant'] });
+    expect(codes).toEqual(expect.arrayContaining([...derived.required, ...derived.possible]));
+  });
+
+  it('counts a missing code observation as unknown, never as not deployed', async () => {
+    const rpc = (code: unknown) => ({ request: async () => code }) as never;
+    await expect(signatureChain(rpc(null)).deployed(8453, account)).rejects.toMatchObject({ status: 503 });
+    await expect(signatureChain(rpc('0xzz')).deployed(8453, account)).rejects.toMatchObject({ status: 503 });
+    expect(await signatureChain(rpc('0x')).deployed(8453, account)).toBe(false);
+    expect(await signatureChain(rpc('0x6001')).deployed(8453, account)).toBe(true);
+  });
+
   it('shows a message as its exact text', async () => {
     const message = 'example.com wants you to sign in with your Ethereum account:\n0xabc\n\nURI: https://example.com\nNonce: 32891756';
     const { review, view } = await reviewed({ kind: 'message', chainId: 8453, message });
@@ -112,9 +164,9 @@ describe('signatures from a Signa account', () => {
       primaryType: 'Mail', message: { from: { name: 'Cow', wallet: spender }, to: [{ name: 'Bob', wallet: otherSafe }], contents: 'Hello, Bob!' } });
     const { review, view } = await reviewed(request);
     expect(view.warnings).toEqual(['unknown-typed-data']);
-    expect(view.facts).toEqual({ kind: 'typed-data', fields: [['domain.name', 'Mail'], ['domain.version', '1'], ['domain.chainId', '8453'],
-      ['domain.verifyingContract', otherSafe], ['from.name', 'Cow'], ['from.wallet', spender], ['to[0].name', 'Bob'], ['to[0].wallet', otherSafe],
-      ['contents', 'Hello, Bob!']] });
+    expect(view.facts).toEqual({ kind: 'typed-data', primaryType: 'Mail', fields: [['domain.name', 'string', 'Mail'], ['domain.version', 'string', '1'],
+      ['domain.chainId', 'uint256', '8453'], ['domain.verifyingContract', 'address', otherSafe], ['from.name', 'string', 'Cow'], ['from.wallet', 'address', spender],
+      ['to[0].name', 'string', 'Bob'], ['to[0].wallet', 'address', otherSafe], ['contents', 'string', 'Hello, Bob!']] });
     // Approval: one passkey assertion over the SafeMessage digest is the account's ERC-1271 signature over the typed data.
     const draft = draftOf(review);
     const requestDigest = hashTypedData((request as Extract<SignatureRequest, { kind: 'typed-data' }>).typedData as never);

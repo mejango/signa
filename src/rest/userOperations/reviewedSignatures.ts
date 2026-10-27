@@ -76,7 +76,11 @@ export async function verifyAccountSignature(rpc: RestRpc, input: { chainId: num
 /** The chain facts a signature review reads, from the server's RPC: code at the account, and its owners against Base's. */
 export function signatureChain(rpc: RestRpc, store?: WalletOwnerStateStore): SignatureChain {
   return {
-    deployed: async (chainId, account) => { const code = await rpc.request(chainId, "eth_getCode", [account, "latest"]); return typeof code === "string" && code !== "0x"; },
+    deployed: async (chainId, account) => {
+      const code = await rpc.request(chainId, "eth_getCode", [account, "latest"]);
+      if (typeof code !== "string" || !/^0x(?:[0-9a-fA-F]{2})*$/.test(code)) throw new RestError(503, "WALLET_ACCOUNT_CODE_UNKNOWN", "This account's code on this network could not be read. Try again shortly.");
+      return code !== "0x";
+    },
     owners: async (chainId, account) => (await observeWalletOwners({ account, chains: [chainId], rpc, ...(store ? { store } : {}) }))[0]!.status,
   };
 }

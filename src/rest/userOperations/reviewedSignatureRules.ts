@@ -20,7 +20,9 @@ export type SignatureFacts =
   | { kind: "forward-request"; forwarder: Address; deadline: string; call: SignatureCall }
   | { kind: "safe-tx"; safe: Address; nonce: string; operation: number; refund: boolean; call: SignatureCall }
   | { kind: "message"; text: string }
-  | { kind: "typed-data"; fields: [string, string][] };
+  | { kind: "typed-data"; primaryType: string; fields: SignedField[] };
+/** One signed value: its path, its declared type and its value as text (an empty array is "[]"). */
+export type SignedField = [path: string, type: string, value: string];
 
 const fail = (): never => { throw new Error("signature request"); };
 const record = (value: unknown, keys?: string[]): Record<string, unknown> => {
@@ -34,7 +36,7 @@ const DETAILS = [field("token", "address"), field("amount", "uint160"), field("e
 const PERMISSIONS = [field("token", "address"), field("amount", "uint256")];
 const transfer = (permitted: string) => [field("permitted", permitted), field("spender", "address"), field("nonce", "uint256"), field("deadline", "uint256")];
 const allowance = (details: string) => [field("details", details), field("spender", "address"), field("sigDeadline", "uint256")];
-// The exact Permit2, ERC-2771 forwarder and Safe structs, keyed by primary type. Anything else is shown field by field.
+// The exact Permit2, ERC-2771 forwarder and Safe structs and domain fields, keyed by primary type. Anything else is shown field by field.
 const KNOWN: Record<string, Record<string, { name: string; type: string }[]>> = {
   PermitSingle: { PermitSingle: allowance("PermitDetails"), PermitDetails: DETAILS },
   PermitBatch: { PermitBatch: allowance("PermitDetails[]"), PermitDetails: DETAILS },
@@ -45,19 +47,24 @@ const KNOWN: Record<string, Record<string, { name: string; type: string }[]>> = 
   SafeTx: { SafeTx: [field("to", "address"), field("value", "uint256"), field("data", "bytes"), field("operation", "uint8"), field("safeTxGas", "uint256"),
     field("baseGas", "uint256"), field("gasPrice", "uint256"), field("gasToken", "address"), field("refundReceiver", "address"), field("nonce", "uint256")] },
 };
+const KNOWN_DOMAIN: Record<string, string> = { PermitSingle: "chainId,name,verifyingContract", PermitBatch: "chainId,name,verifyingContract",
+  PermitTransferFrom: "chainId,name,verifyingContract", PermitBatchTransferFrom: "chainId,name,verifyingContract",
+  ForwardRequest: "chainId,name,verifyingContract,version", SafeTx: "chainId,verifyingContract" };
 
 /** One value of `type`, checked strictly and normalized for hashing; each leaf is listed as text. */
 function value(types: Record<string, { name: string; type: string }[]>, type: string, input: unknown, path: string,
-  leaves: [string, string][], depth: number): unknown {
+  leaves: SignedField[], depth: number): unknown {
   if (depth > 8 || leaves.length > 512) fail();
   const array = /^(.+)\[(\d*)\]$/.exec(type);
   if (array) {
     if (!Array.isArray(input) || input.length > 256 || (array[2] !== "" && input.length !== Number(array[2]))) fail();
+    if (!(input as unknown[]).length) leaves.push([path, type, "[]"]);
     return (input as unknown[]).map((item, index) => value(types, array[1]!, item, `${path}[${index}]`, leaves, depth + 1));
   }
   const struct = types[type];
   if (struct) {
     const v = record(input, struct.map(item => item.name));
+    if (!struct.length) leaves.push([path, type, "{}"]);
     return Object.fromEntries(struct.map(item => [item.name, value(types, item.type, v[item.name], path ? `${path}.${item.name}` : item.name, leaves, depth + 1)]));
   }
   let out: unknown = input;
@@ -79,12 +86,12 @@ function value(types: Record<string, { name: string; type: string }[]>, type: st
     if (integer[1] ? n < 0n || n >= limit : n < -limit || n >= limit) fail();
     out = n;
   } else fail();
-  leaves.push([path, typeof out === "bigint" ? out.toString() : String(out)]);
+  leaves.push([path, type, typeof out === "bigint" ? out.toString() : String(out)]);
   return out;
 }
 
 /** The typed data exactly as viem hashes it, with every message field listed. Throws on anything not exact. */
-export function typedDataOf(input: unknown): { typedData: TypedDataDefinition; fields: [string, string][] } {
+export function typedDataOf(input: unknown): { typedData: TypedDataDefinition; fields: SignedField[] } {
   const t = record(input, ["domain", "types", "primaryType", "message"]), domain = record(t.domain), types = record(t.types);
   if (Object.keys(types).length > 32) fail();
   const structs: Record<string, { name: string; type: string }[]> = {};
@@ -96,13 +103,13 @@ export function typedDataOf(input: unknown): { typedData: TypedDataDefinition; f
       return { name: e.name as string, type: e.type as string };
     });
   }
-  // A listed EIP712Domain must name exactly the domain's own fields, with their standard types.
-  const keys = Object.keys(domain);
-  if (keys.some(key => !DOMAIN_TYPES[key]) || (structs.EIP712Domain && (structs.EIP712Domain.length !== keys.length ||
-    structs.EIP712Domain.some(entry => DOMAIN_TYPES[entry.name] !== entry.type || !keys.includes(entry.name))))) fail();
+  // A listed EIP712Domain must name each of the domain's own fields once, with its standard type: what is hashed is what is shown.
+  const keys = Object.keys(domain), members = structs.EIP712Domain;
+  if (keys.some(key => !DOMAIN_TYPES[key]) || (members && (members.length !== keys.length || new Set(members.map(entry => entry.name)).size !== members.length ||
+    members.some(entry => DOMAIN_TYPES[entry.name] !== entry.type || !keys.includes(entry.name))))) fail();
   const { EIP712Domain: _domain, ...messageTypes } = structs;
   if (typeof t.primaryType !== "string" || !messageTypes[t.primaryType]) fail();
-  const domainLeaves: [string, string][] = [], leaves: [string, string][] = [];
+  const domainLeaves: SignedField[] = [], leaves: SignedField[] = [];
   const normalized = value({ EIP712Domain: keys.map(key => field(key, DOMAIN_TYPES[key]!)) }, "EIP712Domain", domain, "domain", domainLeaves, 0) as Record<string, unknown>;
   if ("chainId" in domain && typeof domain.chainId !== "number") fail();
   const message = value(messageTypes, t.primaryType as string, t.message, "", leaves, 0) as Record<string, unknown>;
@@ -139,16 +146,27 @@ export function signatureRefusal(account: string, request: SignatureRequest): Ex
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-const text = (leaves: [string, string][], name: string) => leaves.find(([path]) => path === name)![1];
+const text = (leaves: SignedField[], name: string) => leaves.find(([path]) => path === name)![2];
+/** The structs `primary` reaches, by name: what its hash encodes, whatever the order of `types` or any unused type. */
+function reachable(types: Record<string, { name: string; type: string }[]>, primary: string) {
+  const found: Record<string, { name: string; type: string }[]> = {};
+  const visit = (name: string) => { const struct = types[name]; if (!struct || found[name]) return; found[name] = struct; for (const entry of struct) visit(entry.type.replace(/(\[\d*\])+$/, "")); };
+  visit(primary);
+  return found;
+}
+const known = (types: Record<string, { name: string; type: string }[]>, primary: string) => {
+  const expected = KNOWN[primary], got = reachable(types, primary);
+  return !!expected && Object.keys(got).length === Object.keys(expected).length && Object.entries(expected).every(([name, struct]) => same(got[name], struct));
+};
 /** What the request authorizes. Permit2, a forward request from the account and a SafeTx are recognized
- * only with their exact structs; any other typed data is every field, as signed. */
+ * only with their exact structs and domain fields; any other typed data is every field, as signed. */
 export function signatureFacts(account: string, request: SignatureRequest): SignatureFacts {
   if (request.kind === "message") return { kind: "message", text: request.message };
-  const { typedData, fields } = typedDataOf(request.typedData), { EIP712Domain: _domain, ...types } = typedData.types as Record<string, unknown>;
+  const { typedData, fields } = typedDataOf(request.typedData), { EIP712Domain: _domain, ...types } = typedData.types as unknown as Record<string, { name: string; type: string }[]>;
   const message = fields.filter(([path]) => !path.startsWith("domain.")), at = (name: string) => text(message, name);
   const domain = typedData.domain as Record<string, unknown>, primary = typedData.primaryType as string;
   const contract = typeof domain.verifyingContract === "string" ? domain.verifyingContract as Address : null;
-  if (contract && KNOWN[primary] && same(types, KNOWN[primary])) {
+  if (contract && known(types, primary) && Object.keys(domain).sort().join() === KNOWN_DOMAIN[primary]) {
     if (contract === PERMIT2 && domain.name === "Permit2") {
       const entries = (primary.startsWith("PermitBatch") ? (n: number) => `[${n}]` : () => "");
       const list = primary.startsWith("Permit") && primary.endsWith("TransferFrom") ? "permitted" : "details";
@@ -165,7 +183,7 @@ export function signatureFacts(account: string, request: SignatureRequest): Sign
         refund: at("gasPrice") !== "0" || at("baseGas") !== "0" || at("gasToken") !== ZERO || at("refundReceiver") !== ZERO,
         call: { from: contract, to: at("to") as Address, value: at("value"), data: at("data") as Hex } };
   }
-  return { kind: "typed-data", fields };
+  return { kind: "typed-data", primaryType: primary, fields };
 }
 
 /** The page's warning codes for what a signature authorizes, strongest first. */

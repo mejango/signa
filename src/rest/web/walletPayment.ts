@@ -7,9 +7,9 @@ import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySign
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
 import { recognizeWalletV6UsdcPayment, terminalAbi } from '../userOperations/semantics.js';
 import type { WalletPaymentCentralPublic, WalletReviewedCallsCentralPublic, WalletSignatureCentralPublic } from '../wallet/paymentPublic.js';
-import { REVIEWED_SIGNATURE_KIND, signatureFacts, signatureRefusal, signatureRequestOf, signatureSigning, signatureWarnings,
-  type SignatureFacts } from '../userOperations/reviewedSignatureRules.js';
-import { ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
+import { REVIEWED_SIGNATURE_KIND, signatureFacts, signatureRefusal, signatureRequestOf, signatureSigning, signatureWarnings, typedDataOf,
+  type SignatureFacts, type SignedField } from '../userOperations/reviewedSignatureRules.js';
+import { callWarnings, ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
   reviewedCallRefusal, tokenAmountOf, type CallSource } from '../userOperations/reviewedCallRules.js';
 import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from '../wallet/chains.js';
 import { chainRpcBatch } from './chainRpc.js';
@@ -152,16 +152,17 @@ function checkCalls(value: Operated, operation: ReturnType<typeof normalizeUserO
   });
 }
 /** One served call's description: well-formed, and decoding its exact bytes with the function its source names. */
-function checkDescribed(entry: Json, source: Json, fn: unknown, data: string) {
+function checkDescribed(entry: Json, source: Json, fn: unknown, data: string): ReturnType<typeof exactFunction> {
   if (entry.contractName !== null) text(entry.contractName, 256);
   if (!Array.isArray(entry.roles)) fail();
   for (const role of entry.roles as unknown[]) { const { role: name, address: at, name: label } = record(role); text(name, 16); address(at); if (label !== null) text(label, 256); }
   if (!Array.isArray(entry.warnings) || entry.warnings.length > 16) fail();
   for (const warning of entry.warnings as unknown[]) { const { code, text: line } = record(warning); text(code, 64); text(line, 512); }
-  if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return; }
+  if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return null; }
   if (source.source !== 'etherscan' && source.source !== 'first-party') fail();
   const found = exactFunction(source.source === 'etherscan' ? source.abi : [fn], data as Hex);
   if (!found || found.item.name !== entry.functionName) fail();
+  return found;
 }
 /** A signature's description, re-derived here from the exact request: its facts, its warning codes, the digest
  * its ERC-1271 signature is for and the SafeMessage digest the passkey signs. A served one that differs is refused. */
@@ -184,7 +185,10 @@ function checkSignature(value: WalletSignatureCentralPublic): string {
     if (!Array.isArray(model.calls) || model.calls.length !== 1 || !Array.isArray(view.functions) || view.functions.length !== 1) fail();
     const entry = record((model.calls as unknown[])[0]);
     if (address(entry.to).toLowerCase() !== call.to || entry.value !== call.value || text(entry.data, 1_048_576).toLowerCase() !== call.data) fail();
-    checkDescribed(entry, record((reviewed.sources as unknown[])[0]), (view.functions as unknown[])[0], call.data);
+    const found = checkDescribed(entry, record((reviewed.sources as unknown[])[0]), (view.functions as unknown[])[0], call.data);
+    // The call's own security warnings are derived here: a served model that drops one is refused.
+    const codes = (entry.warnings as { code: string }[]).map(warning => warning.code);
+    if (found && callWarnings(found.item, found.args).required.some(code => !codes.includes(code))) fail();
   }
   facts = own;
   return signing.digest;
@@ -309,6 +313,8 @@ const SIGNATURE_WARNINGS: Record<string, string> = { 'unknown-typed-data': "Sign
   delegatecall: "This Safe transaction runs another contract's code as the Safe (DELEGATECALL). Only sign it if you trust that contract.",
   'safe-gas-nonzero': 'This Safe transaction pays a gas refund from the Safe.', 'unlimited-approval': PAYMENT_WARNINGS['unlimited-approval']! };
 const when = (seconds: string) => BigInt(seconds) >= 2n ** 47n ? 'never' : new Date(Number(seconds) * 1000).toLocaleString();
+// Each signed value with its declared type, strings quoted: two documents that hash differently read differently.
+const signedRow = ([path, type, value]: SignedField): [string, string] => [`${path} (${type})`, type === 'string' ? JSON.stringify(value) : value];
 /** What a signature authorizes, as rows read from the request; Permit2 amounts wait for their token reads. */
 function signatureItems(value: WalletSignatureCentralPublic, pending: { node: HTMLElement; name: string; token: string; value: bigint; prefix: string; headline: boolean }[]) {
   const f = facts!, item = document.createElement('li'), rows = (entries: [string, string][]) => entries.map(([name, text]) => item.appendChild(line('call-line', `${name}: ${text}`)));
@@ -316,16 +322,23 @@ function signatureItems(value: WalletSignatureCentralPublic, pending: { node: HT
   element('payment-amount').textContent = `Sign: ${titles[f.kind]}`;
   item.append(line('call-title', f.kind === 'message' ? 'Exact text' : `${titles[f.kind]} on ${signaChainName(value.chainId)}`));
   if (f.kind === 'message') item.append(line('call-line', f.text));
-  else if (f.kind === 'typed-data') rows(f.fields);
+  else if (f.kind === 'typed-data') rows([['Type', f.primaryType], ...f.fields.map(signedRow)]);
   else if (f.kind === 'permit2') {
     for (const token of f.tokens) {
       const [node] = rows([['Amount', 'reading token']]);
       pending.push({ node: node!, name: 'Amount', token: token.token, value: BigInt(token.amount), prefix: '', headline: false });
-      rows([['Token', getAddress(token.token)], ...(token.expiration === null ? [] : [['Allowance expires', when(token.expiration)] as [string, string]])]);
+      // Permit2 reads an expiration of 0 as the block the permit runs in.
+      rows([['Token', getAddress(token.token)], ...(token.expiration === null ? [] : [['Allowance expires', token.expiration === '0' ? 'when it runs' : when(token.expiration)] as [string, string]])]);
     }
     rows([['Spender', getAddress(f.spender)], ['Signature valid until', when(f.deadline)]]);
   } else if (f.kind === 'forward-request') rows([['Forwarder', getAddress(f.forwarder)], ['Valid until', when(f.deadline)]]);
   else rows([['Safe', getAddress(f.safe)], ['Safe nonce', f.nonce]]);
+  // A recognized document lists every value it signs under Details, as a payment's calls are.
+  const request = value.review.request, signedData = element('payment-signed');
+  if (request.kind === 'typed-data' && f.kind !== 'typed-data')
+    signedData.replaceChildren(...[['Type', request.typedData.primaryType] as [string, string], ...typedDataOf(request.typedData).fields.map(signedRow)]
+      .map(([name, text]) => line('call-line', `${name}: ${text}`)));
+  (signedData.parentElement as HTMLElement).hidden = !signedData.childElementCount;
   return item;
 }
 /** Every call, its source and every warning in the one review the passkey approves. A payment
@@ -372,6 +385,9 @@ function showCalls(value: Review) {
       warnings.push({ code: 'raw', text: `${prefix}${source.lookup === 'lookup-failed' ? `${LOOKUP_FAILED_LINE} ` : ''}${RAW_CALL_WARNING}` });
     for (const warning of entry.warnings) if (warning.code !== 'abi-unavailable' && warning.code !== 'decimals-unknown')
       warnings.push({ code: warning.code, text: `${prefix}${pinned ? PAYMENT_WARNINGS[warning.code] ?? 'Check this call before approving.' : warning.text}` });
+    // A grant the server names no warning for is still said, in this page's words, under a signature.
+    if (signature && found) for (const code of callWarnings(found.item, found.args).possible)
+      if (!entry.warnings.some(warning => warning.code === code)) warnings.push({ code, text: `${prefix}${PAYMENT_WARNINGS[code]}` });
     return item;
   }));
   if (!payment && !signature) element('payment-amount').textContent = `${calls.length} ${calls.length === 1 ? 'call' : 'calls'}${total ? `, sending ${formatUnits(total, 18)} ETH` : ''}`;
