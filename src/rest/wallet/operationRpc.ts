@@ -2,6 +2,7 @@ import { isProxy } from "node:util/types";
 import type { Hex } from "viem";
 import { RestError, type RestRpc } from "../core.js";
 import { stable } from "../smartAccounts/service.js";
+import { SIGNA_HOME_CHAIN_ID, signaChain } from "./chains.js";
 
 export const walletPreflightRpcBounds = Object.freeze({ rpcCalls: 64, rpcTimeoutMs: 3000, totalTimeoutMs: 15_000, responseBytes: 2 * 1024 * 1024 });
 export const walletObservationRpcBounds = Object.freeze({ rpcCalls: 256, rpcTimeoutMs: 3000, totalTimeoutMs: 30_000, responseBytes: 8 * 1024 * 1024 });
@@ -11,10 +12,10 @@ function word(value: unknown): value is Hex { return typeof value === "string" &
 
 /** A single read-only operation owns all calls, response bytes and cancellation, including helper
  * reads. Promise races also bound transports that fail to honor their AbortSignal. */
-export function operationRpc(rpc: RestRpc, limits: Record<keyof typeof walletPreflightRpcBounds, number>, signal?: AbortSignal, observation = false, chainId = 8453) {
+export function operationRpc(rpc: RestRpc, limits: Record<keyof typeof walletPreflightRpcBounds, number>, signal?: AbortSignal, observation = false, chainId: number = SIGNA_HOME_CHAIN_ID) {
   // Existing wallet authority callers remain bound to Base. Operator dependency
   // observations may explicitly read one of Center's other configured EVM chains.
-  if (![1, 10, 8453, 42161, 11155111, 11155420, 84532, 421614].includes(chainId))
+  if (!signaChain(chainId))
     fail('WALLET_DEPLOYMENT_CHAIN_UNSUPPORTED', 'Unsupported dependency observation chain.', 500);
   const controller = new AbortController();
   const operationDeadline = performance.now() + limits.totalTimeoutMs;

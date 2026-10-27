@@ -49,7 +49,7 @@ import { REVIEWED_CALLS_KIND, REVIEWED_CALLS_MAXIMUM, REVIEWED_CALLS_OPERATION, 
   type ReviewedCallsRefusal } from './userOperations/reviewedCalls.js';
 import { reviewSignature, type ReviewedSignatureRefusal, type SignatureChain } from './userOperations/reviewedSignatures.js';
 import { signatureRequestOf } from './userOperations/reviewedSignatureRules.js';
-import { SIGNA_HOME_CHAIN_ID } from './wallet/chains.js';
+import { SIGNA_HOME_CHAIN_ID, signaChain } from './wallet/chains.js';
 import type {
   createSmartAccountService,
   createSessionPolicyReviewer,
@@ -1340,7 +1340,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
     if (!/^0x[0-9a-fA-F]{64}$/.test(String(body.bindingId)) || typeof body.account !== 'string' || !isAddress(body.account) ||
       !Array.isArray(body.calls) || body.calls.length < 1 || body.calls.length > REVIEWED_CALLS_MAXIMUM) throw invalidInput();
     const chainId = body.chainId ?? SIGNA_HOME_CHAIN_ID;
-    if (chainId !== SIGNA_HOME_CHAIN_ID)
+    if (typeof chainId !== 'number' || !signaChain(chainId)?.operates)
       throw new RestError(403, 'USER_OPERATION_APP_CHAIN_UNAVAILABLE', 'App wallet operations are available only on Base.');
     const account = getAddress(body.account), calls = body.calls.map(item => {
       const call = object(item, ['to', 'value', 'data']);
@@ -1380,11 +1380,11 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
     }
     if (typeof body.state !== 'string' || (body.id !== undefined && typeof body.id !== 'string'))
       throw new RestError(400, 'WALLET_PAYMENT_REVIEW_INPUT', 'Choose the callback state.');
-    if (request.chainId !== SIGNA_HOME_CHAIN_ID)
-      throw new RestError(403, 'USER_OPERATION_APP_CHAIN_UNAVAILABLE', 'App wallet operations are available only on Base.');
+    if (!signaChain(request.chainId)?.signs)
+      throw new RestError(403, 'USER_OPERATION_APP_CHAIN_UNAVAILABLE', "Signa accounts don't sign on this network.");
     const owner = actor(principal), account = getAddress(owner.accountId.split(':')[2]!);
     const review = await reviewSignature({ account, request, chain, abis: reviewed.abis });
-    if (!review.ok) throw new RestError(422, 'REVIEWED_SIGNATURE_REFUSED', signatureRefused[review.refusal]);
+    if (!review.ok) throw new RestError(422, 'REVIEWED_SIGNATURE_REFUSED', signatureRefused[review.refusal], { refusal: review.refusal });
     const view = await service.prepareSignature(owner, { review: review.review, state: body.state, ...(body.id === undefined ? {} : { id: body.id }) }, idempotency(principal));
     return response(context, publicWalletPaymentReview(view), 201);
   });

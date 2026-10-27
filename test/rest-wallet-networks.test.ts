@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { decodeFunctionData, hashTypedData, keccak256, parseAbi, type Address } from "viem";
 import { walletOwnerPlan } from "../src/rest/web/walletRecoveryReview.js";
 import { createWalletAuthorityContextFixture } from "./fixtures/wallet-authority-context.js";
-import { walletNetworkCatalog, walletNetworkEntries, walletNetworksDocument, walletNetworkFamily } from "../src/rest/wallet/networks.js";
+import { signaChains, walletNetworkCatalog, walletNetworkEntries, walletNetworksDocument, walletNetworkFamily } from "../src/rest/wallet/networks.js";
 import type { WalletAuthorityContext } from "../src/rest/wallet/authority.js";
 
 // The Base creation calldata carries no chain id: the same factory call reaches the same CREATE2
@@ -12,6 +12,12 @@ let base: WalletAuthorityContext;
 beforeAll(async () => { base = await createWalletAuthorityContextFixture(now); });
 
 describe("wallet networks", () => {
+  it("signs on all 8 V6 chains, operates on Base", () => {
+    expect(signaChains.filter(chain => chain.signs).map(chain => chain.chainId).sort((a, b) => a - b))
+      .toEqual([1, 10, 8453, 42161, 84532, 421614, 11155111, 11155420]);
+    expect(signaChains.filter(chain => chain.operates).map(chain => chain.chainId)).toEqual([8453]);
+    expect(walletNetworkCatalog.some(network => "signs" in network || "operates" in network)).toBe(false);
+  });
   it("offers Optimism, Arbitrum and the testnets with Center paying, and Ethereum only when the account pays", () => {
     const byId = Object.fromEntries(walletNetworkCatalog.map(network => [network.chainId, network]));
     expect(byId[10]).toMatchObject({ name: "Optimism", family: "mainnet", paymentChainId: 8453, centerPays: true, offered: true });

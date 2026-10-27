@@ -199,6 +199,20 @@ describe('signatures from a Signa account', () => {
     expect(await refusal({ ...request, typedData: { ...request.typedData, domain: chainless } })).toBe('chain-mismatch');
   });
 
+  it('admits a typed-data signature on Optimism, and on no chain Signa does not sign on', async () => {
+    const onChain = (chainId: number) => {
+      const request = permitSingle();
+      if (request.kind !== 'typed-data') throw new Error('typed');
+      return signatureRequestOf({ ...request, chainId, typedData: { ...request.typedData, domain: { ...request.typedData.domain, chainId } } });
+    };
+    const { review } = await reviewed(onChain(10)), draft = draftOf(review);
+    expect(draft.chainId).toBe(10);
+    expect(draft.signing.digest).toBe(safe7579MessageSigningPayload({ safe: account, chainId: 10, requestDigest: draft.signing.requestDigest }).digest);
+    expect(validateWalletSignatureReviewDraft(draft)).toEqual(draft);
+    expect(() => validateWalletSignatureReviewDraft({ ...draft, chainId: 8453 })).toThrow();
+    expect(recognizeReviewedSignature({ ...review, chainId: 137, request: onChain(137) }, account)).toBeNull();
+  });
+
   it('refuses on a chain whose owners diverge', async () => {
     expect(await refusal(permitSingle(), { ...consistent, owners: async () => 'diverged' })).toBe('owners-diverged');
     expect(await refusal(permitSingle(), { ...consistent, deployed: async () => false })).toBe('account-not-deployed');

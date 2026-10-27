@@ -20,10 +20,9 @@ import type {
 } from "./userOperations/types.js";
 import type { UserOperationChainPolicy } from "./userOperations/service.js";
 import { readSponsorCapPolicies, type SponsorCapPolicy } from "./sponsorCaps.js";
+import { signaChains } from "./wallet/chains.js";
 
-const CHAIN_IDS = [
-  1, 10, 8453, 42161, 84532, 421614, 11155111, 11155420,
-] as const;
+const CHAIN_IDS = signaChains.map((chain) => chain.chainId);
 const GAS_FIELDS = [
   "maximumCallGas",
   "maximumVerificationGas",
@@ -184,7 +183,7 @@ export async function readRestExecutionConfiguration(
     if (
       typeof value.chainId !== "number" ||
       !Number.isSafeInteger(value.chainId) ||
-      !(CHAIN_IDS as readonly number[]).includes(value.chainId) ||
+      !CHAIN_IDS.includes(value.chainId) ||
       usedChains.has(value.chainId)
     )
       invalid("Provider chains must be supported, explicit and unique.");
@@ -282,6 +281,12 @@ export async function readRestExecutionConfiguration(
       reviewId: stack.paymaster.profileId,
     });
   }
+  // A server configured from REST_ERC4337_CONFIG operates on every chain Signa accounts operate on; a
+  // missing one fails startup. Bare JSON, like an unset variable, configures no operations.
+  if (typeof envOrJson !== "string" && raw !== undefined)
+    for (const chain of signaChains)
+      if (chain.operates && !usedChains.has(chain.chainId))
+        invalid(`REST_ERC4337_CONFIG needs a provider for ${chain.name} (${chain.chainId}), where Signa accounts operate.`);
   // The provider constructor independently validates the finalized server-owned transport config without making requests.
   new UserOperationProvider(providers);
   // Each chain's Pimlico paymaster policy stays the sponsor; its cap is read beside it, and a chain

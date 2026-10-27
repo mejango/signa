@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
 import { buildUserPayMetadata, PAY_QUOTE_FAILED_MESSAGE } from '@bananapus/nana-sdk-core/v6';
 import { passkeyPayMetadataSteps } from '../src/rest/userOperations/userPayMetadata.js';
-import { encodeFunctionData, erc20Abi, maxUint256, type Address, type Hex } from 'viem';
+import { encodeAbiParameters, encodeFunctionData, erc20Abi, maxUint256, padHex, type Address, type Hex } from 'viem';
 import { getJBContractAddress, jbMultiTerminalAbi } from '@bananapus/nana-sdk-core';
 import { getUserOperationHash } from '../src/rest/userOperations/codec.js';
 import { safe7579PasskeyOwnerSigningPayload } from '../src/rest/smartAccounts/passkeySignatures.js';
@@ -19,7 +19,10 @@ import { signatureRequestOf, signatureSigning, type SignatureRequest } from '../
 import { parseWalletRegistration, type WalletRegistrationCandidate } from '../src/rest/wallet/registration.js';
 import { verifyWalletAssertion } from '../src/rest/wallet/webauthn.js';
 import { operationCallsView } from '../src/rest/userOperations/reviewedCalls.js';
+import { signaChains } from '../src/rest/wallet/chains.js';
 
+// The chains' public RPCs, as Signa's wallet pages allow them (src/rest/wallet/http.ts).
+const rpcOrigins = signaChains.map(chain => new URL(chain.publicRpc).origin).join(' ');
 const encode = (value: Uint8Array) => Buffer.from(value).toString('base64url');
 const decode = (value: string) => Buffer.from(value, 'base64url');
 const reviewId = '77777777-7777-4777-8777-777777777777';
@@ -53,7 +56,7 @@ describe('central payment review browser, virtual authenticator', () => {
       const path = new URL(request.url!, origin).pathname;
       const json = (value: unknown, code = 200) => { response.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); response.end(JSON.stringify(value)); };
       if (path === '/wallet/payment' || path === '/fixture') {
-        response.writeHead(200, { 'content-type': 'text/html', 'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" });
+        response.writeHead(200, { 'content-type': 'text/html', 'content-security-policy': `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' ${rpcOrigins}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` });
         response.end(path === '/fixture' ? '<html><title>Virtual fixture enrollment</title></html>' : html); return;
       }
       if (path.startsWith('/wallet/assets/')) {
@@ -241,7 +244,7 @@ describe('central payment review browser, virtual authenticator', () => {
       abis: { abiFor: async () => { throw new Error('No lookup expected'); } } });
     if (!result.ok) throw new Error(result.refusal);
     const signing = signatureSigning(account, request);
-    return { version: review.version, id: reviewId, state, issuer: origin, accountId: review.accountId, app: review.app, chainId: 8453,
+    return { version: review.version, id: reviewId, state, issuer: origin, accountId: review.accountId, app: review.app, chainId: request.chainId,
       review: result.review, signing, createdAtMs: review.createdAtMs, expiresAtMs: review.expiresAtMs, status: 'pending', approvedAtMs: null, cancelledAtMs: null,
       passkey: { ...review.passkey, challenge: encode(Buffer.from(signing.digest.slice(2), 'hex')) },
       reviewedSignature: JSON.parse(JSON.stringify(reviewedSignatureView(result.review, account))) };
@@ -274,6 +277,40 @@ describe('central payment review browser, virtual authenticator', () => {
     expect(await page.evaluate(() => (window as any).passkeyRequests)).toHaveLength(1);
     await approved(); expect(approvals()).toHaveLength(1);
     expect(rpcReads).toBe(0); expect(errors).toEqual([]);
+  });
+
+  it('a Permit2 signature on Optimism names Optimism, reads its token there and asks for one passkey', async () => {
+    let baseReads = 0;
+    await page.route('https://mainnet.base.org/**', route => { baseReads++; return route.abort(); });
+    await page.route('https://mainnet.optimism.io/**', async route => {
+      const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type' };
+      if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      const batch = route.request().postDataJSON() as { id: number; method: string; params: [{ data: string }] }[];
+      await route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify(batch.map(({ id, method, params }) => ({ jsonrpc: '2.0', id,
+        result: method === 'eth_chainId' ? '0xa' : params[0].data === '0x313ce567' ? padHex('0x6', { size: 32 }) : encodeAbiParameters([{ type: 'string' }], ['USDC']) }))) });
+    });
+    const permit = await signatureReview(signatureRequestOf({ kind: 'typed-data', chainId: 10, typedData: {
+      domain: { name: 'Permit2', chainId: 10, verifyingContract: '0x000000000022D473030F116dDEE9F6B43aC78BA3' },
+      types: { PermitSingle: [{ name: 'details', type: 'PermitDetails' }, { name: 'spender', type: 'address' }, { name: 'sigDeadline', type: 'uint256' }],
+        PermitDetails: [{ name: 'token', type: 'address' }, { name: 'amount', type: 'uint160' }, { name: 'expiration', type: 'uint48' }, { name: 'nonce', type: 'uint48' }] },
+      primaryType: 'PermitSingle', message: { details: { token: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', amount: '1000000', expiration: 1_800_086_400, nonce: 0 },
+        spender: '0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad', sigDeadline: '1800003600' } } }));
+    // A review served as Base for an Optimism request is refused before any prompt.
+    review = { ...structuredClone(permit), chainId: 8453 } as never;
+    await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+    expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0);
+    review = permit as never;
+    for (const viewport of [{ width: 360, height: 780 }, { width: 1280, height: 800 }]) {
+      await page.setViewportSize(viewport); await load();
+      expect(await page.locator('#payment-review dl').textContent()).toContain('NetworkOptimism');
+      expect(await signatureText()).toContain('Permit2 allowance on Optimism');
+      await expect.poll(signatureText).toContain('Amount: 1 USDC');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    await expect.poll(() => page.locator('#payment-approve').isEnabled()).toBe(true);
+    await page.locator('#payment-approve').click(); await status('approved');
+    expect(await page.evaluate(() => (window as any).passkeyRequests)).toHaveLength(1);
+    expect(baseReads).toBe(0); expect(errors).toEqual([]);
   });
 
   it('the page refuses a served model that differs from its own decode', async () => {

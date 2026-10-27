@@ -140,6 +140,11 @@ describe("signaWalletAdapter", () => {
     const refused = setup();
     refused.reviews.prepareReview.mockRejectedValueOnce(Object.assign(new Error("Call 1: refused"), { code: "REVIEWED_CALLS_REFUSED", status: 422 }));
     await expect(refused.adapter.submitToReviewer!({ account, calls: [call] })).rejects.toMatchObject({ code: 4001, message: "Call 1: refused" });
+    // A refused signature says why in one line, naming the chain.
+    refused.reviews.prepareSignature.mockRejectedValueOnce(Object.assign(new Error("The service rejected this request (422, REVIEWED_SIGNATURE_REFUSED)"),
+      { code: "REVIEWED_SIGNATURE_REFUSED", status: 422, refusal: "account-not-deployed" }));
+    await expect(refused.adapter.signTypedData({ domain: { chainId: 10 }, types: { M: [{ name: "a", type: "uint256" }] }, primaryType: "M", message: { a: 1n } }))
+      .rejects.toMatchObject({ code: 4001, message: "Your Signa account isn't on Optimism yet." });
     const pending = setup();
     pending.reviews.prepareReview.mockRejectedValueOnce(Object.assign(new Error("pending"), { code: "WALLET_PAYMENT_PENDING" }));
     const error = await pending.adapter.submitToReviewer!({ account, calls: [call] }).catch((caught: unknown) => caught);

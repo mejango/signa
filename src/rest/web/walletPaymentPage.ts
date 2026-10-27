@@ -1,6 +1,5 @@
 import { assetHref, type AssetNames } from './assets.js';
 import { BRAND_ICON } from '../../branding.js';
-import { SIGNA_HOME_CHAIN_ID, signaChainName } from '../wallet/chains.js';
 /** Dedicated owner approval surface. Values are populated with textContent, never HTML. */
 export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string {
   return `<!doctype html>
@@ -17,7 +16,7 @@ export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string
 <ul id="payment-warnings" hidden></ul>
 <ol id="payment-calls" hidden></ol>
 <details class="quiet"><summary>Details</summary><dl>
-<dt>Network</dt><dd>${signaChainName(SIGNA_HOME_CHAIN_ID)}</dd>
+<dt>Network</dt><dd id="payment-network"></dd>
 <dt>Requested by</dt><dd id="payment-app"></dd><dt>From your account</dt><dd id="payment-account"></dd>
 <div class="payment-terms"><dt>Hook requests</dt><dd id="payment-hooks"></dd></div><div class="payment-operation"><dt>Operation</dt><dd id="payment-operation"></dd></div><div class="payment-signed" hidden><dt>Signed data</dt><dd id="payment-signed"></dd></div>
 <dt>Approval expires</dt><dd id="payment-expiry"></dd></dl></details></section>

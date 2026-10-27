@@ -168,11 +168,14 @@ describe("signed REST client request binding", () => {
     const served = (body: unknown, reader = true) => (reader
       ? new CenterClient({ ...config, fetch: async () => Response.json(body, { status: 502 }) })
       : new SignedRestClient({ ...config, fetch: async () => Response.json(body, { status: 502 }) }))
-      .request({ requestTarget: "/api/v1/accounts/me" }).then(() => undefined, (error: { payFailure?: unknown }) => error);
+      .request({ requestTarget: "/api/v1/accounts/me" }).then(() => undefined, (error: { payFailure?: unknown; refusal?: unknown }) => error);
     const refused = await served({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure });
     expect(refused).toMatchObject({ code: "USER_OPERATION_PROVIDER_REJECTED",
       payFailure: { ...payFailure, received: 812n, minimum: 900n, zeroFill: false, adjustable: "minimum" } });
     expect((await served({ code: "X", payFailure: { ...payFailure, detail: "https://node.example/key" } }))?.payFailure).toBeUndefined();
+    // A refusal reason is kept as a bounded token, never as served text.
+    expect(await served({ code: "REVIEWED_SIGNATURE_REFUSED", refusal: "account-not-deployed" })).toMatchObject({ refusal: "account-not-deployed" });
+    expect((await served({ code: "REVIEWED_SIGNATURE_REFUSED", refusal: "Visit https://evil.example" }))?.refusal).toBeUndefined();
     // A bare signed client, as the served pages use it, reads no reason.
     expect((await served({ code: "USER_OPERATION_PROVIDER_REJECTED", payFailure }, false))?.payFailure).toBeUndefined();
   });

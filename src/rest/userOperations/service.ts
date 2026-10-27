@@ -78,7 +78,7 @@ import type {
   UserOperationObservation,
   UserOperationV07,
 } from "./types.js";
-import { SIGNA_HOME_CHAIN_ID } from "../wallet/chains.js";
+import { SIGNA_HOME_CHAIN_ID, signaChain } from "../wallet/chains.js";
 
 export interface UserOperationChainPolicy {
   chainId: number;
@@ -186,7 +186,7 @@ function appOperation(principal: RestPrincipal, chainId: number, hasSession: boo
   if (principal.kind !== "wallet-app") return;
   if (hasSession)
     fail("USER_OPERATION_APP_SESSION_UNAVAILABLE", "Apps require fresh wallet owner approval for each operation.", 403);
-  if (chainId !== SIGNA_HOME_CHAIN_ID || principal.account.authorityChainId !== SIGNA_HOME_CHAIN_ID)
+  if (!signaChain(chainId)?.operates || principal.account.authorityChainId !== SIGNA_HOME_CHAIN_ID)
     fail("USER_OPERATION_APP_CHAIN_UNAVAILABLE", "App wallet operations are available only on Base.", 403);
 }
 
@@ -904,7 +904,7 @@ export class UserOperationService {
     exactActor(input.actor, record);
     if (record.session)
       fail("USER_OPERATION_PASSKEY_SESSION_UNAVAILABLE", "The passkey pilot requires fresh owner approval for every operation.", 422);
-    if (record.chainId !== SIGNA_HOME_CHAIN_ID) fail("USER_OPERATION_APP_CHAIN_UNAVAILABLE", "App wallet operations are available only on Base.", 403);
+    if (!signaChain(record.chainId)?.operates) fail("USER_OPERATION_APP_CHAIN_UNAVAILABLE", "App wallet operations are available only on Base.", 403);
     const operation = normalizeUserOperation({ ...record.operation, signature: input.signature });
     const signedCommitment = userOperationCommitment(operation, record.entryPoint, record.chainId);
     if (record.submission) return this.replayed(record, signedCommitment, signal);

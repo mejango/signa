@@ -3,8 +3,8 @@ import { base } from "wagmi/chains";
 import type { Address } from "viem";
 import { SIGNA_HOME_CHAIN_ID, signaChains } from "../../../src/rest/wallet/chains.js";
 
-/** The chains the account acts on today. */
-const enabled = signaChains.filter((chain) => chain.enabled);
+/** The chains the account operates on today. */
+const enabled = signaChains.filter((chain) => chain.operates);
 const isEnabled = (chainId: number) => enabled.some((chain) => chain.chainId === chainId);
 
 /** The slice of a Signa wallet client the connector needs. Signing never crosses this seam. */

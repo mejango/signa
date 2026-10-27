@@ -11,7 +11,8 @@ const ZERO = "0x0000000000000000000000000000000000000000";
 export type SignatureRequest =
   | { kind: "typed-data"; chainId: number; typedData: { domain: Record<string, unknown>; types: Record<string, { name: string; type: string }[]>; primaryType: string; message: Record<string, unknown> } }
   | { kind: "message"; chainId: number; message: string };
-export type ReviewedSignatureRefusal = "account-self-administration" | "chain-mismatch" | "account-not-deployed" | "owners-diverged";
+export const REVIEWED_SIGNATURE_REFUSALS = ["account-self-administration", "chain-mismatch", "account-not-deployed", "owners-diverged"] as const;
+export type ReviewedSignatureRefusal = (typeof REVIEWED_SIGNATURE_REFUSALS)[number];
 /** The call a signature lets someone run, from the address that runs it. */
 export interface SignatureCall { from: Address; to: Address; value: string; data: Hex }
 /** What a signature authorizes, read from the exact request. Addresses lowercase, integers decimal. */

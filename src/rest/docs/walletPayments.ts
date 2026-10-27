@@ -1,5 +1,5 @@
 import { array, nullable, object, ref, type Schema } from './schemas.js';
-import { SIGNA_HOME_CHAIN_ID } from '../wallet/chains.js';
+import { SIGNA_HOME_CHAIN_ID, signaChains } from '../wallet/chains.js';
 import { REVIEWED_CALLS_MAXIMUM } from '../userOperations/reviewedCalls.js';
 /** Signed app surface only. Central cookie ceremonies belong to the isolated wallet origin. */
 export function walletPaymentSchemas(): Record<string, Schema> {
@@ -29,16 +29,17 @@ export function walletPaymentSchemas(): Record<string, Schema> {
   // A payment review carries `payment`; a reviewed call set carries `review` instead.
   const required = Object.keys(properties).filter(key => key !== 'payment' && key !== 'review');
   const either = { oneOf: [{ required: ['payment'] }, { required: ['review'] }] };
+  const signsOn = { type: 'integer', enum: signaChains.filter(chain => chain.signs).map(chain => chain.chainId) };
   const request = { oneOf: [
-    object({ kind: { const: 'typed-data', type: 'string' }, chainId: { const: SIGNA_HOME_CHAIN_ID, type: 'integer' },
+    object({ kind: { const: 'typed-data', type: 'string' }, chainId: signsOn,
       typedData: { ...object({ domain: { type: 'object' }, types: { type: 'object' }, primaryType: { type: 'string' }, message: { type: 'object' } }),
         description: 'EIP-712 typed data as eth_signTypedData_v4 takes it. Its domain must name this chainId; integers above 2^53 go as decimal strings.' } }),
-    object({ kind: { const: 'message', type: 'string' }, chainId: { const: SIGNA_HOME_CHAIN_ID, type: 'integer' },
+    object({ kind: { const: 'message', type: 'string' }, chainId: signsOn,
       message: { type: 'string', minLength: 1, maxLength: 16384, description: 'UTF-8 text, signed as personal_sign (EIP-191) signs it.' } })] };
   const approval = nullable(object({ signature: ref('HexBytes'), signedCommitment: ref('Hash') }));
   const signature = { ...Object.fromEntries(['version', 'id', 'state', 'issuer', 'accountId', 'app', 'chainId', 'createdAtMs', 'expiresAtMs', 'status',
-    'approvedAtMs', 'cancelledAtMs'].map(key => [key, properties[key as keyof typeof properties]])),
-    review: object({ kind: { const: 'reviewed-signature-v1', type: 'string' }, chainId: { const: SIGNA_HOME_CHAIN_ID, type: 'integer' }, request,
+    'approvedAtMs', 'cancelledAtMs'].map(key => [key, properties[key as keyof typeof properties]])), chainId: signsOn,
+    review: object({ kind: { const: 'reviewed-signature-v1', type: 'string' }, chainId: signsOn, request,
       sources: array(source, { maxItems: 1 }) }),
     signing: object({ digest: { ...ref('Hash'), description: "The account's SafeMessage digest of requestDigest: what the passkey signs." },
       requestDigest: { ...ref('Hash'), description: 'The EIP-712 or EIP-191 hash of the request: what isValidSignature checks.' } }) };

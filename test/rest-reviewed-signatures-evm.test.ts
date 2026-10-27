@@ -20,11 +20,12 @@ const artifact = (name: string, passkey = false): Artifact => JSON.parse(readFil
 const safe = artifact("SafeL2"), factory = artifact("SafeProxyFactory"), adapter = artifact("Safe7579"), launchpad = artifact("Safe7579Launchpad"),
   utility = artifact("Safe7579DCUtil"), entry = artifact("EntryPoint"), senderCreator = artifact("SenderCreator"), sessions = artifact("SmartSession"),
   fcl = artifact("FCLP256Verifier", true), signerFactory = artifact("SafeWebAuthnSignerFactory", true);
-const chainId = 8453, rpId = "wallet.juicebox.center", origin = `https://${rpId}`;
+const rpId = "wallet.juicebox.center", origin = `https://${rpId}`;
 const credential = createRegistration({ challenge: zeroHash, rpId, origin, userHandle: Buffer.from("local-reviewed-signatures").toString("base64url") });
 
 // Genuine P256/FCL, Safe and Safe7579 ERC-1271 verification on a local chain; no Base deployment or provider.
-describe.skipIf(!anvilAvailable())("reviewed signatures through the passkey Safe", () => {
+// Base, and Optimism as a chain the account signs on beside its home.
+for (const chainId of [8453, 10]) describe.skipIf(!anvilAvailable())(`reviewed signatures through the passkey Safe on chain ${chainId}`, () => {
   let child: ChildProcess | undefined, endpoint: string, sender: Address, backup: Address, signer: Address, account: Address, requestId = 0;
   async function call<T = unknown>(method: string, params: readonly unknown[] = []): Promise<T> {
     const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, redirect: "error",
@@ -60,7 +61,7 @@ describe.skipIf(!anvilAvailable())("reviewed signatures through the passkey Safe
     endpoint = `http://127.0.0.1:${port}`;
     child = spawnAnvil(["--host", "127.0.0.1", "--port", String(port), "--chain-id", String(chainId), "--hardfork", "cancun", "--timestamp", "1800000000", "--silent"]);
     let ready = false;
-    for (let i = 0; i < 100; i++) { try { if (await call("eth_chainId") === "0x2105") { ready = true; break; } } catch { /* bounded startup */ }
+    for (let i = 0; i < 100; i++) { try { if (await call("eth_chainId") === toHex(chainId)) { ready = true; break; } } catch { /* bounded startup */ }
       await new Promise(resolve => setTimeout(resolve, 30)); }
     expect(ready).toBe(true);
     [sender, backup] = await call<[Address, Address]>("eth_accounts");
@@ -82,7 +83,8 @@ describe.skipIf(!anvilAvailable())("reviewed signatures through the passkey Safe
     }
   });
 
-  it("the returned signature validates through isValidSignature on that chain", async () => {
+  it(chainId === 10 ? "a typed-data signature on Optimism validates through isValidSignature"
+    : "the returned signature validates through isValidSignature on that chain", async () => {
     const permit = signatureRequestOf({ kind: "typed-data", chainId, typedData: { domain: { name: "Permit2", chainId, verifyingContract: "0x000000000022D473030F116dDEE9F6B43aC78BA3" },
       types: { PermitSingle: [{ name: "details", type: "PermitDetails" }, { name: "spender", type: "address" }, { name: "sigDeadline", type: "uint256" }],
         PermitDetails: [{ name: "token", type: "address" }, { name: "amount", type: "uint160" }, { name: "expiration", type: "uint48" }, { name: "nonce", type: "uint48" }] },

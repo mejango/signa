@@ -11,7 +11,7 @@ import { REVIEWED_SIGNATURE_KIND, signatureFacts, signatureRefusal, signatureReq
   type SignatureFacts, type SignedField } from '../userOperations/reviewedSignatureRules.js';
 import { callWarnings, ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
   reviewedCallRefusal, tokenAmountOf, type CallSource } from '../userOperations/reviewedCallRules.js';
-import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from '../wallet/chains.js';
+import { SIGNA_HOME_CHAIN_ID, signaChain, signaChainName } from '../wallet/chains.js';
 import { chainRpcBatch } from './chainRpc.js';
 
 // Native assertions and CSRF values stay in this page's memory. A reload recovers
@@ -175,7 +175,7 @@ function checkSignature(value: WalletSignatureCentralPublic): string {
     if (signatureRefusal(account, request)) fail();
     own = signatureFacts(account, request); signing = signatureSigning(account, request);
   } catch { return fail(); }
-  if (reviewed.kind !== REVIEWED_SIGNATURE_KIND || reviewed.chainId !== SIGNA_HOME_CHAIN_ID || request.chainId !== SIGNA_HOME_CHAIN_ID ||
+  if (reviewed.kind !== REVIEWED_SIGNATURE_KIND || reviewed.chainId !== value.chainId || request.chainId !== value.chainId ||
     uoCanonical(served.facts) !== uoCanonical(own) || uoCanonical(served.warnings) !== uoCanonical(signatureWarnings(own)) ||
     value.signing.digest !== signing.digest || value.signing.requestDigest !== signing.requestDigest || !Array.isArray(reviewed.sources)) fail();
   const call = 'call' in own ? own.call : null;
@@ -196,16 +196,15 @@ function checkSignature(value: WalletSignatureCentralPublic): string {
 type TokenInfo = { decimals: number; symbol: string };
 // The pinned Base USDC is known without a read, as the SDK's review knows it, so a payment's amount needs no RPC.
 const knownTokens = new Map<string, TokenInfo>([[__SIGNA_PAYMENT_PIN__.token.toLowerCase(), { decimals: 6, symbol: 'USDC' }]]);
-/** Each token's decimals and symbol, known or read by this page from Base's public RPC in one batch. Null where a read failed. */
-async function readTokens(all: string[]): Promise<Map<string, TokenInfo | null>> {
-  const read = new Map<string, TokenInfo | null>(all.map(token => [token, knownTokens.get(token) ?? null]));
-  const tokens = all.filter(token => !knownTokens.has(token));
+/** Each token's decimals and symbol, known or read by this page from the review chain's public RPC in one batch. Null where a read failed. */
+async function readTokens(chainId: number, all: string[]): Promise<Map<string, TokenInfo | null>> {
+  const read = new Map<string, TokenInfo | null>(all.map(token => [token, (chainId === SIGNA_HOME_CHAIN_ID && knownTokens.get(token)) || null]));
+  const tokens = all.filter(token => !read.get(token));
   if (!tokens.length) return read;
   try {
-    const rpc = signaChains.find(chain => chain.chainId === SIGNA_HOME_CHAIN_ID)!.publicRpc;
-    const results = await chainRpcBatch(rpc, [['eth_chainId', []], ...tokens.flatMap(to =>
+    const results = await chainRpcBatch(signaChain(chainId)!.publicRpc, [['eth_chainId', []], ...tokens.flatMap(to =>
       ['0x313ce567', '0x95d89b41'].map(data => ['eth_call', [{ to, data }, 'latest']] as const))], AbortSignal.timeout(5000));
-    if (results[0] !== `0x${SIGNA_HOME_CHAIN_ID.toString(16)}`) return read;
+    if (results[0] !== `0x${chainId.toString(16)}`) return read;
     tokens.forEach((token, index) => {
       const decimals = results[1 + 2 * index], symbol = results[2 + 2 * index];
       if (typeof decimals !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(decimals) || BigInt(decimals) > 255n) return;
@@ -219,7 +218,7 @@ async function readTokens(all: string[]): Promise<Map<string, TokenInfo | null>>
 function checkReview(input: unknown): Review {
   const value = record(input) as unknown as Review;
   if (value.version !== 'center-wallet-payment-review-v1' || uuid(value.id) !== id || value.issuer !== location.origin ||
-    value.chainId !== SIGNA_HOME_CHAIN_ID || !['pending', 'approved', 'cancelled'].includes(value.status)) fail();
+    !(signed(value) ? signaChain(value.chainId)?.signs : value.chainId === SIGNA_HOME_CHAIN_ID) || !['pending', 'approved', 'cancelled'].includes(value.status)) fail();
   if (review && review.status !== 'pending' && value.status !== review.status) fail();
   integer(value.createdAtMs); integer(value.expiresAtMs); callback(value);
   const digest = signed(value) ? checkSignature(value) : checkOperation(value);
@@ -400,7 +399,7 @@ function showCalls(value: Review) {
   // Amounts format with what this page reads from the chain; a token it can't read shows base units, never a lookalike number.
   // Approval waits for them (five seconds at most), so the passkey never signs over an amount still being read.
   readingTokens = pending.length > 0; render();
-  void readTokens([...new Set(pending.map(amount => amount.token))]).then(read => {
+  void readTokens(value.chainId, [...new Set(pending.map(amount => amount.token))]).then(read => {
     for (const { node, name, token, value, prefix, headline } of pending) {
       const info = read.get(token), amount = info ? `${formatUnits(value, info.decimals)} ${info.symbol}` : `${value} base units`;
       node.textContent = `${name}: ${amount}`;
@@ -416,7 +415,7 @@ function showCalls(value: Review) {
     for (const terms of document.querySelectorAll<HTMLElement>(signature ? '.payment-terms,.payment-operation' : '.payment-terms')) terms.hidden = true;
     document.querySelector('h1')!.textContent = signature ? 'Review signature' : 'Review transaction'; approve.textContent = signature ? 'Sign' : 'Approve';
   }
-  for (const [name, text] of Object.entries({ app: value.app.origin, account: sender, ...(signature ? {} : { operation: (value as Operated).operationHash }),
+  for (const [name, text] of Object.entries({ network: signaChainName(value.chainId), app: value.app.origin, account: sender, ...(signature ? {} : { operation: (value as Operated).operationHash }),
     expiry: new Date(value.expiresAtMs).toLocaleString() })) element(`payment-${name}`).textContent = text;
 }
 function accept(input: unknown) {

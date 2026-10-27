@@ -323,7 +323,7 @@ export interface WalletSignatureReviewDraft extends Pick<WalletReviewDraft, "ver
   "createdAtMs" | "expiresAtMs" | "ceremony"> {
   /** The row's key in the review table: a signature has no operation. */
   operationId: string;
-  chainId: typeof SIGNA_HOME_CHAIN_ID;
+  chainId: number;
   review: ReviewedSignatureReview;
   /** `digest` is the SafeMessage digest the passkey signs over `requestDigest`, the hash the account's ERC-1271 signature is for. */
   signing: { digest: Hex; requestDigest: Hex };
@@ -347,7 +347,7 @@ export function createWalletSignatureReviewDraft(inputContext: Pick<WalletPaymen
     const expiresAtMs = Math.min(g.expiresAt * 1000, options.createdAtMs + lifetimeMs);
     if (expiresAtMs <= options.createdAtMs) invalid();
     const base: Omit<WalletSignatureReviewDraft, "ceremony"> = { version: "center-wallet-payment-review-v1", ...options, issuer: c.issuer, grant: g,
-      authority, operationId: signatureRow(options.id), chainId: SIGNA_HOME_CHAIN_ID, review: checked, signing: signatureSigning(account, checked.request), expiresAtMs };
+      authority, operationId: signatureRow(options.id), chainId: checked.chainId, review: checked, signing: signatureSigning(account, checked.request), expiresAtMs };
     return validateWalletSignatureReviewDraft({ ...base, ceremony: { id: base.id, accountId: a.accountId, purpose: "payment",
       contextDigest: signatureContextDigest(base), challenge: Buffer.from(base.signing.digest.slice(2), "hex").toString("base64url"), expiresAt: expiresAtMs } });
   } catch { return invalid(); }
@@ -357,14 +357,14 @@ export function validateWalletSignatureReviewDraft(input: unknown): WalletSignat
     const d = snapshot(input) as WalletSignatureReviewDraft;
     walletAppFields(d, ["version", "id", "state", "issuer", "grant", "authority", "operationId", "chainId", "review", "signing", "createdAtMs", "expiresAtMs", "ceremony"]);
     if (Buffer.byteLength(JSON.stringify(d)) > 65_536 || d.version !== "center-wallet-payment-review-v1" || typeof d.id !== "string" || !uuid.test(d.id) ||
-      d.operationId !== signatureRow(d.id) || d.chainId !== SIGNA_HOME_CHAIN_ID || !time(d.createdAtMs) || !time(d.expiresAtMs) ||
+      d.operationId !== signatureRow(d.id) || !time(d.createdAtMs) || !time(d.expiresAtMs) ||
       d.expiresAtMs <= d.createdAtMs || d.expiresAtMs > d.createdAtMs + walletPaymentReviewMaximumLifetimeMs) invalid();
     validateReviewAuthority(d);
     const account = signatureAccount(d.authority.accountId);
     // Re-derived from the request, never read back as given.
     const checked = recognizeReviewedSignature(d.review, account);
     fields(d.signing, ["digest", "requestDigest"]);
-    if (`eip155:${SIGNA_HOME_CHAIN_ID}:${address(account)}` !== d.authority.accountId || !checked || !same(checked, d.review) ||
+    if (`eip155:${SIGNA_HOME_CHAIN_ID}:${address(account)}` !== d.authority.accountId || !checked || !same(checked, d.review) || d.chainId !== checked.chainId ||
       !same(signatureSigning(account, checked.request), d.signing)) invalid();
     validateReviewCeremony(d, signatureContextDigest);
     return freeze(d);
