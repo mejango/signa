@@ -18,6 +18,8 @@ export const requiredVitestSuites = [
   "test/rest-wallet-owner-state-postgres.integration.test.ts",
   "test/rest-wallet-recovery-multichain.test.ts",
   "test/rest-sponsorship-postgres.integration.test.ts",
+  "test/rest-sponsor-caps-postgres.integration.test.ts",
+  "test/rest-sponsor-caps.test.ts",
   "test/rest-sessions-postgres.integration.test.ts",
   "test/rest-smart-account-onboarding-store.integration.test.ts",
   "test/rest-auth-store.test.ts",

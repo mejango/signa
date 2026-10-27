@@ -29,7 +29,7 @@ export const walletPaymentFixtureManifest: SmartAccountManifest = { ...enrollmen
 const payAbi = parseAbi(["function pay(uint256 projectId,address token,uint256 amount,address beneficiary,uint256 minReturnedTokens,string memo,bytes metadata) payable returns (uint256)"]);
 
 export async function prepareWalletPaymentFixtureOperation(pool: Pool, actor: RestActor, binding: SmartAccountBinding,
-  lifetimeMs = 120_000, nonce = 1n) {
+  lifetimeMs = 120_000, nonce = 1n, balanceWei = 10n ** 18n) {
   const now = Number((await pool.query("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::text AS now")).rows[0].now);
   const id = randomUUID(), token = walletPaymentFixtureToken, terminal = walletPaymentFixtureTerminal;
   const calls: StoredPlan["draft"]["calls"] = [
@@ -58,7 +58,10 @@ export async function prepareWalletPaymentFixtureOperation(pool: Pool, actor: Re
     operationHash: getUserOperationHash(operation, entryPoint, 8453), preparationKey: `prepare:${id}`,
     inputHash: digest(`input:${id}`), commitment: digest(`pending-operation:${id}`), accountBindingId: binding.id,
     accountStateHash: binding.state.stateHash, gasPolicyId: "fixture-gas", providerId: "fixture-provider",
-    createdAt: now, expiresAt: now + lifetimeMs - 1, revision: 0, state: "prepared" };
+    createdAt: now, expiresAt: now + lifetimeMs - 1, revision: 0, state: "prepared",
+    // The cap left this operation for the account to pay, and its balance covers the gas.
+    gas: { payer: "account", chainId: 8453, maximumWei: userOperationMaximumCost(operation).toString(), reason: "account-cap",
+      balanceWei: balanceWei.toString(), funded: balanceWei >= userOperationMaximumCost(operation) } };
   record.commitment = digest({ planId: record.planId, planCommitment: record.planCommitment, operation,
     operationHash: record.operationHash, accountBindingId: record.accountBindingId, accountStateHash: record.accountStateHash,
     gasPolicyId: record.gasPolicyId, providerId: record.providerId, createdAt: record.createdAt, expiresAt: record.expiresAt });

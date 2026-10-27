@@ -61,6 +61,7 @@ import { SessionService } from "./sessions/service.js";
 import { UserOperationProvider } from "./userOperations/provider.js";
 import { UserOperationService } from "./userOperations/service.js";
 import { PostgresUserOperationStore } from "./userOperations/postgres.js";
+import { PostgresSponsorCapStore } from "./sponsorCaps.js";
 import { PostgresTransactionStore } from "./transactions/postgres.js";
 import { TransactionService } from "./transactions/service.js";
 
@@ -484,6 +485,7 @@ export async function createRestRuntime(options: {
     ...(execution.sponsorRoutes ? {sponsorRoutes: execution.sponsorRoutes} : {}),
     policies: execution.policies,
     store: new PostgresUserOperationStore(options.pool),
+    ...(execution.sponsorCaps ? { sponsorCaps: new PostgresSponsorCapStore(options.pool, execution.sponsorCaps) } : {}),
     ...(walletPayments ? { approvedReview: (operationId: string) => walletPayments.approved(operationId) } : {}),
     transactionStore,
     transactions,

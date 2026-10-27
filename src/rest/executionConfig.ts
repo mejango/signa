@@ -19,6 +19,7 @@ import type {
   UserOperationGasPolicy,
 } from "./userOperations/types.js";
 import type { UserOperationChainPolicy } from "./userOperations/service.js";
+import { readSponsorCapPolicies, type SponsorCapPolicy } from "./sponsorCaps.js";
 
 const CHAIN_IDS = [
   1, 10, 8453, 42161, 84532, 421614, 11155111, 11155420,
@@ -40,6 +41,8 @@ export interface RestExecutionConfiguration {
   sponsorRoutes?: UserOperationSponsorRoutes;
   stacks: ConfiguredStack[];
   providers: UserOperationProviderConfig[];
+  /** Read from the environment beside the Pimlico policies; absent when configured from bare JSON. */
+  sponsorCaps?: SponsorCapPolicy[];
   policies: UserOperationChainPolicy[];
   paymasters: ReviewedSessionPaymaster[];
 }
@@ -102,7 +105,9 @@ function amount(value: unknown, bits: number, zeroAllowed = false): bigint {
   return n;
 }
 function gasPolicy(chainId: number, input: unknown): UserOperationGasPolicy {
-  const value = object(input, GAS_FIELDS);
+  const value = object(input, [...GAS_FIELDS, "requirePaymaster"]);
+  if (value.requirePaymaster !== undefined && typeof value.requirePaymaster !== "boolean")
+    return invalid("requirePaymaster must be a boolean.");
   const result = {
     id: `operator-hosted-gas-${chainId}`,
     maximumCallGas: amount(value.maximumCallGas, 128),
@@ -120,7 +125,9 @@ function gasPolicy(chainId: number, input: unknown): UserOperationGasPolicy {
     maximumFeePerGas: amount(value.maximumFeePerGas, 128),
     maximumPriorityFeePerGas: amount(value.maximumPriorityFeePerGas, 128, true),
     maximumCost: amount(value.maximumCost, 256),
-    requirePaymaster: true,
+    // An owner operation the sponsor cap or Pimlico refuses may be paid by its account, shown in its
+    // one review. `true` refuses it instead; session operations are always sponsored.
+    requirePaymaster: value.requirePaymaster === true,
   };
   if (result.maximumPriorityFeePerGas > result.maximumFeePerGas)
     return invalid(
@@ -277,6 +284,10 @@ export async function readRestExecutionConfiguration(
   }
   // The provider constructor independently validates the finalized server-owned transport config without making requests.
   new UserOperationProvider(providers);
+  // Each chain's Pimlico paymaster policy stays the sponsor; its cap is read beside it, and a chain
+  // without one fails startup rather than going unsponsored or unmetered.
+  const sponsorCaps = typeof envOrJson === "string" ? undefined
+    : readSponsorCapPolicies(envOrJson, providers.filter((provider) => provider.paymasterPolicy).map((provider) => provider.chainId));
   for (const chainId of CHAIN_IDS)
     if (!stacks.has(chainId))
       stacks.set(chainId, await createConfiguredSmartAccountStack({ chainId }));
@@ -286,5 +297,6 @@ export async function readRestExecutionConfiguration(
     sponsorRoutes: new UserOperationSponsorRoutes(providers, typeof envOrJson === "string" ? undefined : envOrJson.REST_ERC4337_SPONSOR_ROUTES),
     policies,
     paymasters,
+    ...(sponsorCaps ? { sponsorCaps } : {}),
   };
 }

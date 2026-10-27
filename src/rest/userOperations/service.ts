@@ -48,7 +48,9 @@ import {
   uoHash,
   uoQuantity,
   userOperationCommitment,
+  userOperationMaximumCost,
 } from "./codec.js";
+import type { ReviewGas, SponsorCapStore } from "../sponsorCaps.js";
 import { observeUserOperation } from "./execution.js";
 import { terminalAbi, walletV6UsdcPaymentDomain, verifyWalletV6UsdcPaymentEffects, type WalletV6UsdcPaymentConfig } from "./semantics.js";
 import { passkeyPayMetadataSteps } from "./userPayMetadata.js";
@@ -136,6 +138,9 @@ export interface UserOperationServiceDependencies {
   v6UsdcPayment?: WalletV6UsdcPaymentConfig;
   /** The last owner observation per chain, reused while its block is still the head. */
   ownerStates?: WalletOwnerStateStore;
+  /** Per-account daily limits on the operator's Pimlico sponsorship. With them, an owner operation
+   * the cap or the sponsor refuses is prepared for the account to pay, shown in the same review. */
+  sponsorCaps?: SponsorCapStore;
   now?: () => number;
 }
 export interface UserOperationPreparationInput {
@@ -154,6 +159,14 @@ const dummySignature = `0x${"11".repeat(32)}${"22".repeat(32)}1b` as Hex;
  * the head they were made at; refreshed by a review page read when older than fifteen seconds. */
 export const speculationMaxAgeMs = 60_000, speculationRefreshMs = 15_000, speculationCap = 1_000;
 const max = (a: bigint, b: bigint) => (a > b ? a : b);
+/** The most a sponsored operation at this fee can cost under its gas policy, reserved before the
+ * sponsor is asked; the final operation's own maximum replaces it. */
+function sponsoredCeiling(operation: UserOperationV07, gas: UserOperationGasPolicy): bigint {
+  const limits = gas.maximumCallGas + gas.maximumVerificationGas + gas.maximumPreVerificationGas
+    + gas.maximumPaymasterVerificationGas + gas.maximumPaymasterPostOpGas;
+  const ceiling = limits * BigInt(operation.maxFeePerGas);
+  return ceiling < gas.maximumCost ? ceiling : gas.maximumCost;
+}
 function fail(code: string, message: string, status = 409): never {
   throw new RestError(status, code, message);
 }
@@ -558,82 +571,130 @@ export class UserOperationService {
     const providerConfig = provider.configuration(
       binding.wallet.chainId,
     );
-    const sponsored = Boolean(providerConfig.paymasterPolicy);
-    if ((session || policy.gas.requirePaymaster) && !sponsored)
+    const sponsorable = Boolean(providerConfig.paymasterPolicy);
+    if ((session || policy.gas.requirePaymaster) && !sponsorable)
       fail(
         "USER_OPERATION_PAYMASTER_REQUIRED",
         "This operation requires the reviewed gas-only sponsor.",
         503,
       );
+    // Signa meters the operator's Pimlico sponsorship per account and chain; an app's own sponsor
+    // route is the app's to meter. An owner operation the cap or the sponsor refuses is prepared for
+    // the account to pay, before the passkey signs; one that must be sponsored is refused instead.
+    const caps = sponsorable && input.sponsorAuthorization === undefined ? this.options.sponsorCaps : undefined;
+    const fallback = caps !== undefined && !session && !policy.gas.requirePaymaster;
+    const id = randomUUID();
     const gasEstimation = gasSession
       ? await createSessionGasEstimation(gasSession, policy.gas, operation)
       : undefined;
     if (gasEstimation) operation = gasEstimation.fit(operation, true);
-    const stub = sponsored
-      ? await explained(provider.stub(
-          binding.wallet.chainId,
-          operation,
-          signal,
-        ))
-      : undefined;
-    stage("stubMs");
-    if (stub) operation = stub.operation;
-    if (gasEstimation && !stub?.isFinal)
-      operation = gasEstimation.fit(operation);
-    gasEstimation?.assert(operation);
-    const estimateProvider = passkeyProfile ? passkeyEstimateProvider(provider, policy.gas.maximumVerificationGas) : provider;
-    const estimate = await explained(estimateProvider.estimate(
-      binding.wallet.chainId,
-      { ...operation, signature: dummy() },
-      signal,
-      gasEstimation,
-    ));
-    if (stub?.isFinal) {
-      // A final stub binds its exact supplied gas fields. Keep them if they cover the independent estimate.
-      for (const [field, amount] of Object.entries(estimate))
-        if (
-          BigInt(amount) >
-          BigInt(operation[field as keyof UserOperationV07] ?? "0x0")
-        )
-          fail(
-            "USER_OPERATION_SPONSOR_GAS_CHANGED",
-            "The final stub cannot cover the current gas estimate. Prepare a fresh sponsored operation.",
-          );
-      expiresAt = Math.min(expiresAt, stub.proof.validUntil * 1000);
-    } else operation = applyUserOperationEstimate(operation, estimate);
-    stage("estimateMs");
-    gasEstimation?.assert(operation);
-    // The head is checked canonical one last time beside the final sponsorship, the last network
-    // step, rather than after it; a head that moved fails the preparation either way.
-    const [funded] = await Promise.all([
-      sponsored && !stub?.isFinal
-        ? explained(finalizeUserOperationSponsorship({
-            chainId: binding.wallet.chainId,
-            operation,
-            gasPolicy: policy.gas,
-            profile: providerConfig.paymasterPolicy?.profile,
-            expiresAt,
-            dummySignature: dummy,
-            provider: estimateProvider,
-            sessionGas: gasEstimation,
-            signal,
-            // The passkey margins (calldata bytes and verification headroom) cover a same-size sponsorship.
-            marginsCoverSameSizeSponsorship: passkeyProfile !== undefined,
-          }))
-        : Promise.resolve(null),
-      chain.canonical(evidence),
-      // The plan's own evidence is proved here when it is not this head (a stale ahead read, or a
-      // plan stored before a refused sponsorship): the quote it pinned must stand on a canonical block.
-      ...plan.draft.evidence
-        .filter((e) => e.chainId === binding.wallet.chainId
-          && (BigInt(e.blockNumber) !== BigInt(evidence.blockNumber) || !same(e.blockHash, evidence.blockHash)))
-        .map((e) => chain.canonical(e)),
-    ]);
-    if (funded) {
-      operation = funded.operation;
-      expiresAt = funded.expiresAt;
+    let refused: Extract<ReviewGas, { payer: "account" }>["reason"] | undefined;
+    if (caps) {
+      const reserved = await caps.reserve({ chainId: binding.wallet.chainId, accountId: actor.accountId, operationId: id,
+        reservationWei: sponsoredCeiling(operation, policy.gas), expiresAt });
+      if (!reserved.ok) refused = reserved.reason;
     }
-    stage("sponsorMs");
+    if (refused && !fallback)
+      fail("USER_OPERATION_SPONSOR_UNAVAILABLE", refused === "paused"
+        ? "Gas sponsorship is paused. Try again later." : "This account's sponsored gas for today is used. Try again tomorrow.", 429);
+    const estimateProvider = passkeyProfile ? passkeyEstimateProvider(provider, policy.gas.maximumVerificationGas) : provider;
+    const unpriced = operation;
+    const priced = async (sponsored: boolean) => {
+      let operation = unpriced, until = expiresAt;
+      const stub = sponsored
+        ? await explained(provider.stub(
+            binding.wallet.chainId,
+            operation,
+            signal,
+          ))
+        : undefined;
+      stage("stubMs");
+      if (stub) operation = stub.operation;
+      if (gasEstimation && !stub?.isFinal)
+        operation = gasEstimation.fit(operation);
+      gasEstimation?.assert(operation);
+      const estimate = await explained(estimateProvider.estimate(
+        binding.wallet.chainId,
+        { ...operation, signature: dummy(until) },
+        signal,
+        gasEstimation,
+      ));
+      if (stub?.isFinal) {
+        // A final stub binds its exact supplied gas fields. Keep them if they cover the independent estimate.
+        for (const [field, amount] of Object.entries(estimate))
+          if (
+            BigInt(amount) >
+            BigInt(operation[field as keyof UserOperationV07] ?? "0x0")
+          )
+            fail(
+              "USER_OPERATION_SPONSOR_GAS_CHANGED",
+              "The final stub cannot cover the current gas estimate. Prepare a fresh sponsored operation.",
+            );
+        until = Math.min(until, stub.proof.validUntil * 1000);
+      } else operation = applyUserOperationEstimate(operation, estimate);
+      stage("estimateMs");
+      gasEstimation?.assert(operation);
+      // The head is checked canonical one last time beside the final sponsorship, the last network
+      // step, rather than after it; a head that moved fails the preparation either way.
+      const [funded] = await Promise.all([
+        sponsored && !stub?.isFinal
+          ? explained(finalizeUserOperationSponsorship({
+              chainId: binding.wallet.chainId,
+              operation,
+              gasPolicy: policy.gas,
+              profile: providerConfig.paymasterPolicy?.profile,
+              expiresAt: until,
+              dummySignature: dummy,
+              provider: estimateProvider,
+              sessionGas: gasEstimation,
+              signal,
+              // The passkey margins (calldata bytes and verification headroom) cover a same-size sponsorship.
+              marginsCoverSameSizeSponsorship: passkeyProfile !== undefined,
+            }))
+          : Promise.resolve(null),
+        chain.canonical(evidence),
+        // The plan's own evidence is proved here when it is not this head (a stale ahead read, or a
+        // plan stored before a refused sponsorship): the quote it pinned must stand on a canonical block.
+        ...plan.draft.evidence
+          .filter((e) => e.chainId === binding.wallet.chainId
+            && (BigInt(e.blockNumber) !== BigInt(evidence.blockNumber) || !same(e.blockHash, evidence.blockHash)))
+          .map((e) => chain.canonical(e)),
+      ]);
+      if (funded) {
+        operation = funded.operation;
+        until = funded.expiresAt;
+      }
+      stage("sponsorMs");
+      // The reservation becomes this operation's own maximum gas cost.
+      if (sponsored && caps) {
+        const reserved = await caps.reserve({ chainId: binding.wallet.chainId, accountId: actor.accountId, operationId: id,
+          reservationWei: userOperationMaximumCost(operation), expiresAt: until });
+        if (!reserved.ok) fail("USER_OPERATION_SPONSOR_UNAVAILABLE", "This account's sponsored gas for today is used. Try again tomorrow.", 429);
+      }
+      return { operation, expiresAt: until };
+    };
+    const sponsored = sponsorable && refused === undefined;
+    let result: Awaited<ReturnType<typeof priced>>;
+    try {
+      result = await priced(sponsored);
+    } catch (error) {
+      if (sponsored && caps) await caps.release({ operationId: id });
+      // A sponsor that refuses or fails leaves the account to pay, in the same review.
+      if (!sponsored || !fallback || signal?.aborted) throw error;
+      refused = "sponsor-refused";
+      result = await priced(false);
+    }
+    ({ operation, expiresAt } = result);
+    let gas: ReviewGas | undefined;
+    if (operation.paymaster) gas = { payer: "pimlico", chainId: binding.wallet.chainId, paymaster: operation.paymaster.toLowerCase() as Address };
+    else if (refused) {
+      // Read before the review is served: the passkey never signs an operation its account cannot prefund.
+      const balance = uoQuantity(await chain.request(binding.wallet.chainId, "eth_getBalance", [binding.wallet.address, chain.tag(evidence)]),
+        "account native balance");
+      const maximum = userOperationMaximumCost(operation);
+      gas = { payer: "account", chainId: binding.wallet.chainId, maximumWei: maximum.toString(), reason: refused,
+        balanceWei: balance.toString(), funded: balance >= maximum };
+    }
     assertUserOperationGasPolicy(operation, policy.gas);
     gasEstimation?.assert(operation);
     operation = normalizeUserOperation(operation);
@@ -643,7 +704,7 @@ export class UserOperationService {
       binding.wallet.chainId,
     );
     const record: UserOperationRecord = {
-      id: randomUUID(),
+      id,
       actor,
       planId: plan.id,
       planCommitment: plan.commitment,
@@ -677,6 +738,7 @@ export class UserOperationService {
       expiresAt,
       revision: 0,
       state: "prepared",
+      ...(gas ? { gas } : {}),
     };
     const view = this.view(await this.options.store.create(record, this.now()));
     stage("storeMs");
@@ -810,6 +872,8 @@ export class UserOperationService {
     if (!record.submission && !(await this.options.approvedReview?.(id)))
       fail("USER_OPERATION_NOT_RETIRABLE", "Only an operation the owner approved can be retired.", 409);
     const current = await this.options.store.retire(actor, id);
+    // Retired unsent: it never ran and never will through Signa, so its sponsorship is released.
+    if (current.state === "retired") await this.meter(current);
     return this.view(current.submission ? await this.refresh(current, signal) : current);
   }
 
@@ -1031,6 +1095,8 @@ export class UserOperationService {
     // A preparation made before an approval was retired is held to the same rule here, and the claim
     // refuses if another one was retired meanwhile.
     const retiredChecked = await this.retiredClear(record.chainId, record.sender, record.entryPoint, BigInt(operation.nonce), head, signal);
+    // Signed and about to be claimed: its sponsorship reservation no longer lapses.
+    if (record.operation.paymaster) await this.options.sponsorCaps?.hold({ operationId: id });
     const claimed = await this.options.store.claim({
       actor,
       id,
@@ -1343,7 +1409,27 @@ export class UserOperationService {
     if (observation.verifiedAtBlock) this.verified.delete(`${record.id}:${observation.verifiedAtBlock.toLowerCase()}`);
     // An observation that found nothing new is not written: the revision moves only with the record.
     if (previous && sameObservation(previous, observation)) return record;
-    return this.options.store.observe(record.id, record.revision, { ...observation, observedAt: this.now() });
+    const saved = await this.options.store.observe(record.id, record.revision, { ...observation, observedAt: this.now() });
+    await this.meter(saved);
+    return saved;
+  }
+
+  /** A sponsored operation's reservation follows its outcome: the canonical charge once the
+   * EntryPoint reports one, released once it is proven never to run, kept while it is unknown. A
+   * metering write that fails keeps the reservation, which only counts more. */
+  private async meter(record: UserOperationRecord): Promise<void> {
+    const caps = this.options.sponsorCaps;
+    if (!caps || !record.operation.paymaster) return;
+    try {
+      // Only a charge at its confirmation depth replaces the reservation: a shallower block can be reorged away.
+      if ((record.state === "confirmed" || record.state === "reverted") && record.observation?.actualGasCost !== undefined)
+        await caps.settle({ operationId: record.id, spentWei: BigInt(record.observation.actualGasCost) });
+      else if (record.state === "expired" || (record.state === "retired" && !record.submission))
+        await caps.release({ operationId: record.id });
+    } catch (error) {
+      console.info(JSON.stringify({ service: "user-operations", action: "sponsor_meter", outcome: "failed", operation: record.id,
+        code: error instanceof RestError ? error.code : "unknown" }));
+    }
   }
 
   async observePlanStep(

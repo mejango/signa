@@ -1,7 +1,8 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
 import { formatUnits, type Address } from 'viem';
-import { getUserOperationHash, normalizeUserOperation, uoCanonical, userOperationMaximumCost } from '../userOperations/codec.js';
+import { getUserOperationHash, normalizeUserOperation, uoCanonical } from '../userOperations/codec.js';
+import { checkReviewGas } from '../sponsorCaps.js';
 import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
 import { recognizeWalletV6UsdcPayment } from '../userOperations/semantics.js';
@@ -19,7 +20,7 @@ const element = <T extends HTMLElement>(id: string) => document.getElementById(i
 const status = element('payment-status'), details = element('payment-review');
 const approve = element<HTMLButtonElement>('payment-approve'), cancel = element<HTMLButtonElement>('payment-cancel');
 const cancelPrompt = element<HTMLButtonElement>('payment-prompt-cancel'), retry = element<HTMLButtonElement>('payment-retry');
-const returnToApp = element<HTMLAnchorElement>('payment-return'), notice = element('payment-notice');
+const returnToApp = element<HTMLAnchorElement>('payment-return'), notice = element('payment-notice'), gasRow = element('payment-gas');
 let id = '', rpId = '';
 let review: WalletPaymentCentralPublic | null = null, immutable = '', busy = false, blocked = false;
 let uncertain = false, canRetry = false, nativePrompt: AbortController | null = null;
@@ -68,15 +69,17 @@ function decode(value: unknown, max = 4096): Uint8Array<ArrayBuffer> {
 function token(value: unknown): string { return decode(value).length === 32 ? value as string : fail(); }
 function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; }
 function expired() { return !!review && review.expiresAtMs <= Date.now(); }
+// An account that cannot prefund its own gas: the review stays readable and declinable, never signable.
+const unfunded = () => review?.gas.payer === 'account' && !review.gas.funded;
 function render() {
   const actionable = review?.status === 'pending' && !expired() && !uncertain && !blocked && status.dataset.state === 'ready';
-  approve.hidden = !actionable; approve.disabled = busy || frameTooSmall() || !approveVisible;
+  approve.hidden = !actionable || unfunded(); approve.disabled = busy || frameTooSmall() || !approveVisible;
   cancel.hidden = !actionable; cancel.disabled = busy;
   cancelPrompt.hidden = !nativePrompt;
   retry.hidden = !canRetry || busy || blocked;
   // The way back is the callback verified at load: shown once the review is settled here, and
   // whenever this page cannot go on, so the app can check the payment instead.
-  returnToApp.hidden = !review || busy || (!blocked && (uncertain || !['approved', 'cancelled'].includes(review.status)));
+  returnToApp.hidden = !review || busy || (!blocked && !unfunded() && (uncertain || !['approved', 'cancelled'].includes(review.status)));
   details.hidden = !review;
 }
 async function request(path: string, body?: unknown): Promise<Json> {
@@ -145,6 +148,9 @@ function checkReview(input: unknown): WalletPaymentCentralPublic {
   const signing = safe7579PasskeyOwnerSigningPayload({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: value.entryPoint, safe7579: value.safe7579,
     validAfter: decimal(value.signing.validAfter), validUntil: decimal(value.signing.validUntil) });
   if (signing.digest !== value.signing.digest || signing.signedData !== value.signing.signedData) fail();
+  // The gas row names the payer the signed paymaster fields fix, never one the response merely claims.
+  try { if (uoCanonical(checkReviewGas(value.gas, operation, SIGNA_HOME_CHAIN_ID)) !== uoCanonical(value.gas)) fail(); }
+  catch { fail(); }
   const passkey = record(value.passkey);
   if (passkey.rpId !== rpId || passkey.userVerification !== 'required' || decode(passkey.challenge).length !== 32 ||
     `0x${Array.from(decode(passkey.challenge), byte => byte.toString(16).padStart(2, '0')).join('')}` !== signing.digest) fail();
@@ -176,10 +182,14 @@ function accept(input: unknown) {
   const payment = review.payment;
   for (const [name, value] of Object.entries({ amount: `${formatUnits(BigInt(payment.amount), 6)} USDC`, project: payment.projectId,
     app: review.app.origin, account: payment.account, beneficiary: payment.beneficiary, minimum: payment.minimumReturnedTokens,
-    memo: payment.memo || 'No memo', fee: `${formatUnits(userOperationMaximumCost(review.operation), 18)} ETH`, token: payment.token,
+    memo: payment.memo || 'No memo', token: payment.token,
     terminal: payment.terminal, metadata: payment.metadata, operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
     element(`payment-${name}`).textContent = value;
   showSteps(review.metadataSteps);
+  const gas = review.gas, chain = signaChainName(gas.chainId);
+  gasRow.textContent = gas.payer === 'pimlico' ? 'Gas: sponsored' : gas.funded
+    ? `Gas: up to ${formatUnits(BigInt(gas.maximumWei), 18)} ETH from your account` : `Needs ETH for gas on ${chain}.`;
+  gasRow.dataset.state = unfunded() ? 'error' : '';
   // Beside approval, not in the details: the minimum protects less than usual.
   notice.textContent = review.notice ?? ''; notice.hidden = review.notice === null;
   returnToApp.href = callback(review);
