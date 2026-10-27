@@ -1,4 +1,5 @@
 import type { WalletPaymentReviewAppView } from '../../src/rest/wallet/paymentReviewsPostgres.js';
+import type { WalletReviewDraft } from '../../src/rest/wallet/paymentReviews.js';
 import { encodeFunctionData, erc20Abi } from 'viem';
 import { encodeSafe7579Execution } from '../../src/rest/smartAccounts/accountExecution.js';
 import { payAbi, terminal, token } from './wallet-payment-review-context.js';
@@ -11,7 +12,7 @@ export const projectionCallData = encodeSafe7579Execution([
 
 // Projection-only fixture. Genuine crypto, durable reviews and exact operation verification
 // are exercised in their domain/PG/EVM suites; this verifies what may cross each HTTP surface.
-export function paymentProjectionFixture(): WalletPaymentReviewAppView {
+export function paymentProjectionFixture(): WalletPaymentReviewAppView<WalletReviewDraft> {
   return {
     draft: { version:'center-wallet-payment-review-v1',id:'review-id',state:'app-state',issuer:'https://wallet.example.test',
       grant:{id:'grant-id',incarnation:'7',origin:'https://beep.example.test',callbackUri:'https://beep.example.test/center/callback',signerAddress:'private-request-key-metadata'},
@@ -21,5 +22,5 @@ export function paymentProjectionFixture(): WalletPaymentReviewAppView {
       review:{kind:'v6-usdc-pay',payment:{amount:'1000000',beneficiary:'recipient',projectId:'1',minimumReturnedTokens:'5',metadata:'0x'}},gas:{payer:'pimlico',chainId:8453,paymaster:'paymaster'},signing:{digest:`0x${'ab'.repeat(32)}`,signedData:'safe-op-preimage',validAfter:'10',validUntil:'20'},
       createdAtMs:10_000,expiresAtMs:20_000,ceremony:{id:'private-ceremony',challenge:'private-random-challenge'} },
     status:'approved',approvedAtMs:12_000,cancelledAtMs:null,operationState:'prepared',approvers:['selected-credential','device-credential'],approval:{signature:'0x1234',signedCommitment:'0x4321'},
-  } as unknown as WalletPaymentReviewAppView;
+  } as unknown as WalletPaymentReviewAppView<WalletReviewDraft>;
 }

@@ -19,7 +19,7 @@ export function walletPaymentPage(base = '/wallet', assets?: AssetNames): string
 <details class="quiet"><summary>Details</summary><dl>
 <dt>Network</dt><dd>${signaChainName(SIGNA_HOME_CHAIN_ID)}</dd>
 <dt>Requested by</dt><dd id="payment-app"></dd><dt>From your account</dt><dd id="payment-account"></dd>
-<div class="payment-terms"><dt>Hook requests</dt><dd id="payment-hooks"></dd></div><dt>Operation</dt><dd id="payment-operation"></dd>
+<div class="payment-terms"><dt>Hook requests</dt><dd id="payment-hooks"></dd></div><div class="payment-operation"><dt>Operation</dt><dd id="payment-operation"></dd></div>
 <dt>Approval expires</dt><dd id="payment-expiry"></dd></dl></details></section>
 <div class="actions"><button id="payment-approve" type="button" hidden>Approve payment</button>
 <button id="payment-cancel" type="button" class="link" hidden>Decline</button>

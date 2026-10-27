@@ -62,6 +62,7 @@ import { UserOperationProvider } from "./userOperations/provider.js";
 import { UserOperationService } from "./userOperations/service.js";
 import { UserOperationChain } from "./userOperations/chain.js";
 import { etherscanAbiSource } from "./userOperations/etherscanAbi.js";
+import { signatureChain, verifyAccountSignature } from "./userOperations/reviewedSignatures.js";
 import { PostgresUserOperationStore } from "./userOperations/postgres.js";
 import { PostgresSponsorCapStore } from "./sponsorCaps.js";
 import { PostgresTransactionStore } from "./transactions/postgres.js";
@@ -476,7 +477,8 @@ export async function createRestRuntime(options: {
     ? new PostgresWalletPaymentReviewStore(options.pool, { issuer: wallet.origin, audience: auth.audience,
       ...(options.wallet?.frameableAppOrigins ? { frameableAppOrigins: options.wallet.frameableAppOrigins } : {}),
       token: walletConfiguration.payments.token, directV6Terminal: walletConfiguration.payments.directV6Terminal,
-      manifestFor: binding => manifestFor(binding.manifestId, binding.state.manifestRevision) })
+      manifestFor: binding => manifestFor(binding.manifestId, binding.state.manifestRevision),
+      verifySignature: input => verifyAccountSignature(rpc, input) })
     : undefined;
   if (wallet && walletPayments) wallet.payments = walletPayments;
   const operationProvider = new UserOperationProvider(execution.providers);
@@ -576,7 +578,7 @@ export async function createRestRuntime(options: {
       abis: etherscanAbiSource({ apiKey: options.etherscanApiKey, client: chainId => ({
         getStorageAt: async ({ address, slot }) => await rpc.request(chainId, "eth_getStorageAt", [address, slot, "latest"]) as Hex }) }),
       head: async (chainId, signal) => (await new UserOperationChain(rpc, signal ? { signal } : {}).head(chainId)).evidence,
-    } } : {}),
+    }, reviewedSignatures: signatureChain(rpc, new PostgresWalletOwnerStateStore(options.pool)) } : {}),
     omnichain,
     openapi,
   });

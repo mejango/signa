@@ -417,8 +417,13 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin,
     description: 'Wallet-app grant, Base only. Each call is described by the Juicebox SDK, else its Etherscan-verified ABI (the implementation behind a proxy), else raw with a warning, all in the one approval. Calls to the account itself, delegatecalls and an expectation that differs from the decode are refused (422, naming the call). Then prepare its UserOperation over every step and its review.',
     extra: { 'x-principal-kind': 'wallet-app' },
   });
+  add('/wallet/signature-reviews', 'POST', 'prepareWalletSignatureReview', 'Prepare a signature from the account, described in its one approval', 'WalletPayments', 'plan', {
+    body: ref('PrepareWalletSignatureReview'), result: ref('WalletSignatureReview'), status: 201, idempotent: true,
+    description: "Wallet-app grant, Base only. Permit2 permits, ERC-2771 forward requests from the account, Safe transactions for other Safes and text messages are decoded; other typed data is shown field by field with a warning. Typed data addressed to the account itself or to Signa's own documents, and a domain without this chainId, are refused (422). Once approved, approval.signature is the account's ERC-1271 signature over approval.signedCommitment, the request digest, checked with isValidSignature on Base before it is kept. One review per request: a declined request is signed again only as a new request.",
+    extra: { 'x-principal-kind': 'wallet-app' },
+  });
   add('/wallet/payment-reviews/{id}', 'GET', 'getWalletPaymentReview', 'Read the original app review and any live owner approval', 'WalletPayments', 'read', {
-    parameters: [pathParameter('id', ref('ResourceId'))], result: ref('WalletPaymentAppReview'),
+    parameters: [pathParameter('id', ref('ResourceId'))], result: { oneOf: [ref('WalletPaymentAppReview'), ref('WalletSignatureAppReview')] },
     description: 'Only the original current app grant and incarnation can retrieve its review. Approval requires a separate explicit passkey ceremony on the central wallet origin. A winning signature is returned only while the review and authority remain live. Submit it through the original UserOperation endpoint with unchanged fields. After review expiry, reconcile the original UserOperation; expiry does not establish a safe replacement.',
     extra: { 'x-principal-kind': 'wallet-app' },
   });

@@ -47,6 +47,8 @@ import type { PostgresWalletPaymentReviewStore } from './wallet/paymentReviewsPo
 import { publicWalletPaymentReview, publicWalletPaymentAppReview } from './wallet/paymentPublic.js';
 import { REVIEWED_CALLS_KIND, REVIEWED_CALLS_MAXIMUM, REVIEWED_CALLS_OPERATION, reviewCalls, type EtherscanAbiSource,
   type ReviewedCallsRefusal } from './userOperations/reviewedCalls.js';
+import { reviewSignature, type ReviewedSignatureRefusal, type SignatureChain } from './userOperations/reviewedSignatures.js';
+import { signatureRequestOf } from './userOperations/reviewedSignatureRules.js';
 import { SIGNA_HOME_CHAIN_ID } from './wallet/chains.js';
 import type {
   createSmartAccountService,
@@ -85,9 +87,11 @@ export interface RestDependencies {
   sessionReviewer?: ReturnType<typeof createSessionPolicyReviewer>;
   sessions?: SessionService;
   userOperations?: UserOperationService;
-  walletPayments?: Pick<PostgresWalletPaymentReviewStore, 'prepare' | 'getForApp'>;
+  walletPayments?: Pick<PostgresWalletPaymentReviewStore, 'prepare' | 'getForApp'> & Partial<Pick<PostgresWalletPaymentReviewStore, 'prepareSignature'>>;
   /** Etherscan-verified ABIs for calls the SDK cannot decode, and the head a call set's plan is read at. */
   reviewedCalls?: { abis: EtherscanAbiSource; head(chainId: number, signal?: AbortSignal): Promise<RestBlockEvidence> };
+  /** Whether the account is deployed with Base's owners on a signature's chain. */
+  reviewedSignatures?: SignatureChain;
   omnichain?: {
     getProjectGroup(
       project: { chainId: number; projectId: string; version: 6 },
@@ -1355,6 +1359,34 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
           dependsOn: index ? [index - 1] : [] })) };
     });
     return response(context, plan, 201);
+  });
+  const signatureRefused: Record<ReviewedSignatureRefusal, string> = {
+    'account-self-administration': "Typed data addressed to the account itself, or one of Signa's own documents, is refused: its owners and modules change only through Signa's own recovery and device steps.",
+    'chain-mismatch': "The typed data must name the request's chain in its domain.",
+    'account-not-deployed': 'The account is not deployed on this network.',
+    'owners-diverged': "This account's owners on this network differ from Base. Update the network before using it.",
+  };
+  // A signature from the account, described in the one approval like a call set: Permit2, a forward
+  // request, a SafeTx for another Safe and plain text are decoded; other typed data is shown field by field.
+  app.post('/wallet/signature-reviews', async context => {
+    query(context, []);
+    const { input, principal } = await authenticate(context, ['plan']);
+    const service = walletPayments(principal), reviewed = deps.reviewedCalls, chain = deps.reviewedSignatures;
+    if (!reviewed || !chain || !service.prepareSignature) throw new RestError(503, 'REVIEWED_SIGNATURES_UNAVAILABLE', 'Reviewed signatures are not configured.');
+    const body = object(jsonBody(input), ['request', 'state', 'id']);
+    let request;
+    try { request = signatureRequestOf(body.request); } catch {
+      throw new RestError(400, 'REVIEWED_SIGNATURE_INPUT', 'Send { kind: "typed-data", chainId, typedData } or { kind: "message", chainId, message }.');
+    }
+    if (typeof body.state !== 'string' || (body.id !== undefined && typeof body.id !== 'string'))
+      throw new RestError(400, 'WALLET_PAYMENT_REVIEW_INPUT', 'Choose the callback state.');
+    if (request.chainId !== SIGNA_HOME_CHAIN_ID)
+      throw new RestError(403, 'USER_OPERATION_APP_CHAIN_UNAVAILABLE', 'App wallet operations are available only on Base.');
+    const owner = actor(principal), account = getAddress(owner.accountId.split(':')[2]!);
+    const review = await reviewSignature({ account, request, chain, abis: reviewed.abis });
+    if (!review.ok) throw new RestError(422, 'REVIEWED_SIGNATURE_REFUSED', signatureRefused[review.refusal]);
+    const view = await service.prepareSignature(owner, { review: review.review, state: body.state, ...(body.id === undefined ? {} : { id: body.id }) }, idempotency(principal));
+    return response(context, publicWalletPaymentReview(view), 201);
   });
   app.get('/wallet/payment-reviews/:id', async context => {
     query(context, []);

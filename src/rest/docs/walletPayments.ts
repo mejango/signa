@@ -29,6 +29,19 @@ export function walletPaymentSchemas(): Record<string, Schema> {
   // A payment review carries `payment`; a reviewed call set carries `review` instead.
   const required = Object.keys(properties).filter(key => key !== 'payment' && key !== 'review');
   const either = { oneOf: [{ required: ['payment'] }, { required: ['review'] }] };
+  const request = { oneOf: [
+    object({ kind: { const: 'typed-data', type: 'string' }, chainId: { const: SIGNA_HOME_CHAIN_ID, type: 'integer' },
+      typedData: { ...object({ domain: { type: 'object' }, types: { type: 'object' }, primaryType: { type: 'string' }, message: { type: 'object' } }),
+        description: 'EIP-712 typed data as eth_signTypedData_v4 takes it. Its domain must name this chainId; integers above 2^53 go as decimal strings.' } }),
+    object({ kind: { const: 'message', type: 'string' }, chainId: { const: SIGNA_HOME_CHAIN_ID, type: 'integer' },
+      message: { type: 'string', minLength: 1, maxLength: 16384, description: 'UTF-8 text, signed as personal_sign (EIP-191) signs it.' } })] };
+  const approval = nullable(object({ signature: ref('HexBytes'), signedCommitment: ref('Hash') }));
+  const signature = { ...Object.fromEntries(['version', 'id', 'state', 'issuer', 'accountId', 'app', 'chainId', 'createdAtMs', 'expiresAtMs', 'status',
+    'approvedAtMs', 'cancelledAtMs'].map(key => [key, properties[key as keyof typeof properties]])),
+    review: object({ kind: { const: 'reviewed-signature-v1', type: 'string' }, chainId: { const: SIGNA_HOME_CHAIN_ID, type: 'integer' }, request,
+      sources: array(source, { maxItems: 1 }) }),
+    signing: object({ digest: { ...ref('Hash'), description: "The account's SafeMessage digest of requestDigest: what the passkey signs." },
+      requestDigest: { ...ref('Hash'), description: 'The EIP-712 or EIP-191 hash of the request: what isValidSignature checks.' } }) };
   return {
     // Any call set from the account. Calls go out in order as one atomic execution; `expectation`, one entry per call, is
     // checked against the decode ({ functionName, args } for a decoded call, null for a raw one) and never shown.
@@ -38,8 +51,12 @@ export function walletPaymentSchemas(): Record<string, Schema> {
     ['bindingId', 'account', 'calls']),
     // The app may name the review's id (a UUID it drew) to open its page before the review exists; an id already taken is a conflict.
     PrepareWalletPaymentReview: object({ operationId: ref('ResourceId'), state, id: ref('ResourceId') }, ['operationId', 'state']),
+    // The account signs the request through its own ERC-1271 check; refusals (self-administration, another chain) are 422.
+    PrepareWalletSignatureReview: object({ request, state, id: ref('ResourceId') }, ['request', 'state']),
+    WalletSignatureReview: object(signature),
+    WalletSignatureAppReview: object({ ...signature, approval }),
     WalletPaymentReview: { ...object(properties, required), ...either },
-    WalletPaymentAppReview: { ...object({ ...properties, approval: nullable(object({ signature: ref('HexBytes'), signedCommitment: ref('Hash') })) },
+    WalletPaymentAppReview: { ...object({ ...properties, approval },
       [...required, 'approval']), ...either },
   };
 }

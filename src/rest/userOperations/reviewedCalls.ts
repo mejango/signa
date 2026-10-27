@@ -30,7 +30,7 @@ const plain = (value: unknown, keys: string[], optional: string[] = []): Record<
   if (keys.some(key => !own.includes(key)) || own.some(key => !keys.includes(key) && !optional.includes(key))) throw new Error("fields");
   return value as Record<string, unknown>;
 };
-function sourceOf(value: unknown): CallSource {
+export function sourceOf(value: unknown): CallSource {
   const kind = plain(value, ["source"], ["lookup", "abi", "implementation"]).source;
   if (kind === "first-party") { plain(value, ["source"]); return { source: "first-party" }; }
   if (kind === "raw") {
