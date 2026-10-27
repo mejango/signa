@@ -11,6 +11,7 @@ import {
   getCurrentRuleset,
   PAY_MAX_SLIPPAGE_BPS,
   PAY_QUOTE_FAILED_MESSAGE,
+  PaySwapQuoteFailedError,
   prepareHookAwareCashOut,
   prepareUserPay,
   previewPay,
@@ -731,6 +732,15 @@ export class PaymentService {
               beneficiary: input.beneficiary,
               slippageBps: slippage,
               skipSplits: input.skipSplits ?? true,
+            }).catch((error: unknown) => {
+              // A swap never goes out on a minimum a failed read set.
+              if (error instanceof PaySwapQuoteFailedError)
+                throw new DomainError(
+                  'PAY_SWAP_QUOTE_FAILED',
+                  `${error.message} Quote again for the pool price.`,
+                  { retryable: true },
+                );
+              throw error;
             })
           : Promise.resolve(undefined)
         ).then(async (prepared) => ({
