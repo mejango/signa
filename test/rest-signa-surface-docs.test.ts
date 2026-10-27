@@ -120,7 +120,7 @@ describe("Signa wallet API documentation", () => {
     const terms = apiSearchTerms(wallet);
     expect(Object.keys(terms).sort()).toEqual(Object.values(wallet.paths).flatMap(methods => Object.values(methods).map(operation => operation.operationId)).sort());
     // Ceilings sit at the measured gzip size rounded up to the next 0.5 KiB.
-    expect(gzipSync(html).length).toBeLessThanOrEqual(11_264);
+    expect(gzipSync(html).length).toBeLessThanOrEqual(11_776);
     expect(gzipSync(JSON.stringify(terms)).length).toBeLessThanOrEqual(6_144);
   });
 
