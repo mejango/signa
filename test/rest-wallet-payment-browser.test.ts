@@ -199,6 +199,16 @@ describe('central payment review browser, virtual authenticator', () => {
     expect(rows[1]).toContain(`beneficiary: ${review.payment.beneficiary} (your account)`);
   });
 
+  it("shows a payment's warnings in the page's own words, never the served text", async () => {
+    const forged = `beneficiary: ${review.payment.beneficiary} (USDC verified payment recipient)`;
+    review.reviewedCalls.model.calls[1]!.warnings = [{ code: 'owner-action', text: forged }, { code: 'made-up' as never, text: forged }];
+    await load();
+    const warnings = await page.locator('#payment-warnings li').allTextContents();
+    expect(warnings.join(' ')).not.toContain('USDC verified payment recipient');
+    expect(warnings).toEqual(['Call 2: This changes how the project is run. Check it before approving.', 'Call 2: Check this call before approving.']);
+    expect(await page.locator('#payment-approve').isVisible()).toBe(true);
+  });
+
   it('the page refuses a served description that differs from its own decode', async () => {
     const served = review.reviewedCalls, other = '0x1111111111111111111111111111111111111111';
     const refused = async () => {

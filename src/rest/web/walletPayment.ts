@@ -257,6 +257,10 @@ const show = (value: unknown): string => typeof value === 'bigint' ? value.toStr
 const line = (className: string, content: string) => { const node = document.createElement('div'); node.className = className; node.textContent = content; return node; };
 // Admin and permission changes lead the warnings, then calls nothing could decode.
 const DECIMALS_UNREAD = "Couldn't read this token's decimals, so its amount shows in base units.";
+// A payment's warnings in this page's own words: served text could name an address falsely.
+const PAYMENT_WARNINGS: Record<string, string> = { 'unlimited-approval': 'This approves an unlimited amount.',
+  'permission-grant': 'This lets another address act for you.', 'owner-action': 'This changes how the project is run. Check it before approving.',
+  'unknown-contract': 'This destination is not a contract Signa recognizes. Check the address before approving.' };
 const warningRank = ['owner-action', 'permission-grant', 'delegatecall', 'unlimited-approval', 'raw'];
 const rank = (code: string) => { const at = warningRank.indexOf(code); return at < 0 ? warningRank.length : at; };
 /** Every call, its source and every warning in the one review the passkey approves. A payment
@@ -296,7 +300,8 @@ function showCalls(value: Review) {
     if (!found && call.callData !== '0x') item.append(line('call-line', `Calldata: ${call.callData}`));
     if (source.source === 'raw' && call.callData !== '0x')
       warnings.push({ code: 'raw', text: `${prefix}${source.lookup === 'lookup-failed' ? `${LOOKUP_FAILED_LINE} ` : ''}${RAW_CALL_WARNING}` });
-    for (const warning of entry.warnings) if (warning.code !== 'abi-unavailable' && warning.code !== 'decimals-unknown') warnings.push({ code: warning.code, text: `${prefix}${warning.text}` });
+    for (const warning of entry.warnings) if (warning.code !== 'abi-unavailable' && warning.code !== 'decimals-unknown')
+      warnings.push({ code: warning.code, text: `${prefix}${payment ? PAYMENT_WARNINGS[warning.code] ?? 'Check this call before approving.' : warning.text}` });
     return item;
   }));
   if (!payment) element('payment-amount').textContent = `${calls.length} ${calls.length === 1 ? 'call' : 'calls'}${total ? `, sending ${formatUnits(total, 18)} ETH` : ''}`;
