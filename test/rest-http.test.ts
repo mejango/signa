@@ -231,6 +231,25 @@ describe('signed wallet payment review controller', () => {
       expect((await send({operationId:'operation-id',state:'app-state',...extra})).status).toBe(400);
     expect(walletPayments.prepare).not.toHaveBeenCalled();
   });
+  it('lets the app withdraw its own open review, and never an approved one',async()=>{
+    const walletPayments={...reviews(),cancel:vi.fn(async()=>paymentProjectionFixture())},f=await fixture({walletPayments:walletPayments as never});
+    const principal={...appPrincipal(),idempotencyKey:'payment-cancel-attempt'};vi.spyOn(f.auth,'authenticate').mockResolvedValue(principal);
+    const cancel=()=>f.send({method:'POST',requestTarget:'/api/v1/wallet/payment-reviews/review-id/cancellation',json:{},idempotencyKey:'payment-cancel-attempt'});
+    const response=await cancel();
+    expect(response.status).toBe(200);expect(f.auth.authenticate).toHaveBeenCalledWith(expect.anything(),['plan']);
+    // Only the review this app grant asked for: the app's own read comes first.
+    expect(walletPayments.getForApp).toHaveBeenCalledWith({accountId:principal.account.id,principalId:principal.principalId},'review-id');
+    expect(walletPayments.getForApp.mock.invocationCallOrder[0]).toBeLessThan(walletPayments.cancel.mock.invocationCallOrder[0]!);
+    expect(walletPayments.cancel).toHaveBeenCalledWith('review-id');
+    expect(JSON.stringify(await response.json())).not.toContain('private-');
+    walletPayments.cancel.mockRejectedValueOnce(Object.assign(new RestError(409,'WALLET_PAYMENT_REVIEW_CONFLICT','The original payment review cannot be replaced or reused.')));
+    expect((await cancel()).status).toBe(409);
+    walletPayments.getForApp.mockRejectedValueOnce(new RestError(404,'WALLET_PAYMENT_REVIEW_NOT_FOUND','Wallet payment review is unavailable.'));
+    const calls=walletPayments.cancel.mock.calls.length;
+    expect((await cancel()).status).toBe(404);expect(walletPayments.cancel.mock.calls.length).toBe(calls);
+    const owner=await fixture({walletPayments:walletPayments as never});
+    expect((await owner.send({method:'POST',requestTarget:'/api/v1/wallet/payment-reviews/review-id/cancellation',json:{},idempotencyKey:'payment-cancel-attempt'})).status).toBe(403);
+  });
   it('keeps payment reviews unavailable unless the trusted host explicitly configured them',async()=>{
     const f=await fixture();vi.spyOn(f.auth,'authenticate').mockResolvedValue({...appPrincipal(),idempotencyKey:'payment-review-attempt'});
     const response=await f.send({method:'POST',requestTarget:'/api/v1/wallet/payment-reviews',json:{operationId:'operation-id',state:'app-state'},idempotencyKey:'payment-review-attempt'});

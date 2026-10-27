@@ -427,6 +427,11 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin,
     description: 'Only the original current app grant and incarnation can retrieve its review. Approval requires a separate explicit passkey ceremony on the central wallet origin. A winning signature is returned only while the review and authority remain live. Submit it through the original UserOperation endpoint with unchanged fields. After review expiry, reconcile the original UserOperation; expiry does not establish a safe replacement. An approved signature review is the exception: its signature stays readable for 24 hours after the review window while the grant, its incarnation and the account epochs are current; any other expired review is 410.',
     extra: { 'x-principal-kind': 'wallet-app' },
   });
+  add('/wallet/payment-reviews/{id}/cancellation', 'POST', 'cancelWalletPaymentReview', 'Cancel an open review', 'WalletPayments', 'plan', {
+    parameters: [pathParameter('id', ref('ResourceId'))], body: object({}), result: { oneOf: [ref('WalletPaymentAppReview'), ref('WalletSignatureAppReview')] }, idempotent: true,
+    description: 'The original app grant cancels a review closed undecided. An approved review is 409: read and submit it.',
+    extra: { 'x-principal-kind': 'wallet-app' },
+  });
   add("/user-operations", "POST", "prepareUserOperation", "Prepare exact EntryPoint v0.7 bytes and the appropriate signing payload", "UserOperations", "plan", {
     body: ref("PrepareUserOperation"), result: { oneOf: [ref("UserOperation"), ref("SponsoredPaymentPreparation")] }, status: 201, idempotent: true,
     description: "Requires configured provider/runtime policies and the source smart-account plan's creating principal. Select increasing step indices. Owner mode permits 1–16 calls on one chain and returns SafeOp typed data. Session mode requires the exact active bound bot, selects one call and returns an EIP-191 payload. Provider estimation and sponsorship are checked before signing; no execution occurs during preparation.",

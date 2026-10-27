@@ -3,13 +3,11 @@ import { getAddress, isAddress, type Abi, type AbiFunction, type Address, type H
 import type { SemanticResult, StoredPlan, StoredReceipt } from "../transactions/types.js";
 import { SIGNA_HOME_CHAIN_ID } from "../wallet/chains.js";
 import { decodeSafe7579Execution } from "../smartAccounts/accountExecution.js";
-import { exactFunction, REVIEWED_CALLS_KIND, reviewedCallRefusal, type CallSource, type ReviewedCallsRefusal,
+import { exactFunction, REVIEWED_CALLS_KIND, REVIEWED_CALLS_OPERATION, reviewedCallRefusal, type CallSource, type ReviewedCallsRefusal,
   type SignaCall } from "./reviewedCallRules.js";
 
-export { REVIEWED_CALLS_KIND, type CallSource, type ReviewedCallsRefusal, type SignaCall } from "./reviewedCallRules.js";
+export { REVIEWED_CALLS_KIND, REVIEWED_CALLS_OPERATION, type CallSource, type ReviewedCallsRefusal, type SignaCall } from "./reviewedCallRules.js";
 
-/** The plan operation an app's call set is stored under. */
-export const REVIEWED_CALLS_OPERATION = "reviewed-calls";
 export const REVIEWED_CALLS_MAXIMUM = 16;
 
 export interface EtherscanAbiSource {

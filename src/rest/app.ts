@@ -87,7 +87,7 @@ export interface RestDependencies {
   sessionReviewer?: ReturnType<typeof createSessionPolicyReviewer>;
   sessions?: SessionService;
   userOperations?: UserOperationService;
-  walletPayments?: Pick<PostgresWalletPaymentReviewStore, 'prepare' | 'getForApp'> & Partial<Pick<PostgresWalletPaymentReviewStore, 'prepareSignature'>>;
+  walletPayments?: Pick<PostgresWalletPaymentReviewStore, 'prepare' | 'getForApp'> & Partial<Pick<PostgresWalletPaymentReviewStore, 'prepareSignature' | 'cancel'>>;
   /** Etherscan-verified ABIs for calls the SDK cannot decode, and the head a call set's plan is read at. */
   reviewedCalls?: { abis: EtherscanAbiSource; head(chainId: number, signal?: AbortSignal): Promise<RestBlockEvidence> };
   /** Whether the account is deployed with Base's owners on a signature's chain. */
@@ -1393,6 +1393,17 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
     const { principal } = await authenticate(context, ['read']);
     const view = await walletPayments(principal).getForApp(actor(principal), context.req.param('id'));
     return response(context, publicWalletPaymentAppReview(view));
+  });
+  // The app withdraws the open review its person closed without deciding, so the next action needn't wait for its expiry.
+  app.post('/wallet/payment-reviews/:id/cancellation', async context => {
+    query(context, []);
+    const { input, principal } = await authenticate(context, ['plan']);
+    object(jsonBody(input), []);
+    const service = walletPayments(principal), id = context.req.param('id');
+    if (!service.cancel) throw new RestError(503, 'WALLET_PAYMENTS_UNAVAILABLE', 'Wallet payment reviews are not configured.');
+    await service.getForApp(actor(principal), id);
+    await service.cancel(id);
+    return response(context, publicWalletPaymentAppReview(await service.getForApp(actor(principal), id)));
   });
   const userOperations = () => {
     if (!deps.userOperations)

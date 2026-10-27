@@ -120,8 +120,19 @@ describe("Signa wallet API documentation", () => {
     const terms = apiSearchTerms(wallet);
     expect(Object.keys(terms).sort()).toEqual(Object.values(wallet.paths).flatMap(methods => Object.values(methods).map(operation => operation.operationId)).sort());
     // Ceilings sit at the measured gzip size rounded up to the next 0.5 KiB.
-    expect(gzipSync(html).length).toBeLessThanOrEqual(11_264);
+    expect(gzipSync(html).length).toBeLessThanOrEqual(11_776);
     expect(gzipSync(JSON.stringify(terms)).length).toBeLessThanOrEqual(6_144);
+  });
+
+  it("declares the review cancellation's empty body as the retirement does", () => {
+    const body = (route: string) => (full.paths[route]!.post as { requestBody?: unknown }).requestBody;
+    expect(body("/api/v1/wallet/payment-reviews/{id}/cancellation")).toBeDefined();
+    expect(body("/api/v1/wallet/payment-reviews/{id}/cancellation")).toEqual(body("/api/v1/user-operations/{id}/retirement"));
+  });
+
+  it("answers a review cancellation with the same review union as its read", () => {
+    const answer = (route: string, method: "get" | "post") => (full.paths[route]![method] as { responses: Record<string, unknown> }).responses["200"];
+    expect(answer("/api/v1/wallet/payment-reviews/{id}/cancellation", "post")).toEqual(answer("/api/v1/wallet/payment-reviews/{id}", "get"));
   });
 
   it("serves the wallet reference locally and redirects inherited guides to Center", async () => {

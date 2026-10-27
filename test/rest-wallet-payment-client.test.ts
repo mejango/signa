@@ -10,6 +10,8 @@ import { readRequestClaims, verifyRequestSignature } from '../src/rest/auth/sign
 import { createCenterWalletPaymentClient } from '../src/rest/client/walletPayments.js';
 import { uoCanonical } from '../src/rest/userOperations/codec.js';
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
+import { createWalletReviewsFixture } from './fixtures/wallet-reviews-client.js';
+import { signaWalletAdapter } from '../wallet-client/src/core/adapter.js';
 
 const reviewId = '550e8400-e29b-41d4-a716-446655440000';
 function fixture() {
@@ -620,5 +622,136 @@ describe('Center browser payment review continuity', () => {
       Uint8Array, URL, URLSearchParams, Headers, Response, Request, AbortController, setTimeout, clearTimeout, structuredClone });
     const f = fixture(), helper = api.createCenterWalletPaymentClient(f.options);
     expect((await helper.preparePayment(f.input())).reviewId).toBe(reviewId);
+  });
+});
+
+describe('Signa reviews of any call set and signature', () => {
+  it('prepareReview sends raw calls and never a model', async () => {
+    const f = createWalletReviewsFixture(), reviews = f.reviews();
+    const prepared = await reviews.prepareReview({ chainId: 8453, calls: f.sent });
+    expect(prepared).toMatchObject({ status: 'reviewing', reviewId, approvalUrl: f.issuer + '/wallet/payment?review=' + reviewId, operationId: f.prepared.id });
+    expect(prepared.expectedCalls).toEqual({ chainId: 8453, calls: f.sent.map(call => ({ ...call, value: call.value.toString() })) });
+    expect(f.calls.map(call => call.method + ' ' + call.path)).toEqual(['GET /api/v1/smart-accounts/bindings', 'POST /api/v1/wallet/reviewed-calls',
+      'POST /api/v1/user-operations', 'POST /api/v1/wallet/payment-reviews']);
+    // Exactly the bytes, values and targets: no model, label or description crosses to Signa.
+    expect(f.calls[1]!.body).toEqual({ bindingId: f.bindingId, chainId: 8453, account: f.safe, calls: f.sent.map(call => ({ ...call, value: call.value.toString() })) });
+    expect(f.calls[2]!.body).toEqual({ planId: f.plan.id, stepIndexes: [0, 1] });
+    expect(f.calls[3]!.body).toEqual({ operationId: f.prepared.id, state: expect.any(String) });
+    // The same call set resumes the saved review; another one waits for it.
+    expect((await f.reviews().prepareReview({ chainId: 8453, calls: f.sent })).reviewId).toBe(reviewId);
+    expect(f.calls).toHaveLength(4);
+    await expect(reviews.prepareReview({ chainId: 8453, calls: f.sent.slice(0, 1) })).rejects.toMatchObject({ code: 'WALLET_PAYMENT_PENDING' });
+    // Approved, submitted and followed like a payment, under its own record.
+    expect((await reviews.completeReview(f.callback())).status).toBe('approved');
+    expect((await reviews.submitReview()).status).toBe('pending');
+    f.observed(f.observedOperation('confirmed'));
+    const done = await reviews.refreshReview();
+    expect(done.observation!.receipt!.transactionHash).toBe(f.transactionHash);
+    expect(createCenterWalletPaymentClient(f.options).pendingPayment()).toBeNull();
+  });
+
+  it('refuses a served review whose calls differ from the raw calls sent', async () => {
+    const f = createWalletReviewsFixture(), changed = { ...f.sent[1]!, value: 1n };
+    await expect(f.reviews().prepareReview({ chainId: 8453, calls: [f.sent[0]!, changed] })).rejects.toMatchObject({ code: 'WALLET_PAYMENT_MISMATCH' });
+    expect(f.calls.some(call => call.path === '/api/v1/wallet/payment-reviews')).toBe(false);
+  });
+
+  it('a closed signature page is read back, then withdrawn, before it is called unsigned', async () => {
+    const adapterFor = (f: ReturnType<typeof createWalletReviewsFixture>, approve: () => Promise<string | null>) => {
+      const reviews = f.reviews();
+      return signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews }, { approve });
+    };
+    // Approved on the page, its callback lost with the close: the signature is returned.
+    const f = createWalletReviewsFixture(); f.signatures();
+    await expect(adapterFor(f, async () => { f.approve(); return null; }).signMessage(f.signatureRequest.message)).resolves.toBe(f.accountSignature);
+    expect(f.cancellations()).toBe(0);
+    // Still undecided when closed: withdrawn on Signa, so no late approval can sign it.
+    const g = createWalletReviewsFixture(); g.signatures(); g.undecided();
+    await expect(adapterFor(g, async () => null).signMessage(g.signatureRequest.message))
+      .rejects.toMatchObject({ code: 4001, message: 'The review was closed. Nothing was signed.' });
+    expect(g.cancellations()).toBe(1);
+    // Approved between the read and the withdrawal: the signature, never a rejection.
+    const r = createWalletReviewsFixture(); r.signatures(); r.undecided(); r.approveOnCancel();
+    await expect(adapterFor(r, async () => null).signMessage(r.signatureRequest.message)).resolves.toBe(r.accountSignature);
+    // Signa could not be read: the outcome is unknown, never a rejection.
+    const h = createWalletReviewsFixture(); h.signatures(); h.offline();
+    const error = await adapterFor(h, async () => null).signMessage(h.signatureRequest.message)
+      .then(() => undefined, (caught: { code?: unknown }) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error!.code).not.toBe(4001);
+    expect(h.cancellations()).toBe(0);
+  });
+
+  it('a signature refused before any review exists is a rejection; an unreachable Signa is not', async () => {
+    const f = createWalletReviewsFixture(), reviews = f.reviews(); f.signatures(); f.refuse(422, 'REVIEWED_SIGNATURE_REFUSED');
+    const adapter = signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews }, { approve: async () => null });
+    await expect(adapter.signMessage(f.signatureRequest.message)).rejects.toMatchObject({ code: 4001 });
+    const g = createWalletReviewsFixture(), down = g.reviews(); g.signatures(); g.refuse(503, 'UNAVAILABLE');
+    const error = await signaWalletAdapter({ restoreConnection: () => ({ address: g.safe }), reviews: () => down }, { approve: async () => null })
+      .signMessage(g.signatureRequest.message).then(() => undefined, (caught: { code?: unknown }) => caught);
+    expect(error!.code).not.toBe(4001);
+  });
+
+  it('a signature review past its window is reconciled before the same request is asked again', async () => {
+    const posts = (f: ReturnType<typeof createWalletReviewsFixture>) => f.calls.filter(call => call.path === '/api/v1/wallet/signature-reviews').length;
+    // Expired and never approved: the same request prepares a fresh review.
+    const f = createWalletReviewsFixture(), reviews = f.reviews(); f.signatures(); f.undecided();
+    await reviews.prepareSignature(f.signatureRequest);
+    f.advance(300_001); f.expired();
+    expect((await reviews.prepareSignature(f.signatureRequest)).status).toBe('reviewing');
+    expect(posts(f)).toBe(2);
+    // Approved with its callback lost: Signa still serves the signature, so it is returned, not asked again.
+    const g = createWalletReviewsFixture(), kept = g.reviews(); g.signatures(); g.undecided();
+    await kept.prepareSignature(g.signatureRequest);
+    g.advance(300_001); g.approve();
+    expect(await kept.prepareSignature(g.signatureRequest)).toMatchObject({ status: 'approved', signature: g.accountSignature });
+    expect(posts(g)).toBe(1);
+    // Signa unreachable: unknown, neither resumed nor replaced.
+    const h = createWalletReviewsFixture(), lost = h.reviews(); h.signatures(); h.undecided();
+    await lost.prepareSignature(h.signatureRequest);
+    h.advance(300_001); h.offline();
+    await expect(lost.prepareSignature(h.signatureRequest)).rejects.toMatchObject({ status: 503 });
+    expect(posts(h)).toBe(1);
+  });
+
+  it('a review closed without Cancel lets the next different call set prepare at once', async () => {
+    const f = createWalletReviewsFixture(), reviews = f.reviews(); f.undecided();
+    const adapter = signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews }, { approve: async () => null });
+    await expect(adapter.submitToReviewer({ account: f.safe, calls: f.sent.map(call => ({ chainId: 8453, ...call })) })).rejects.toMatchObject({ code: 4001 });
+    // Read first, then withdrawn on Signa: nothing of it can be approved or sent any more.
+    expect(f.cancellations()).toBe(1);
+    expect(reviews.pendingReview()).toBeNull();
+    const next = f.nextCalls();
+    const prepared = await reviews.prepareReview({ chainId: 8453, calls: next.sent });
+    expect(prepared).toMatchObject({ status: 'reviewing', expectedCalls: { calls: next.sent.map(call => ({ ...call, value: call.value.toString() })) } });
+    expect(f.calls.filter(call => call.path.endsWith('/submissions'))).toHaveLength(0);
+  });
+
+  it('a close that races an approval completes the approval, not a cancel', async () => {
+    const f = createWalletReviewsFixture(), reviews = f.reviews(); f.undecided(); f.observed(f.observedOperation('confirmed'));
+    // Approved on the page, its callback lost with the close.
+    const adapter = signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews },
+      { approve: async () => { f.approve(); return null; } });
+    await expect(adapter.submitToReviewer({ account: f.safe, calls: f.sent.map(call => ({ chainId: 8453, ...call })) })).resolves.toBe(f.transactionHash);
+    expect(f.cancellations()).toBe(0);
+    expect(f.calls.filter(call => call.path.endsWith('/submissions'))).toHaveLength(1);
+    // Approved between the read and the withdrawal: Signa refuses the cancel and the approval is read again.
+    const g = createWalletReviewsFixture(), raced = g.reviews(); g.undecided(); g.approveOnCancel();
+    await raced.prepareReview({ chainId: 8453, calls: g.sent });
+    expect((await raced.cancelReview()).status).toBe('approved');
+    expect(g.cancellations()).toBe(1);
+    expect(raced.pendingReview()!.status).toBe('approved');
+  });
+
+  it('prepareSignature sends the raw request and never a model', async () => {
+    const f = createWalletReviewsFixture(); f.signatures();
+    const reviews = f.reviews(), prepared = await reviews.prepareSignature(f.signatureRequest);
+    expect(prepared).toMatchObject({ status: 'reviewing', reviewId, approvalUrl: f.issuer + '/wallet/payment?review=' + reviewId,
+      request: f.signatureRequest, requestDigest: f.signatureSigning.requestDigest });
+    expect(f.calls.map(call => call.method + ' ' + call.path)).toEqual(['POST /api/v1/wallet/signature-reviews']);
+    expect(f.calls[0]!.body).toEqual({ request: f.signatureRequest, state: expect.any(String) });
+    const signed = await reviews.completeSignature(f.callback());
+    expect(signed).toMatchObject({ status: 'approved', signature: f.accountSignature });
+    expect(f.reviews().pendingSignature()).toMatchObject({ status: 'approved', signature: f.accountSignature });
   });
 });

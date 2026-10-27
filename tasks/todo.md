@@ -113,3 +113,31 @@ jango, 2026-10-20: fix the PR #20 follow-up now ("bad UX is bad security"). Code
 - Bundle: wallet-payment 25,793 -> 29,080 B gzip, past the ~2 KB replan line. Replanned rather than trimmed: the growth is the rules module (6.2 KB min) and viem's typed-data hashing/validation, which the page needs to re-derive the request without trusting the server. Budget raised to 29,500.
 - Click-to-review (ready to Sign/Approve, median of 7, 80 ms simulated API): pay 148 -> 147 ms (360), 139 -> 142 ms (1280); message 136/137 ms; Permit2 with a token read 292/291 ms (150 ms simulated RPC). One click to the passkey prompt in every case.
 - Ceiling: the same request has the same passkey challenge (the SafeMessage digest, which the ceremony table keeps unique). An unconsumed ceremony is cleaned up once its review expires (five minutes at most), so a declined request can be asked again then; an approved one keeps its challenge for 24 hours.
+
+# Let apps review any call set and signature through Signa (W4 Task 19, 2026-10-27)
+
+## Plan refinement
+
+- **Objective:** wallet-client 0.5.0 lets jbm, revnet, sticky and homerun hand a Signa account to SDK 4.0.0's `sendReviewed` like any wallet: `signaWalletAdapter(wallet, { approve })` takes the raw calls or signature request, Signa's own page is the one confirmation, a closed or cancelled review throws 4001 (nothing sent), and submit resolves the canonical UserOperationEvent transaction hash, never the userOpHash. A call set spanning chains is refused before Signa with "Signa sends one chain at a time.". viem becomes a peer so consumers carry one copy.
+- **System fit:** App -> core `sendReviewed` (self-reviewing branch, no prompt) -> adapter `submitToReviewer` -> `wallet.reviews().prepareReview` (binding, POST /wallet/reviewed-calls plan, prepared operation, POST /wallet/payment-reviews, journaled like a payment) -> app frame/popup shows Signa's page (`approve`) -> `completeReview` checks the served review against the exact calls -> `submitReview` -> waited reads until a canonical receipt's transaction hash -> core returns it and the app waits on its receipt. Signatures: `prepareSignature` -> POST /wallet/signature-reviews -> page -> callback -> the account's ERC-1271 signature, its digest checked locally. Server, page and core unchanged.
+- **Reuse and simplicity:** Reuse the payment journal, idempotency keys, callback check, submit/refresh/retire/clear and their states for call reviews (a second storage namespace, one `expectedCalls` branch in the input and view checks); reuse `signatureRequestOf`/`signatureSigning` (viem-only rules) to bind a signature's request and digests. The adapter is declared structurally (no core import), mirroring Homerun's merged `signaPaymentAdapter`. Refactor first: move `REVIEWED_CALLS_OPERATION` to the viem-only rules module so the client never bundles the SDK.
+- **Evidence and unknowns:** Core 4.0.0 types read from node_modules (`WalletAdapter`, `selfReviewingAdapter`, `sendReviewed`'s self-reviewing branch returns the submit hash without waiting). Core's `signReviewed` still refuses self-reviewing adapters (4200), so adapter signatures serve direct callers until core opens that path. Only Base is enabled, so the multi-chain connector is behavior-identical today. Consumers pin viem 2.55.19; the peer range `^2.37.5` admits it.
+- **Verification:** New failing-first tests: prepareReview sends raw calls and never a model; prepareSignature sends the raw request and never a model; submit resolves the UserOperationEvent transaction hash, never the userOpHash; refuses a request spanning more than one chain before Signa; the root entry installs with the consumer's viem only; signaWalletAdapter is accepted by sendReviewed (typecheck against core's `WalletAdapter`, runtime through `sendReviewed`). Gates: typecheck, full vitest, wallet-client build and tests, bundle budget. PG16 suites in CI.
+- **Resource budget:** One worktree off #46 (7d1b032). Client-only edits: walletPayments.ts, wallet.ts, wallet-package.ts, wallet-client core/wagmi/package.json, tests. Replan if call reviews need more than a branch in the payment checks, or the server needs changes.
+
+## Work items
+
+- [x] Refactor: `REVIEWED_CALLS_OPERATION` lives in reviewedCallRules.ts
+- [x] Refactor: the rules' tables are pure, so a page that never reviews leaves them out (the accounts page otherwise grew past its budget)
+- [x] Failing tests (client, adapter, surface, acceptance)
+- [x] prepareReview / prepareSignature + `wallet.reviews()`
+- [x] `signaWalletAdapter`, wagmi chains, package 0.5.0 with viem as a peer
+- [x] Gates
+- [ ] Codex passes, PR (coordinator)
+
+## Review
+
+- Gates: typecheck, `npm run build`, `npm run test:connect` (49, coverage 100/97.06/100/100), full vitest 4061 passed, 724 skipped (PG16 and anvil-gated). New tests failed before the code.
+- Bundles (gzip): accounts 15,306 -> 15,308, wallet-payment 29,859 -> 29,857, others unchanged; no ceiling changed. Package root entry (minified) 27,653 -> 30,955: the reviews client and the signature request rules.
+- One viem: the packed 0.5.0 installed beside viem 2.55.19 resolves `viem@2.55.19 deduped`.
+- Ceiling: a review closed without Cancel keeps its record until Signa settles or expires it, so a different call set in that tab waits (the same call set resumes it), as with payments.
