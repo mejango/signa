@@ -43,8 +43,9 @@ export interface WalletPaymentAppPublic extends WalletPaymentReviewPublic {
   approval: { signature: Hex; signedCommitment: Hex } | null;
 }
 /** A signature: the exact request, the digest its ERC-1271 signature is for and the passkey's SafeMessage digest over it. */
-export interface WalletSignaturePublic extends Pick<WalletReviewPublicBase, 'version' | 'id' | 'state' | 'issuer' | 'accountId' | 'app' | 'chainId' |
+export interface WalletSignaturePublic extends Pick<WalletReviewPublicBase, 'version' | 'id' | 'state' | 'issuer' | 'accountId' | 'app' |
   'createdAtMs' | 'expiresAtMs' | 'status' | 'approvedAtMs' | 'cancelledAtMs'> {
+  chainId: number;
   review: ReviewedSignatureReview;
   signing: { digest: Hex; requestDigest: Hex };
 }

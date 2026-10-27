@@ -27,7 +27,7 @@ import { type WalletOwnerApproval, type WalletOwnerCall, type WalletOwnerChainRo
 export type WalletNetworkFamily = "mainnet" | "testnet";
 export interface WalletNetwork { chainId: number; name: string; family: WalletNetworkFamily; paymentChainId: number; centerPays: boolean; offered: boolean }
 export const walletNetworkCatalog: readonly WalletNetwork[] = Object.freeze(signaChains.filter(({ chainId }) => chainId !== SIGNA_HOME_CHAIN_ID)
-  .map(({ enabled: _enabled, ...network }) => network));
+  .map(({ signs: _signs, operates: _operates, ...network }) => network));
 export { signaChains };
 export const WALLET_HOME_NETWORK = Object.freeze({ chainId: SIGNA_HOME_CHAIN_ID, name: signaChainName(SIGNA_HOME_CHAIN_ID) });
 /** What Center pays Relayr for one bundle, at most, per family; and how many funded bundles one account may hold per family. */

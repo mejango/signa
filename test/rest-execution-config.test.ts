@@ -137,4 +137,14 @@ describe("server-owned hosted execution configuration", () => {
       });
     }
   });
+  it("startup fails when an operating chain has no ERC-4337 provider", async () => {
+    const cap = { SIGNA_SPONSOR_ACCOUNT_DAILY_WEI_11155111: "0", SIGNA_SPONSOR_ACCOUNT_DAILY_WEI_8453: "0" };
+    await expect(readRestExecutionConfiguration({ REST_ERC4337_CONFIG: JSON.stringify({ chains: [configured] }), ...cap }))
+      .rejects.toThrow(/Base/);
+    const base = { ...configured, chainId: 8453, bundlerUrl: "https://api.pimlico.io/v2/8453/rpc", paymasterUrl: "https://api.pimlico.io/v2/8453/rpc" };
+    const result = await readRestExecutionConfiguration({ REST_ERC4337_CONFIG: JSON.stringify({ chains: [configured, base] }), ...cap });
+    expect(result.providers.map(provider => provider.chainId)).toEqual([11155111, 8453]);
+    // Without the variable nothing operates: no provider is required.
+    expect((await readRestExecutionConfiguration({})).providers).toEqual([]);
+  });
 });

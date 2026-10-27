@@ -1,6 +1,6 @@
 import { encodeFunctionData, getAddress, isAddress, parseAbi, type Address, type Hex } from "viem";
 import { RestError, type RestRpc } from "../core.js";
-import { SIGNA_HOME_CHAIN_ID } from "../wallet/chains.js";
+import { signaChain } from "../wallet/chains.js";
 import { observeWalletOwners, type WalletOwnerState, type WalletOwnerStateStore } from "../wallet/ownerState.js";
 import { callSource, REVIEWED_CALLS_KIND, reviewedCallsView, sourceOf, type CallSource, type EtherscanAbiSource } from "./reviewedCalls.js";
 import { REVIEWED_SIGNATURE_KIND, signatureFacts, signatureRefusal, signatureRequestOf, signatureWarnings,
@@ -31,16 +31,16 @@ export function reviewedSignatureView(review: ReviewedSignatureReview, account: 
       calls: [{ to: getAddress(call.to), value: call.value, data: call.data }] }, getAddress(call.from)) : null };
 }
 
-/** A stored review that still reads as its request says, on Base, or null. */
+/** A stored review that still reads as its request says, on a chain Signa signs on, or null. */
 export function recognizeReviewedSignature(value: unknown, account: Address): ReviewedSignatureReview | null {
   try {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const v = value as Record<string, unknown>, keys = Object.keys(v);
     if (keys.length !== 4 || ["kind", "chainId", "request", "sources"].some(key => !keys.includes(key))) return null;
-    if (v.kind !== REVIEWED_SIGNATURE_KIND || v.chainId !== SIGNA_HOME_CHAIN_ID || !Array.isArray(v.sources) || !isAddress(account)) return null;
+    if (v.kind !== REVIEWED_SIGNATURE_KIND || typeof v.chainId !== "number" || !signaChain(v.chainId)?.signs || !Array.isArray(v.sources) || !isAddress(account)) return null;
     const request = signatureRequestOf(v.request);
     if (request.chainId !== v.chainId || signatureRefusal(account, request)) return null;
-    const review: ReviewedSignatureReview = { kind: REVIEWED_SIGNATURE_KIND, chainId: SIGNA_HOME_CHAIN_ID, request, sources: v.sources.map(sourceOf) };
+    const review: ReviewedSignatureReview = { kind: REVIEWED_SIGNATURE_KIND, chainId: request.chainId, request, sources: v.sources.map(sourceOf) };
     reviewedSignatureView(review, account);
     return review;
   } catch { return null; }

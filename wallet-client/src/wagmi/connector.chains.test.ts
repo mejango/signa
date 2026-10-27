@@ -1,10 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
 import { optimism } from "wagmi/chains";
 
-// Optimism enabled beside Base, as Signa's chain list enables networks.
+// Optimism operating beside Base, as Signa's chain list opens networks.
 vi.mock("../../../src/rest/wallet/chains.js", async (original) => {
   const chains = await original<typeof import("../../../src/rest/wallet/chains.js")>();
-  return { ...chains, signaChains: chains.signaChains.map((chain) => (chain.chainId === 10 ? { ...chain, enabled: true } : chain)) };
+  return { ...chains, signaChains: chains.signaChains.map((chain) => (chain.chainId === 10 ? { ...chain, operates: true } : chain)) };
 });
 const { centerAccountConnector } = await import("./connector");
 
