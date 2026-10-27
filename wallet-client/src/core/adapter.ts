@@ -34,6 +34,17 @@ const failure = (message: string, code?: number) =>
 const rejected = (message: string) => failure(message, 4001);
 /** EIP-1193 4200: a request Signa does not take from an app. */
 const unsupported = (message = "This wallet request is not supported.") => failure(message, 4200);
+/** Refusals Signa states about the request itself, before any review of it exists: nothing can be sent or signed. */
+const refusedBeforeReview = ["REVIEWED_CALLS_REFUSED", "REVIEWED_CALLS_INPUT", "REVIEWED_SIGNATURE_REFUSED", "REVIEWED_SIGNATURE_INPUT"];
+const preparing = async <T>(work: Promise<T>): Promise<T> => {
+  try {
+    return await work;
+  } catch (error) {
+    const { code, message } = (error ?? {}) as { code?: unknown; message?: string };
+    if (typeof code === "string" && refusedBeforeReview.includes(code)) throw Object.assign(rejected(message ?? "Signa refused this."), { cause: error });
+    throw error;
+  }
+};
 const refuse = (): never => {
   throw unsupported();
 };
@@ -62,16 +73,18 @@ export function signaWalletAdapter(
 ): SignaWalletAdapter {
   const sign = async (request: Parameters<ReturnType<SignaAdapterWallet["reviews"]>["prepareSignature"]>[0]) => {
     const reviews = wallet.reviews();
-    let status = await reviews.prepareSignature(request);
+    let status = await preparing(reviews.prepareSignature(request));
     let callback: string | null = "";
     if (status.status === "reviewing") {
-      // A review in progress always names its page. A page closed without its callback is read back:
-      // an approval that raced the close is the signature; a failed read is no rejection.
+      // A review in progress always names its page. A page closed without its callback is withdrawn on
+      // Signa, so no late approval can sign it; an approval that won the race is the signature.
       callback = await options.approve(status.approvalUrl!);
-      status = callback === null ? await reviews.refreshSignature() : await reviews.completeSignature(callback);
+      status = callback === null ? await reviews.cancelSignature() : await reviews.completeSignature(callback);
     }
     if (status.status === "approved" && status.signature) return status.signature;
-    throw rejected(callback === null ? "The review was closed. Nothing was signed." : "The signature was cancelled. Nothing was signed.");
+    if (status.status === "cancelled")
+      throw rejected(callback === null ? "The review was closed. Nothing was signed." : "The signature was cancelled. Nothing was signed.");
+    throw failure("Signa has not settled this signature yet. Check it again shortly.");
   };
   return {
     kind: "self-reviewing",
@@ -94,7 +107,7 @@ export function signaWalletAdapter(
       const earlier = reviews.pendingReview();
       if (earlier && isSettledPayment((isSettledPayment(earlier.status) ? earlier : await reviews.refreshReview()).status))
         reviews.clearReview();
-      let status = await reviews.prepareReview({ chainId, calls: calls.map(({ to, data, value }) => ({ to, data, value })) });
+      let status = await preparing(reviews.prepareReview({ chainId, calls: calls.map(({ to, data, value }) => ({ to, data, value })) }));
       let callback: string | null = "";
       if (status.status === "reviewing") {
         callback = await options.approve(status.approvalUrl!);

@@ -428,7 +428,7 @@ export function buildRestOpenApi({ contracts, indexer, operations, publicOrigin,
     extra: { 'x-principal-kind': 'wallet-app' },
   });
   add('/wallet/payment-reviews/{id}/cancellation', 'POST', 'cancelWalletPaymentReview', 'Cancel an open review', 'WalletPayments', 'plan', {
-    parameters: [pathParameter('id', ref('ResourceId'))], body: object({}), result: ref('WalletPaymentAppReview'), idempotent: true,
+    parameters: [pathParameter('id', ref('ResourceId'))], body: object({}), result: { oneOf: [ref('WalletPaymentAppReview'), ref('WalletSignatureAppReview')] }, idempotent: true,
     description: 'The original app grant cancels a review closed undecided. An approved review is 409: read and submit it.',
     extra: { 'x-principal-kind': 'wallet-app' },
   });

@@ -467,21 +467,25 @@ function createWalletReviewJournal<Status>(options: CenterWalletPaymentClientOpt
     if (!saved.value.approval || terminal(saved.value.status)) fail('WALLET_PAYMENT_NOT_APPROVED', 'Only an approved payment that has not settled can be retired.');
     return status((await retire(saved)).value);
   }
+  /** Reads the review, cancels it while still undecided, and reads it again if an approval won (409). */
+  async function withdraw<T extends { value: { status: string } }>(client: CenterClient, path: string, receive: (value: unknown) => T): Promise<T> {
+    const read = receive(await client.request({ requestTarget: path }));
+    if (read.value.status !== 'reviewing') return read;
+    try {
+      return receive(await client.request({ method: 'POST', requestTarget: path + '/cancellation', json: {},
+        idempotencyKey: 'review-cancellation-' + newRequestNonce().slice(2) }));
+    } catch (error) {
+      if (!(error instanceof RestClientError && error.status === 409)) throw error;
+      return receive(await client.request({ requestTarget: path }));
+    }
+  }
   /** Withdraws an open review its person closed without deciding, so the next action needn't wait for its
    * expiry. Read first: one approved before or while it is withdrawn comes back approved, for the app to submit. */
   async function cancelPayment(): Promise<Status> {
     const saved = pending(), client = live(saved.value).client, path = reviewPath + '/' + saved.value.review?.id;
     if (!saved.value.review || saved.value.approval || saved.value.submissionStarted || terminal(saved.value.status))
       fail('WALLET_PAYMENT_NOT_OPEN', 'Only an open review can be withdrawn.');
-    const read = receiveView(await client.request({ requestTarget: path }), saved, true);
-    if (read.value.status !== 'reviewing') return status(read.value);
-    try {
-      return status(receiveView(await client.request({ method: 'POST', requestTarget: path + '/cancellation', json: {},
-        idempotencyKey: 'review-cancellation-' + newRequestNonce().slice(2) }), read, true).value);
-    } catch (error) {
-      if (!(error instanceof RestClientError && error.status === 409)) throw error;
-      return status(receiveView(await client.request({ requestTarget: path }), read, true).value);
-    }
+    return status((await withdraw(client, path, value => receiveView(value, pending(), true))).value);
   }
   // The revision of the last operation view received here, per operation: a waiting read waits past it.
   const revisions = new Map<string, number>();
@@ -619,9 +623,20 @@ function createWalletReviewJournal<Status>(options: CenterWalletPaymentClientOpt
     let request: SignatureRequest;
     try { request = signatureRequestOf(snapshot(input)); }
     catch { return fail('WALLET_PAYMENT_INPUT_INVALID', 'Send { kind: "typed-data", chainId, typedData } or { kind: "message", chainId, message }.'); }
-    const current = live(), existing = readSignature();
+    const current = live();
+    let existing = readSignature();
     let saved = existing && equal(existing.value.request, request) && equal(existing.value.grant, current.grant) && existing.value.status !== 'cancelled' ? existing : null;
-    if (saved?.value.review) return signatureStatus(saved.value);
+    if (saved?.value.review) {
+      if (saved.value.status !== 'reviewing' || saved.value.review.expiresAtMs > now()) return signatureStatus(saved.value);
+      // Past its window: Signa still serves an approval for a day, and calls a review that never was expired (410).
+      try {
+        const reconciled = await refreshSignatureRecord(saved);
+        if (reconciled.status !== 'cancelled') return reconciled;
+      } catch (error) {
+        if (!(error instanceof RestClientError && error.status === 410)) throw error;
+      }
+      existing = readSignature(); saved = null;
+    }
     if (!saved) saved = save<SignatureJournal>({ version: 'center-wallet-signature-client-v1', issuer, audience, callbackUri, grant: snapshot(current.grant), request,
       ...signatureSigning(current.grant.accountId.split(':')[2] as Address, request), state: handoffState(),
       reviewKey: 'signature-review-' + newRequestNonce().slice(2), ...(options.reviewId ? { reviewId: options.reviewId } : {}), status: 'reviewing' },
@@ -642,12 +657,19 @@ function createWalletReviewJournal<Status>(options: CenterWalletPaymentClientOpt
     checkCallback(incoming, saved.value.review!.id, saved.value.state);
     return refreshSignatureRecord(saved);
   }
+  /** Withdraws an open signature review its person closed without deciding; an approval that won the race is returned. */
+  async function cancelSignature(): Promise<CenterWalletSignatureStatus> {
+    const saved = pendingSignatureRecord();
+    if (saved.value.status !== 'reviewing') fail('WALLET_PAYMENT_NOT_OPEN', 'Only an open review can be withdrawn.');
+    return signatureStatus((await withdraw(live(saved.value).client, reviewPath + '/' + saved.value.review!.id,
+      value => receiveSignature(value, pendingSignatureRecord(), true))).value);
+  }
   async function refreshSignatureRecord(saved: SavedSignature): Promise<CenterWalletSignatureStatus> {
     const result = await live(saved.value).client.request({ requestTarget: reviewPath + '/' + saved.value.review!.id });
     return signatureStatus(receiveSignature(result, saved, true).value);
   }
   return { preparePayment, prepareReview, reviewUrl, completePayment, submitPayment, refreshPayment, retirePayment, cancelPayment, pendingPayment, clearPayment,
-    prepareSignature, completeSignature, refreshSignature: () => refreshSignatureRecord(pendingSignatureRecord()),
+    prepareSignature, completeSignature, cancelSignature, refreshSignature: () => refreshSignatureRecord(pendingSignatureRecord()),
     pendingSignature: (): CenterWalletSignatureStatus | null => { const saved = readSignature(); return saved ? signatureStatus(saved.value) : null; } };
 }
 
@@ -663,5 +685,5 @@ export function createCenterWalletReviewClient(options: CenterWalletPaymentClien
   const j = createWalletReviewJournal<CenterWalletReviewStatus>(options, 'review');
   return Object.freeze({ prepareReview: j.prepareReview, reviewUrl: j.reviewUrl, completeReview: j.completePayment, submitReview: j.submitPayment,
     refreshReview: j.refreshPayment, retireReview: j.retirePayment, cancelReview: j.cancelPayment, pendingReview: j.pendingPayment, clearReview: j.clearPayment,
-    prepareSignature: j.prepareSignature, completeSignature: j.completeSignature, refreshSignature: j.refreshSignature, pendingSignature: j.pendingSignature });
+    prepareSignature: j.prepareSignature, completeSignature: j.completeSignature, cancelSignature: j.cancelSignature, refreshSignature: j.refreshSignature, pendingSignature: j.pendingSignature });
 }

@@ -25,7 +25,7 @@ function setup(input: { approve?: string | null; complete?: Status; submit?: Sta
     clearReview: vi.fn(),
     prepareSignature: vi.fn(async () => ({ status: "reviewing", approvalUrl })),
     completeSignature: vi.fn(async () => ({ status: "approved", approvalUrl, signature: "0xabcd" as `0x${string}` })),
-    refreshSignature: vi.fn(async () => ({ status: "reviewing", approvalUrl })),
+    cancelSignature: vi.fn(async () => ({ status: "cancelled", approvalUrl })),
   };
   const wallet = { restoreConnection: () => ({ address: account }), reviews: () => reviews };
   const approve = vi.fn(async () => (input.approve === undefined ? callbackUrl : input.approve));
@@ -124,11 +124,26 @@ describe("signaWalletAdapter", () => {
       message: { amount: (2n ** 160n).toString(), small: 3 } } });
     await expect(adapter.signMessage("hello")).resolves.toBe("0xabcd");
     expect(reviews.prepareSignature).toHaveBeenLastCalledWith({ kind: "message", chainId: 8453, message: "hello" });
+    // Still open after its callback: unsettled, never a rejection.
+    reviews.completeSignature.mockResolvedValueOnce({ status: "reviewing", approvalUrl } as never);
+    const open = await adapter.signMessage("open").catch((caught: unknown) => caught);
+    expect(open).toMatchObject({ message: "Signa has not settled this signature yet. Check it again shortly." });
+    expect((open as { code?: unknown }).code).toBeUndefined();
     reviews.completeSignature.mockResolvedValueOnce({ status: "cancelled", approvalUrl } as never);
     await expect(adapter.signMessage("again")).rejects.toMatchObject({ code: 4001 });
     const closed = setup({ approve: null });
     await expect(closed.adapter.signMessage("hello")).rejects.toMatchObject({ code: 4001, message: "The review was closed. Nothing was signed." });
     expect(closed.reviews.completeSignature).not.toHaveBeenCalled();
+  });
+
+  test("only a refusal Signa states before any review is a rejection", async () => {
+    const refused = setup();
+    refused.reviews.prepareReview.mockRejectedValueOnce(Object.assign(new Error("Call 1: refused"), { code: "REVIEWED_CALLS_REFUSED", status: 422 }));
+    await expect(refused.adapter.submitToReviewer!({ account, calls: [call] })).rejects.toMatchObject({ code: 4001, message: "Call 1: refused" });
+    const pending = setup();
+    pending.reviews.prepareReview.mockRejectedValueOnce(Object.assign(new Error("pending"), { code: "WALLET_PAYMENT_PENDING" }));
+    const error = await pending.adapter.submitToReviewer!({ account, calls: [call] }).catch((caught: unknown) => caught);
+    expect((error as { code?: unknown }).code).toBe("WALLET_PAYMENT_PENDING");
   });
 
   test("refuses what Signa does not take from an app", async () => {

@@ -26,7 +26,7 @@ export function createWalletReviewsFixture() {
   const signatureRequest = { kind: 'message' as const, chainId: 8453, message: 'Sign in to Beep' };
   const signatureSigning_ = signatureSigning(f.safe, signatureRequest);
   const accountSignature = `0x${'00'.repeat(20)}${'ab'.repeat(97)}` as `0x${string}`;
-  let state = '', reviewStatus = 'approved', operation: any = f.observedOperation('pending'), cancellations = 0, approveOnCancel = false, refuseSubmission = false, kind: 'calls' | 'signature' = 'calls';
+  let state = '', reviewStatus = 'approved', operation: any = f.observedOperation('pending'), cancellations = 0, approveOnCancel = false, refuseSubmission = false, refusal: { status: number; code: string } | null = null, clock = f.nowMs, kind: 'calls' | 'signature' = 'calls';
   const app = { origin: grant.origin, callbackUri: grant.callbackUri, grantId: grant.id, grantIncarnation: grant.incarnation };
   function view(status: string, appView: boolean) {
     const decided = { status, approvedAtMs: status === 'approved' ? f.nowMs : null, cancelledAtMs: status === 'cancelled' ? f.nowMs : null };
@@ -49,10 +49,17 @@ export function createWalletReviewsFixture() {
     const body = init?.body ? JSON.parse(new TextDecoder().decode(init.body as Uint8Array)) : undefined;
     calls.push({ method: init?.method ?? 'GET', path, body, key: headers.get('idempotency-key') });
     if (path === '/api/v1/smart-accounts/bindings') return Response.json({ items: [{ id: bindingId, wallet: { chainId: 8453, address: f.safe }, manifestId: 'base' }] });
+    // Signa refuses the request itself, before any review of it exists.
+    if (refusal && (path === '/api/v1/wallet/reviewed-calls' || path === '/api/v1/wallet/signature-reviews'))
+      return Response.json({ code: refusal.code, message: 'Refused before any review.' }, { status: refusal.status });
     if (path === '/api/v1/wallet/reviewed-calls') return Response.json(current.plan, { status: 201 });
     if (path === '/api/v1/user-operations') return Response.json(current.base.prepared, { status: 201 });
     if (path === '/api/v1/wallet/payment-reviews' || path === '/api/v1/wallet/signature-reviews') { state = body.state; return Response.json(view('pending', false), { status: 201 }); }
-    if (path === '/api/v1/wallet/payment-reviews/' + reviewId) return Response.json(view(reviewStatus, true));
+    if (path === '/api/v1/wallet/payment-reviews/' + reviewId) {
+      if (reviewStatus === 'expired') return Response.json({ code: 'WALLET_PAYMENT_REVIEW_EXPIRED', message: 'The original payment review expired.' }, { status: 410 });
+      if (reviewStatus === 'offline') return Response.json({ code: 'UNAVAILABLE', message: 'Try again shortly.' }, { status: 503 });
+      return Response.json(view(reviewStatus, true));
+    }
     // The app withdraws a review its person closed; one approved meanwhile stays approved.
     if (path === '/api/v1/wallet/payment-reviews/' + reviewId + '/cancellation') {
       cancellations++;
@@ -70,14 +77,17 @@ export function createWalletReviewsFixture() {
   const client = new CenterClient({ audience: f.audience, accountId: f.accountId, grantId: f.grant.id, signer: appKey, fetch: transport, now: () => Math.floor(f.nowMs / 1000) });
   const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); }, removeItem: (key: string) => { data.delete(key); } };
   let href = f.origin + '/pay';
-  const options = { issuer: f.issuer, audience: f.audience, callbackUri: f.callbackUri, storage, now: () => f.nowMs,
+  const options = { issuer: f.issuer, audience: f.audience, callbackUri: f.callbackUri, storage, now: () => clock,
     location: { href: () => href, replace: (value: string) => { href = value; } }, connection: () => ({ grant, client }) };
   return { ...f, calls, data, sent, plan, bindingId, signatureRequest, signatureSigning: signatureSigning_, accountSignature, options,
     reviews: () => createCenterWalletReviewClient(options),
     callback: () => f.callbackUri + '?' + new URLSearchParams({ review: reviewId, state, iss: f.issuer }),
     signatures: () => { kind = 'signature'; }, cancel: () => { reviewStatus = 'cancelled'; }, observed: (value: any) => { operation = value; },
     /** Signa's page is open, or was closed, with no decision. */
-    undecided: () => { reviewStatus = 'pending'; }, approve: () => { reviewStatus = 'approved'; }, approveOnCancel: () => { approveOnCancel = true; }, refuseSubmission: () => { refuseSubmission = true; }, cancellations: () => cancellations,
+    undecided: () => { reviewStatus = 'pending'; }, approve: () => { reviewStatus = 'approved'; }, approveOnCancel: () => { approveOnCancel = true; }, refuseSubmission: () => { refuseSubmission = true; },
+    refuse: (status: number, code: string) => { refusal = { status, code }; },
+    /** Signa's answer to a read of the review: expired past its window, or unreachable. */
+    expired: () => { reviewStatus = 'expired'; }, offline: () => { reviewStatus = 'offline'; }, advance: (ms: number) => { clock += ms; }, cancellations: () => cancellations,
     /** The app's next action: another call set (a pay with other metadata), its own plan and operation. */
     nextCalls: () => { current = callSet(createWalletPaymentClientFixture(f.nowMs, '0xabcd')); return current; } };
 }

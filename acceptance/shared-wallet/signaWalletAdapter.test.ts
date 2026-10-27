@@ -69,4 +69,16 @@ describe('acceptance/shared-wallet', () => {
     expect(third.error!.code).toBeUndefined();
     expect(third.told).toEqual([]);
   });
+  it('a call set Signa refuses before any review releases every call; an unreachable Signa holds them', async () => {
+    const refused = createWalletReviewsFixture();
+    refused.refuse(422, 'REVIEWED_CALLS_REFUSED');
+    const first = await send(refused);
+    expect(first.error).toMatchObject({ code: 4001 });
+    expect(first.told).toEqual(refused.sent.map((_, step) => 'unsent ' + step));
+    const down = createWalletReviewsFixture();
+    down.refuse(503, 'UNAVAILABLE');
+    const second = await send(down);
+    expect(second.error!.code).not.toBe(4001);
+    expect(second.told).toEqual([]);
+  });
 });

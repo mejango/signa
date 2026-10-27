@@ -130,6 +130,11 @@ describe("Signa wallet API documentation", () => {
     expect(body("/api/v1/wallet/payment-reviews/{id}/cancellation")).toEqual(body("/api/v1/user-operations/{id}/retirement"));
   });
 
+  it("answers a review cancellation with the same review union as its read", () => {
+    const answer = (route: string, method: "get" | "post") => (full.paths[route]![method] as { responses: Record<string, unknown> }).responses["200"];
+    expect(answer("/api/v1/wallet/payment-reviews/{id}/cancellation", "post")).toEqual(answer("/api/v1/wallet/payment-reviews/{id}", "get"));
+  });
+
   it("serves the wallet reference locally and redirects inherited guides to Center", async () => {
     const mount = (surface?: "wallet") => {
       const app = new Hono<JbcenterEnv>();
