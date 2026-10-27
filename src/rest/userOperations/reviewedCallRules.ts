@@ -19,11 +19,12 @@ export const ETHERSCAN_SOURCE_LINE = "ABI from Etherscan, not reviewed by Juiceb
 export const LOOKUP_FAILED_LINE = "Couldn't look up this contract.";
 export const RAW_CALL_WARNING = "Raw calldata: no verified ABI describes this call. Check the destination and bytes before approving.";
 
-// ERC-7579 executions name their call type in the mode's first byte; 0xff is delegatecall.
-const modeExecutions = new Set(["function execute(bytes32 mode,bytes executionCalldata)",
+// ERC-7579 executions name their call type in the mode's first byte; 0xff is delegatecall. The selector tables are
+// pure, so a bundle that never reviews a call leaves them out.
+const modeExecutions = /* @__PURE__ */ new Set(/* @__PURE__ */ ["function execute(bytes32 mode,bytes executionCalldata)",
   "function executeFromExecutor(bytes32 mode,bytes executionCalldata)"].map(signature => toFunctionSelector(signature)));
 // Safe executions carry the operation as their fourth word; anything but 0 (CALL) is refused.
-const safeExecutions = new Set(["function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures)",
+const safeExecutions = /* @__PURE__ */ new Set(/* @__PURE__ */ ["function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,bytes signatures)",
   "function execTransactionFromModule(address to,uint256 value,bytes data,uint8 operation)",
   "function execTransactionFromModuleReturnData(address to,uint256 value,bytes data,uint8 operation)"].map(signature => toFunctionSelector(signature)));
 

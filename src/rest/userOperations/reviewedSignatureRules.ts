@@ -33,20 +33,23 @@ const record = (value: unknown, keys?: string[]): Record<string, unknown> => {
 };
 const field = (name: string, type: string) => ({ name, type });
 const DOMAIN_TYPES: Record<string, string> = { name: "string", version: "string", chainId: "uint256", verifyingContract: "address", salt: "bytes32" };
-const DETAILS = [field("token", "address"), field("amount", "uint160"), field("expiration", "uint48"), field("nonce", "uint48")];
-const PERMISSIONS = [field("token", "address"), field("amount", "uint256")];
 const transfer = (permitted: string) => [field("permitted", permitted), field("spender", "address"), field("nonce", "uint256"), field("deadline", "uint256")];
 const allowance = (details: string) => [field("details", details), field("spender", "address"), field("sigDeadline", "uint256")];
 // The exact Permit2, ERC-2771 forwarder and Safe structs and domain fields, keyed by primary type. Anything else is shown field by field.
-const KNOWN: Record<string, Record<string, { name: string; type: string }[]>> = {
-  PermitSingle: { PermitSingle: allowance("PermitDetails"), PermitDetails: DETAILS },
-  PermitBatch: { PermitBatch: allowance("PermitDetails[]"), PermitDetails: DETAILS },
-  PermitTransferFrom: { PermitTransferFrom: transfer("TokenPermissions"), TokenPermissions: PERMISSIONS },
-  PermitBatchTransferFrom: { PermitBatchTransferFrom: transfer("TokenPermissions[]"), TokenPermissions: PERMISSIONS },
-  ForwardRequest: { ForwardRequest: [field("from", "address"), field("to", "address"), field("value", "uint256"), field("gas", "uint256"),
-    field("nonce", "uint256"), field("deadline", "uint48"), field("data", "bytes")] },
-  SafeTx: { SafeTx: [field("to", "address"), field("value", "uint256"), field("data", "bytes"), field("operation", "uint8"), field("safeTxGas", "uint256"),
-    field("baseGas", "uint256"), field("gasPrice", "uint256"), field("gasToken", "address"), field("refundReceiver", "address"), field("nonce", "uint256")] },
+// Built when read, so a bundle that never reads a signature leaves them out.
+const knownStructs = (): Record<string, Record<string, { name: string; type: string }[]>> => {
+  const details = [field("token", "address"), field("amount", "uint160"), field("expiration", "uint48"), field("nonce", "uint48")];
+  const permissions = [field("token", "address"), field("amount", "uint256")];
+  return {
+    PermitSingle: { PermitSingle: allowance("PermitDetails"), PermitDetails: details },
+    PermitBatch: { PermitBatch: allowance("PermitDetails[]"), PermitDetails: details },
+    PermitTransferFrom: { PermitTransferFrom: transfer("TokenPermissions"), TokenPermissions: permissions },
+    PermitBatchTransferFrom: { PermitBatchTransferFrom: transfer("TokenPermissions[]"), TokenPermissions: permissions },
+    ForwardRequest: { ForwardRequest: [field("from", "address"), field("to", "address"), field("value", "uint256"), field("gas", "uint256"),
+      field("nonce", "uint256"), field("deadline", "uint48"), field("data", "bytes")] },
+    SafeTx: { SafeTx: [field("to", "address"), field("value", "uint256"), field("data", "bytes"), field("operation", "uint8"), field("safeTxGas", "uint256"),
+      field("baseGas", "uint256"), field("gasPrice", "uint256"), field("gasToken", "address"), field("refundReceiver", "address"), field("nonce", "uint256")] },
+  };
 };
 const KNOWN_DOMAIN: Record<string, string> = { PermitSingle: "chainId,name,verifyingContract", PermitBatch: "chainId,name,verifyingContract",
   PermitTransferFrom: "chainId,name,verifyingContract", PermitBatchTransferFrom: "chainId,name,verifyingContract",
@@ -157,7 +160,7 @@ function reachable(types: Record<string, { name: string; type: string }[]>, prim
   return found;
 }
 const known = (types: Record<string, { name: string; type: string }[]>, primary: string) => {
-  const expected = KNOWN[primary], got = reachable(types, primary);
+  const expected = knownStructs()[primary], got = reachable(types, primary);
   return !!expected && Object.keys(got).length === Object.keys(expected).length && Object.entries(expected).every(([name, struct]) => same(got[name], struct));
 };
 /** What the request authorizes. Permit2, a forward request from the account and a SafeTx are recognized
