@@ -1,11 +1,11 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
 import { base } from './walletBase.js';
-import { decodeAbiParameters, formatUnits, type AbiFunction, type Address, type Hex } from 'viem';
+import { decodeAbiParameters, erc20Abi, formatUnits, type AbiFunction, type Address, type Hex } from 'viem';
 import { getUserOperationHash, normalizeUserOperation, uoCanonical } from '../userOperations/codec.js';
 import { checkReviewGas } from '../sponsorCaps.js';
 import { safe7579PasskeyOwnerSigningPayload } from '../smartAccounts/passkeySignatures.js';
 import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
-import { recognizeWalletV6UsdcPayment } from '../userOperations/semantics.js';
+import { recognizeWalletV6UsdcPayment, terminalAbi } from '../userOperations/semantics.js';
 import type { WalletPaymentCentralPublic, WalletReviewedCallsCentralPublic } from '../wallet/paymentPublic.js';
 import { ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
   reviewedCallRefusal, tokenAmountOf, type CallSource } from '../userOperations/reviewedCallRules.js';
@@ -114,22 +114,37 @@ function callback(value: Review): string {
     !['https:', 'http:'].includes(target.protocol)) fail();
   target.search = new URLSearchParams({ review: value.id, state: token(value.state), iss: value.issuer }).toString(); return target.href;
 }
-/** A reviewed call set, re-derived here from the operation bytes: every call shown is the exact call
+const approveFunction = erc20Abi.find(item => item.type === 'function' && item.name === 'approve')!;
+/** Where each call's description comes from. A payment's calls are its exact approvals and pay, so
+ * this bundle decodes them with its own functions; a reviewed call set names a source per call. */
+function described(value: Review): { sources: unknown; functions: unknown } {
+  if ('review' in value) return { sources: value.review.sources, functions: value.reviewedCalls.functions };
+  const count = value.stepIndexes.length;
+  return { sources: Array.from({ length: count }, () => ({ source: 'first-party' })),
+    functions: Array.from({ length: count }, (_, index) => index === count - 1 ? terminalAbi[0] : approveFunction) };
+}
+/** The calls shown, re-derived here from the operation bytes: every call shown is the exact call
  * signed, decoded with the function its source names (the stored Etherscan ABI, or the one the
  * server's SDK decoded with), and none calls the account itself or delegatecalls. */
-function checkCalls(value: WalletReviewedCallsCentralPublic, operation: ReturnType<typeof normalizeUserOperation>) {
-  const reviewed = record(value.review), view = record(value.reviewedCalls), model = record(view.model);
-  if (reviewed.kind !== REVIEWED_CALLS_KIND || reviewed.chainId !== SIGNA_HOME_CHAIN_ID || 'payment' in value || 'metadataSteps' in value || value.notice !== null) fail();
-  const calls = decodeSafe7579Execution(operation.callData), listed = reviewed.calls, sources = reviewed.sources;
-  const modeled = model.calls, functions = view.functions;
+function checkCalls(value: Review, operation: ReturnType<typeof normalizeUserOperation>) {
+  const view = record(value.reviewedCalls), model = record(view.model), { sources, functions } = described(value);
+  const calls = decodeSafe7579Execution(operation.callData), modeled = model.calls, listed = 'review' in value ? record(value.review).calls : modeled;
   for (const list of [listed, sources, modeled, functions]) if (!Array.isArray(list) || list.length !== calls.length) fail();
   if (!Array.isArray(value.stepIndexes) || value.stepIndexes.length !== calls.length || value.stepIndexes.some((step, index) => step !== index)) fail();
+  // A payment's served functions must be the ones this bundle decodes with: same names, same parameters.
+  const matches = (served: unknown, own: AbiFunction) => { const { type, name, inputs } = record(served);
+    return type === 'function' && name === own.name && Array.isArray(inputs) && inputs.length === own.inputs.length &&
+      inputs.every((input, index) => { const { type, name } = record(input); return type === own.inputs[index]!.type && name === own.inputs[index]!.name; }); };
+  if (!('review' in value) && (!Array.isArray(view.functions) || view.functions.length !== calls.length ||
+    view.functions.some((fn, index) => !matches(fn, (functions as AbiFunction[])[index]!)))) fail();
   calls.forEach((call, index) => {
     const exact = (entry: Json) => address(entry.to).toLowerCase() === call.target.toLowerCase() && entry.value === call.value &&
       text(entry.data, 1_048_576).toLowerCase() === call.callData.toLowerCase();
     const entry = record((modeled as unknown[])[index]), source = record((sources as unknown[])[index]), fn = (functions as unknown[])[index];
     if (!exact(record((listed as unknown[])[index])) || !exact(entry) || reviewedCallRefusal(operation.sender, { to: call.target, data: call.callData })) fail();
     if (entry.contractName !== null) text(entry.contractName, 256);
+    if (!Array.isArray(entry.roles)) fail();
+    for (const role of entry.roles as unknown[]) { const { role: name, address: at, name: label } = record(role); text(name, 16); address(at); if (label !== null) text(label, 256); }
     if (!Array.isArray(entry.warnings) || entry.warnings.length > 16) fail();
     for (const warning of entry.warnings as unknown[]) { const { code, text: line } = record(warning); text(code, 64); text(line, 512); }
     if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return; }
@@ -138,9 +153,13 @@ function checkCalls(value: WalletReviewedCallsCentralPublic, operation: ReturnTy
     if (!found || found.item.name !== entry.functionName) fail();
   });
 }
-/** Each token's decimals and symbol, read by this page from Base's public RPC in one batch. Null where a read failed. */
-async function readTokens(tokens: string[]): Promise<Map<string, { decimals: number; symbol: string } | null>> {
-  const read = new Map<string, { decimals: number; symbol: string } | null>(tokens.map(token => [token, null]));
+type TokenInfo = { decimals: number; symbol: string };
+// The pinned Base USDC is known without a read, as the SDK's review knows it, so a payment's amount needs no RPC.
+const knownTokens = new Map<string, TokenInfo>([[__SIGNA_PAYMENT_PIN__.token.toLowerCase(), { decimals: 6, symbol: 'USDC' }]]);
+/** Each token's decimals and symbol, known or read by this page from Base's public RPC in one batch. Null where a read failed. */
+async function readTokens(all: string[]): Promise<Map<string, TokenInfo | null>> {
+  const read = new Map<string, TokenInfo | null>(all.map(token => [token, knownTokens.get(token) ?? null]));
+  const tokens = all.filter(token => !knownTokens.has(token));
   if (!tokens.length) return read;
   try {
     const rpc = signaChains.find(chain => chain.chainId === SIGNA_HOME_CHAIN_ID)!.publicRpc;
@@ -168,6 +187,8 @@ function checkReview(input: unknown): Review {
   if ('review' in value) {
     if (`eip155:${SIGNA_HOME_CHAIN_ID}:${operation.sender.toLowerCase()}` !== accountId || operation.signature !== '0x' ||
       getUserOperationHash(operation, value.entryPoint, SIGNA_HOME_CHAIN_ID) !== value.operationHash) fail();
+    const reviewed = record(value.review);
+    if (reviewed.kind !== REVIEWED_CALLS_KIND || reviewed.chainId !== SIGNA_HOME_CHAIN_ID || 'payment' in value || 'metadataSteps' in value || value.notice !== null) fail();
     checkCalls(value, operation);
   } else {
     const payment = record(value.payment);
@@ -197,6 +218,7 @@ function checkReview(input: unknown): Review {
         beneficiary: p.beneficiary, minimumBeneficiaryTokenCount: p.minimumReturnedTokens, metadata: p.metadata } } },
       value.stepIndexes, { chainId: SIGNA_HOME_CHAIN_ID, ...__SIGNA_PAYMENT_PIN__ });
     if (!derived || uoCanonical(derived) !== uoCanonical(p)) fail();
+    checkCalls(value, operation);
   }
   const signing = safe7579PasskeyOwnerSigningPayload({ operation, chainId: SIGNA_HOME_CHAIN_ID, entryPoint: value.entryPoint, safe7579: value.safe7579,
     validAfter: decimal(value.signing.validAfter), validUntil: decimal(value.signing.validUntil) });
@@ -235,19 +257,29 @@ const show = (value: unknown): string => typeof value === 'bigint' ? value.toStr
 const line = (className: string, content: string) => { const node = document.createElement('div'); node.className = className; node.textContent = content; return node; };
 // Admin and permission changes lead the warnings, then calls nothing could decode.
 const DECIMALS_UNREAD = "Couldn't read this token's decimals, so its amount shows in base units.";
+// A payment's warnings in this page's own words: served text could name an address falsely.
+const PAYMENT_WARNINGS: Record<string, string> = { 'unlimited-approval': 'This approves an unlimited amount.',
+  'permission-grant': 'This lets another address act for you.', 'owner-action': 'This changes how the project is run. Check it before approving.',
+  'unknown-contract': 'This destination is not a contract Signa recognizes. Check the address before approving.' };
 const warningRank = ['owner-action', 'permission-grant', 'delegatecall', 'unlimited-approval', 'raw'];
 const rank = (code: string) => { const at = warningRank.indexOf(code); return at < 0 ? warningRank.length : at; };
-/** Every call, its source and every warning in the one review the passkey approves. */
-function showCalls(value: WalletReviewedCallsCentralPublic) {
+/** Every call, its source and every warning in the one review the passkey approves. A payment
+ * leads with the amount its pay call moves. */
+function showCalls(value: Review) {
   const calls = decodeSafe7579Execution(value.operation.callData), warnings: { code: string; text: string }[] = [];
+  const payment = !('review' in value), { sources, functions } = described(value) as { sources: CallSource[]; functions: (AbiFunction | null)[] };
+  // A payment names its pinned addresses itself; the server's names are not shown for it.
+  const pinned = payment && new Map([[__SIGNA_PAYMENT_PIN__.token.toLowerCase(), 'USDC'],
+    [__SIGNA_PAYMENT_PIN__.directV6Terminal.toLowerCase(), 'JBMultiTerminal'], [value.operation.sender.toLowerCase(), 'your account']]);
   let total = 0n;
-  const pending: { node: HTMLElement; name: string; token: string; value: bigint; prefix: string }[] = [];
+  const pending: { node: HTMLElement; name: string; token: string; value: bigint; prefix: string; headline: boolean }[] = [];
   element('payment-calls').replaceChildren(...calls.map((call, index) => {
-    const source = value.review.sources[index] as CallSource, entry = value.reviewedCalls.model.calls[index]!, item = document.createElement('li');
+    const source = sources[index]!, entry = value.reviewedCalls.model.calls[index]!, item = document.createElement('li');
     const found = source.source === 'raw' ? null
-      : exactFunction(source.source === 'etherscan' ? source.abi : [value.reviewedCalls.functions[index] as AbiFunction], call.callData as Hex)!;
+      : exactFunction(source.source === 'etherscan' ? source.abi : [functions[index]], call.callData as Hex)!;
     total += BigInt(call.value);
-    item.append(line('call-title', `${found ? found.item.name : 'Raw call'} on ${entry.contractName ? `${entry.contractName} ` : ''}${call.target}`));
+    const contract = pinned ? pinned.get(call.target.toLowerCase()) : entry.contractName;
+    item.append(line('call-title', `${found ? found.item.name : 'Raw call'} on ${contract ? `${contract} ` : ''}${call.target}`));
     const sourceLine = line('call-source', source.source === 'first-party' ? 'Decoded with the Juicebox SDK'
       : source.source === 'etherscan' ? `${ETHERSCAN_SOURCE_LINE}${source.implementation ? `. Implementation ${source.implementation}` : ''}`
       : source.lookup === 'lookup-failed' ? `Raw calldata. ${LOOKUP_FAILED_LINE}` : 'Raw calldata');
@@ -259,16 +291,20 @@ function showCalls(value: WalletReviewedCallsCentralPublic) {
       const name = input.name || `#${position}`, value = found.args[position], counted = amount?.position === position && typeof value === 'bigint';
       // A native payment pays the call's value, whatever its amount argument says.
       const native = counted && amount.token === 'native' ? `${formatUnits(BigInt(call.value), 18)} ETH${value === BigInt(call.value) ? '' : ` (argument ${value})`}` : '';
-      const node = item.appendChild(line('call-line', `${name}: ${native || (counted ? 'reading token' : show(value))}`));
-      if (counted && amount.token !== 'native') pending.push({ node, name, token: amount.token, value, prefix });
+      // The SDK names the part an address plays (a spender, a beneficiary) and, where it knows it, whose it is.
+      const role = typeof value === 'string' && (pinned ? pinned.get(value.toLowerCase())
+        : entry.roles.find(role => role.name && role.address.toLowerCase() === value.toLowerCase())?.name);
+      const node = item.appendChild(line('call-line', `${name}: ${native || (counted ? 'reading token' : show(value))}${role ? ` (${role})` : ''}`));
+      if (counted && amount.token !== 'native') pending.push({ node, name, token: amount.token, value, prefix, headline: payment && index === calls.length - 1 });
     });
     if (!found && call.callData !== '0x') item.append(line('call-line', `Calldata: ${call.callData}`));
     if (source.source === 'raw' && call.callData !== '0x')
       warnings.push({ code: 'raw', text: `${prefix}${source.lookup === 'lookup-failed' ? `${LOOKUP_FAILED_LINE} ` : ''}${RAW_CALL_WARNING}` });
-    for (const warning of entry.warnings) if (warning.code !== 'abi-unavailable' && warning.code !== 'decimals-unknown') warnings.push({ code: warning.code, text: `${prefix}${warning.text}` });
+    for (const warning of entry.warnings) if (warning.code !== 'abi-unavailable' && warning.code !== 'decimals-unknown')
+      warnings.push({ code: warning.code, text: `${prefix}${payment ? PAYMENT_WARNINGS[warning.code] ?? 'Check this call before approving.' : warning.text}` });
     return item;
   }));
-  element('payment-amount').textContent = `${calls.length} ${calls.length === 1 ? 'call' : 'calls'}${total ? `, sending ${formatUnits(total, 18)} ETH` : ''}`;
+  if (!payment) element('payment-amount').textContent = `${calls.length} ${calls.length === 1 ? 'call' : 'calls'}${total ? `, sending ${formatUnits(total, 18)} ETH` : ''}`;
   const showWarnings = () => {
     element('payment-warnings').replaceChildren(...warnings.sort((a, b) => rank(a.code) - rank(b.code)).map(warning => {
       const node = document.createElement('li'); node.textContent = warning.text; return node; }));
@@ -279,31 +315,26 @@ function showCalls(value: WalletReviewedCallsCentralPublic) {
   // Approval waits for them (five seconds at most), so the passkey never signs over an amount still being read.
   readingTokens = pending.length > 0; render();
   void readTokens([...new Set(pending.map(amount => amount.token))]).then(read => {
-    for (const { node, name, token, value, prefix } of pending) {
-      const info = read.get(token);
-      node.textContent = `${name}: ${info ? `${formatUnits(value, info.decimals)} ${info.symbol}` : `${value} base units`}`;
+    for (const { node, name, token, value, prefix, headline } of pending) {
+      const info = read.get(token), amount = info ? `${formatUnits(value, info.decimals)} ${info.symbol}` : `${value} base units`;
+      node.textContent = `${name}: ${amount}`;
+      if (headline) element('payment-amount').textContent = amount;
       if (!info && !warnings.some(warning => warning.text.startsWith(`${prefix}${DECIMALS_UNREAD}`)))
         warnings.push({ code: 'decimals-unknown', text: `${prefix}${DECIMALS_UNREAD}` });
     }
     showWarnings(); readingTokens = false; render();
   });
-  for (const terms of document.querySelectorAll<HTMLElement>('.payment-terms')) terms.hidden = true;
-  document.querySelector('h1')!.textContent = 'Review transaction'; approve.textContent = 'Approve';
+  // A payment keeps its amount and Approve in view; its decoded calls open under Details, where its terms always were.
+  if (payment) { showSteps(value.metadataSteps); document.querySelector('#payment-review summary')!.after(element('payment-calls')); }
+  else {
+    for (const terms of document.querySelectorAll<HTMLElement>('.payment-terms')) terms.hidden = true;
+    document.querySelector('h1')!.textContent = 'Review transaction'; approve.textContent = 'Approve';
+  }
   for (const [name, text] of Object.entries({ app: value.app.origin, account: value.operation.sender, operation: value.operationHash,
     expiry: new Date(value.expiresAtMs).toLocaleString() })) element(`payment-${name}`).textContent = text;
 }
 function accept(input: unknown) {
-  review = checkReview(input);
-  if ('review' in review) showCalls(review);
-  else {
-    const payment = review.payment;
-    for (const [name, value] of Object.entries({ amount: `${formatUnits(BigInt(payment.amount), 6)} USDC`, project: payment.projectId,
-      app: review.app.origin, account: payment.account, beneficiary: payment.beneficiary, minimum: payment.minimumReturnedTokens,
-      memo: payment.memo || 'No memo', token: payment.token,
-      terminal: payment.terminal, metadata: payment.metadata, operation: review.operationHash, expiry: new Date(review.expiresAtMs).toLocaleString() }))
-      element(`payment-${name}`).textContent = value;
-    showSteps(review.metadataSteps);
-  }
+  review = checkReview(input); showCalls(review);
   const gas = review.gas, chain = signaChainName(gas.chainId);
   gasRow.textContent = gas.payer === 'pimlico' ? 'Gas: sponsored' : gas.funded
     ? `Gas: up to ${formatUnits(BigInt(gas.maximumWei), 18)} ETH from your account` : `Needs ETH for gas on ${chain}.`;

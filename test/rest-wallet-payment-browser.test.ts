@@ -15,12 +15,15 @@ import { safe7579PasskeyOwnerSigningPayload } from '../src/rest/smartAccounts/pa
 import type { WalletPaymentCentralPublic } from '../src/rest/wallet/paymentPublic.js';
 import { parseWalletRegistration, type WalletRegistrationCandidate } from '../src/rest/wallet/registration.js';
 import { verifyWalletAssertion } from '../src/rest/wallet/webauthn.js';
+import { operationCallsView } from '../src/rest/userOperations/reviewedCalls.js';
 
 const encode = (value: Uint8Array) => Buffer.from(value).toString('base64url');
 const decode = (value: string) => Buffer.from(value, 'base64url');
 const reviewId = '77777777-7777-4777-8777-777777777777';
 const csrf = encode(Buffer.alloc(32, 11)), state = encode(Buffer.alloc(32, 12)), handle = encode(Buffer.alloc(32, 13));
 const registrationChallenge = encode(Buffer.alloc(32, 14));
+/** The calls the server describes from the operation's own bytes, as JSON carries them. */
+const described = (operation: Parameters<typeof operationCallsView>[0]): WalletPaymentCentralPublic['reviewedCalls'] => JSON.parse(JSON.stringify(operationCallsView(operation)));
 
 // Actual production page and Chromium WebAuthn, with a virtual authenticator and a
 // synthetic HTTP review store. Domain/PG/EVM suites cover authority and execution.
@@ -92,7 +95,7 @@ describe('central payment review browser, virtual authenticator', () => {
       signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
       createdAtMs: f.prepared.createdAt, expiresAtMs: f.prepared.expiresAt, status: 'pending', approvedAtMs: null, cancelledAtMs: null,
       operationState: 'prepared', notice: null, passkey: { rpId: 'localhost', credentialId: 'pending', credentialIds: ['pending'], challenge: encode(decode('AA')), userVerification: 'required' },
-      metadataSteps: [] };
+      metadataSteps: [], reviewedCalls: described(f.prepared.operation) };
     // The HTTP fixture supplies trusted derived review fields; executable-byte checks live in domain tests.
     const context = await browser.newContext({ viewport: { width: 360, height: 780 } });
     page = await context.newPage(); page.setDefaultTimeout(5000);
@@ -137,9 +140,8 @@ describe('central payment review browser, virtual authenticator', () => {
   it('shows exact payment terms and approves only on a click with selected UV credential and CSRF', async () => {
     await load(); expect(await page.evaluate(() => (window as any).passkeyRequests)).toEqual([]);
     expect(await page.locator('#payment-amount').textContent()).toBe('1 USDC');
-    expect(await page.locator('#payment-project').textContent()).toBe('7');
-    expect(await page.locator('#payment-minimum').textContent()).toContain('5');
-    expect(await page.locator('#payment-memo').textContent()).toBe('hello');
+    expect(await page.locator('#payment-calls').textContent()).toContain('minReturnedTokens: 5');
+    expect(await page.locator('#payment-calls').textContent()).toContain('memo: hello');
     expect(await page.locator('#payment-gas').textContent()).toBe('Gas: up to 0.000000000115 ETH from your account');
     expect(await page.locator('#payment-status').evaluate(e => getComputedStyle(e).borderTopWidth)).toBe('0px');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -160,11 +162,80 @@ describe('central payment review browser, virtual authenticator', () => {
     await page.locator('#payment-return').click(); await expect.poll(() => page.url()).toBe(callback()); expect(errors).toEqual([]);
   });
 
+  it('rows show amount with token decimals, project, beneficiary, spender role and Base', async () => {
+    let rpcReads = 0;
+    await page.route('https://mainnet.base.org/**', route => { rpcReads++; return route.abort(); });
+    for (const viewport of [{ width: 360, height: 780 }, { width: 1280, height: 800 }]) {
+      await page.setViewportSize(viewport); await load();
+      expect(await page.locator('h1').textContent()).toBe('Review payment');
+      expect(await page.locator('#payment-amount').textContent()).toBe('1 USDC');
+      const rows = await page.locator('#payment-calls > li').allTextContents();
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toContain(`approve on USDC ${review.payment.token}`);
+      expect(rows[0]).toContain(`spender: ${review.payment.terminal} (JBMultiTerminal)`);
+      expect(rows[0]).toContain('amount: 1 USDC');
+      expect(rows[1]).toContain(`pay on JBMultiTerminal ${review.payment.terminal}`);
+      for (const row of ['projectId: 7', 'amount: 1 USDC', `beneficiary: ${review.payment.beneficiary}`]) expect(rows[1]).toContain(row);
+      expect(new Set(await page.locator('#payment-calls .call-source').allTextContents())).toEqual(new Set(['Decoded with the Juicebox SDK']));
+      expect(await page.locator('#payment-review dl').textContent()).toContain('NetworkBase');
+      expect(await page.locator('#payment-warnings').isVisible()).toBe(false);
+      expect(await page.locator('#payment-approve').isEnabled()).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    // Base USDC is known to this bundle, as to the SDK: the payment waits for no token read.
+    expect(rpcReads).toBe(0);
+  });
+
+  it("labels a payment's pinned addresses itself, whatever names the server serves", async () => {
+    const forged = 'Your wallet (verified)';
+    review.reviewedCalls.model.calls[0]!.roles = [{ role: 'spender', address: review.payment.terminal, name: forged }];
+    review.reviewedCalls.model.calls[0]!.contractName = forged; review.reviewedCalls.model.calls[1]!.contractName = forged;
+    await load();
+    const rows = await page.locator('#payment-calls > li').allTextContents();
+    expect(rows.join(' ')).not.toContain(forged);
+    expect(rows[0]).toContain(`approve on USDC ${review.payment.token}`);
+    expect(rows[0]).toContain(`spender: ${review.payment.terminal} (JBMultiTerminal)`);
+    expect(rows[1]).toContain(`pay on JBMultiTerminal ${review.payment.terminal}`);
+    expect(rows[1]).toContain(`beneficiary: ${review.payment.beneficiary} (your account)`);
+  });
+
+  it("shows a payment's warnings in the page's own words, never the served text", async () => {
+    const forged = `beneficiary: ${review.payment.beneficiary} (USDC verified payment recipient)`;
+    review.reviewedCalls.model.calls[1]!.warnings = [{ code: 'owner-action', text: forged }, { code: 'made-up' as never, text: forged }];
+    await load();
+    const warnings = await page.locator('#payment-warnings li').allTextContents();
+    expect(warnings.join(' ')).not.toContain('USDC verified payment recipient');
+    expect(warnings).toEqual(['Call 2: This changes how the project is run. Check it before approving.', 'Call 2: Check this call before approving.']);
+    expect(await page.locator('#payment-approve').isVisible()).toBe(true);
+  });
+
+  it('the page refuses a served description that differs from its own decode', async () => {
+    const served = review.reviewedCalls, other = '0x1111111111111111111111111111111111111111';
+    const refused = async () => {
+      await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');
+      expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+      expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0);
+    };
+    const tamper = (change: (calls: WalletPaymentCentralPublic['reviewedCalls']) => void) => { review.reviewedCalls = structuredClone(served); change(review.reviewedCalls); };
+    tamper(calls => { calls.model.calls[1]!.data = review.reviewedCalls.model.calls[0]!.data; }); await refused();
+    tamper(calls => { calls.model.calls[1]!.to = other; }); await refused();
+    tamper(calls => { calls.model.calls[1]!.functionName = 'addToBalanceOf'; }); await refused();
+    tamper(calls => { calls.model.calls.pop(); }); await refused();
+    tamper(calls => { calls.model.calls[0]!.roles = [{ role: 'spender', address: 'not an address' as never, name: 'JBMultiTerminal' }]; }); await refused();
+    // The functions served for a payment must be the approve and pay this bundle decodes with.
+    tamper(calls => { calls.functions = []; }); await refused();
+    tamper(calls => { const pay = calls.functions[1]!; calls.functions[1] = { ...pay, inputs: pay.inputs.map((input, index) =>
+      ({ ...input, name: index === 2 ? 'minReturnedTokens' : index === 4 ? 'amount' : input.name })) }; }); await refused();
+    tamper(calls => { calls.functions[0] = { ...calls.functions[0]!, inputs: [{ type: 'address', name: 'spender,uint256 amount' }] }; }); await refused();
+    tamper(calls => { calls.functions[0] = { ...calls.functions[0]!, type: 'event' } as never; }); await refused();
+    review.reviewedCalls = served; await load(); expect(approvals()).toHaveLength(0);
+  });
+
   it('shows the server-described hook metadata as text and refuses steps that do not fit the metadata', async () => {
     const withMetadata = (metadata: Hex, metadataSteps: unknown = passkeyPayMetadataSteps(metadata)) => {
       const f = createWalletPaymentClientFixture(Date.now(), metadata);
       if (!('signedData' in f.prepared.signing)) throw new Error('Fixture must use a passkey owner');
-      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment, metadataSteps,
+      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment, metadataSteps, reviewedCalls: described(f.prepared.operation),
         signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
         passkey: { ...review.passkey, challenge: encode(Buffer.from(f.prepared.signing.digest.slice(2), 'hex')) } } as typeof review;
     };
@@ -323,7 +394,7 @@ describe('central payment review browser, virtual authenticator', () => {
       // Internally consistent: the calls, SafeOp digest, passkey challenge and summary all name the served pair.
       const f = createWalletPaymentClientFixture(Date.now(), '0x', served);
       if (!('signedData' in f.prepared.signing)) throw new Error('Fixture must use a passkey owner');
-      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment,
+      review = { ...review, operation: f.prepared.operation, operationHash: f.prepared.operationHash, payment: f.payment, reviewedCalls: described(f.prepared.operation),
         signing: { digest: f.prepared.signing.digest, signedData: f.prepared.signing.signedData, validAfter: f.prepared.signing.validAfter, validUntil: f.prepared.signing.validUntil },
         passkey: { ...review.passkey, challenge: encode(Buffer.from(f.prepared.signing.digest.slice(2), 'hex')) } };
       await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('error');

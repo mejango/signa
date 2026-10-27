@@ -370,6 +370,15 @@ describe('reviewed calls approval page', () => {
     expect(await page.locator('#payment-calls').textContent()).toContain('amount: 1 ETH (argument 0)');
   });
 
+  it('a split group with seventeen beneficiaries reaches approval', async () => {
+    const splits = Array.from({ length: 17 }, (_, index) => ({ percent: 1_000_000, projectId: 0n,
+      beneficiary: padHex(`0x${(index + 1).toString(16)}`, { size: 20 }), preferAddToBalance: false, lockedUntil: 0, hook: '0x0000000000000000000000000000000000000000' as Address }));
+    await serve([{ to: controller, value: 0n, data: encodeFunctionData({ abi: jbControllerAbi, functionName: 'setSplitGroupsOf', args: [7n, 1n, [{ groupId: 1n, splits }]] }) }]);
+    expect(review.reviewedCalls.model.calls[0]!.roles.length).toBeGreaterThan(16);
+    await open(); await status('ready');
+    expect(await page.locator('#payment-approve').isVisible()).toBe(true);
+  });
+
   it('every source and warning fits in one confirmation', async () => {
     const stake = encodeFunctionData({ abi: stakeAbi, functionName: 'stake', args: [5n, other] });
     const abis = etherscan({ [unknownContract.toLowerCase()]: verified(stakeAbi), [proxy.toLowerCase()]: { status: 429 } }).source;
