@@ -11,6 +11,7 @@ import { createCenterWalletPaymentClient } from '../src/rest/client/walletPaymen
 import { uoCanonical } from '../src/rest/userOperations/codec.js';
 import { createWalletPaymentClientFixture } from './fixtures/wallet-payment-client.js';
 import { createWalletReviewsFixture } from './fixtures/wallet-reviews-client.js';
+import { signaWalletAdapter } from '../wallet-client/src/core/adapter.js';
 
 const reviewId = '550e8400-e29b-41d4-a716-446655440000';
 function fixture() {
@@ -653,6 +654,35 @@ describe('Signa reviews of any call set and signature', () => {
     const f = createWalletReviewsFixture(), changed = { ...f.sent[1]!, value: 1n };
     await expect(f.reviews().prepareReview({ chainId: 8453, calls: [f.sent[0]!, changed] })).rejects.toMatchObject({ code: 'WALLET_PAYMENT_MISMATCH' });
     expect(f.calls.some(call => call.path === '/api/v1/wallet/payment-reviews')).toBe(false);
+  });
+
+  it('a review closed without Cancel lets the next different call set prepare at once', async () => {
+    const f = createWalletReviewsFixture(), reviews = f.reviews(); f.undecided();
+    const adapter = signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews }, { approve: async () => null });
+    await expect(adapter.submitToReviewer({ account: f.safe, calls: f.sent.map(call => ({ chainId: 8453, ...call })) })).rejects.toMatchObject({ code: 4001 });
+    // Read first, then withdrawn on Signa: nothing of it can be approved or sent any more.
+    expect(f.cancellations()).toBe(1);
+    expect(reviews.pendingReview()).toBeNull();
+    const next = f.nextCalls();
+    const prepared = await reviews.prepareReview({ chainId: 8453, calls: next.sent });
+    expect(prepared).toMatchObject({ status: 'reviewing', expectedCalls: { calls: next.sent.map(call => ({ ...call, value: call.value.toString() })) } });
+    expect(f.calls.filter(call => call.path.endsWith('/submissions'))).toHaveLength(0);
+  });
+
+  it('a close that races an approval completes the approval, not a cancel', async () => {
+    const f = createWalletReviewsFixture(), reviews = f.reviews(); f.undecided(); f.observed(f.observedOperation('confirmed'));
+    // Approved on the page, its callback lost with the close.
+    const adapter = signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews },
+      { approve: async () => { f.approve(); return null; } });
+    await expect(adapter.submitToReviewer({ account: f.safe, calls: f.sent.map(call => ({ chainId: 8453, ...call })) })).resolves.toBe(f.transactionHash);
+    expect(f.cancellations()).toBe(0);
+    expect(f.calls.filter(call => call.path.endsWith('/submissions'))).toHaveLength(1);
+    // Approved between the read and the withdrawal: Signa refuses the cancel and the approval is read again.
+    const g = createWalletReviewsFixture(), raced = g.reviews(); g.undecided(); g.approveOnCancel();
+    await raced.prepareReview({ chainId: 8453, calls: g.sent });
+    expect((await raced.cancelReview()).status).toBe('approved');
+    expect(g.cancellations()).toBe(1);
+    expect(raced.pendingReview()!.status).toBe('approved');
   });
 
   it('prepareSignature sends the raw request and never a model', async () => {

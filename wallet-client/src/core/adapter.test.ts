@@ -13,13 +13,14 @@ const status = (value: string, observation?: unknown): Status => ({ status: valu
 const receipt = (hash: `0x${string}`, canonical = true) => ({ state: "confirmed", operationHash, transactionHash: hash,
   receipt: { transactionHash: hash, canonical } });
 
-function setup(input: { approve?: string | null; complete?: Status; submit?: Status; refreshes?: Status[]; pending?: Status | null } = {}) {
+function setup(input: { approve?: string | null; complete?: Status; submit?: Status; refreshes?: Status[]; pending?: Status | null; cancel?: Status } = {}) {
   const refreshes = [...(input.refreshes ?? [])];
   const reviews = {
     prepareReview: vi.fn(async () => status("reviewing")),
     completeReview: vi.fn(async () => input.complete ?? status("approved")),
     submitReview: vi.fn(async () => input.submit ?? status("confirming", receipt(transactionHash))),
     refreshReview: vi.fn(async () => refreshes.shift() ?? status("pending")),
+    cancelReview: vi.fn(async () => input.cancel ?? status("cancelled")),
     pendingReview: vi.fn(() => input.pending ?? null),
     clearReview: vi.fn(),
     prepareSignature: vi.fn(async () => ({ status: "reviewing", approvalUrl })),
@@ -65,6 +66,9 @@ describe("signaWalletAdapter", () => {
     await expect(closed.adapter.submitToReviewer!({ account, calls: [call] })).rejects.toMatchObject({ code: 4001 });
     expect(closed.reviews.completeReview).not.toHaveBeenCalled();
     expect(closed.reviews.submitReview).not.toHaveBeenCalled();
+    // Withdrawn on Signa and cleared here, so the next call set prepares at once.
+    expect(closed.reviews.cancelReview).toHaveBeenCalled();
+    expect(closed.reviews.clearReview).toHaveBeenCalled();
     const cancelled = setup({ complete: status("cancelled") });
     await expect(cancelled.adapter.submitToReviewer!({ account, calls: [call] })).rejects.toMatchObject({ code: 4001 });
     expect(cancelled.reviews.clearReview).toHaveBeenCalled();
@@ -103,6 +107,9 @@ describe("signaWalletAdapter", () => {
     expect(reviews.prepareSignature).toHaveBeenLastCalledWith({ kind: "message", chainId: 8453, message: "hello" });
     reviews.completeSignature.mockResolvedValueOnce({ status: "cancelled", approvalUrl } as never);
     await expect(adapter.signMessage("again")).rejects.toMatchObject({ code: 4001 });
+    const closed = setup({ approve: null });
+    await expect(closed.adapter.signMessage("hello")).rejects.toMatchObject({ code: 4001, message: "The review was closed. Nothing was signed." });
+    expect(closed.reviews.completeSignature).not.toHaveBeenCalled();
   });
 
   test("refuses what Signa does not take from an app", async () => {

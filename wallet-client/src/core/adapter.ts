@@ -62,7 +62,7 @@ export function signaWalletAdapter(
   // A review in progress always names its page.
   const approved = async (approvalUrl: string | null) => {
     const callback = await options.approve(approvalUrl!);
-    if (callback === null) throw rejected("The review was closed. Nothing was sent.");
+    if (callback === null) throw rejected("The review was closed. Nothing was signed.");
     return callback;
   };
   const sign = async (request: Parameters<ReturnType<SignaAdapterWallet["reviews"]>["prepareSignature"]>[0]) => {
@@ -94,10 +94,16 @@ export function signaWalletAdapter(
       if (earlier && isSettledPayment((isSettledPayment(earlier.status) ? earlier : await reviews.refreshReview()).status))
         reviews.clearReview();
       let status = await reviews.prepareReview({ chainId, calls: calls.map(({ to, data, value }) => ({ to, data, value })) });
-      if (status.status === "reviewing") status = await reviews.completeReview(await approved(status.approvalUrl));
+      let callback: string | null = "";
+      if (status.status === "reviewing") {
+        callback = await options.approve(status.approvalUrl!);
+        // A page closed without a decision is withdrawn on Signa so the next call set needn't wait for it,
+        // unless an approval raced the close: that one is read back and sent.
+        status = callback === null ? await reviews.cancelReview() : await reviews.completeReview(callback);
+      }
       if (status.status === "cancelled") {
         reviews.clearReview();
-        throw rejected("The review was cancelled. Nothing was sent.");
+        throw rejected(callback === null ? "The review was closed. Nothing was sent." : "The review was cancelled. Nothing was sent.");
       }
       if (status.status === "approved") status = await reviews.submitReview();
       for (let wait = 0; ; wait++) {
