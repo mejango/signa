@@ -8,7 +8,7 @@ import { decodeSafe7579Execution } from '../smartAccounts/accountExecution.js';
 import { recognizeWalletV6UsdcPayment } from '../userOperations/semantics.js';
 import type { WalletPaymentCentralPublic, WalletReviewedCallsCentralPublic } from '../wallet/paymentPublic.js';
 import { ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, REVIEWED_CALLS_KIND,
-  reviewedCallRefusal, type CallSource } from '../userOperations/reviewedCallRules.js';
+  reviewedCallRefusal, tokenAmountOf, type CallSource } from '../userOperations/reviewedCallRules.js';
 import { SIGNA_HOME_CHAIN_ID, signaChainName, signaChains } from '../wallet/chains.js';
 import { chainRpcBatch } from './chainRpc.js';
 
@@ -26,7 +26,7 @@ const cancelPrompt = element<HTMLButtonElement>('payment-prompt-cancel'), retry 
 const returnToApp = element<HTMLAnchorElement>('payment-return'), notice = element('payment-notice'), gasRow = element('payment-gas');
 let id = '', rpId = '';
 type Review = WalletPaymentCentralPublic | WalletReviewedCallsCentralPublic;
-let review: Review | null = null, immutable = '', busy = false, blocked = false;
+let review: Review | null = null, immutable = '', busy = false, blocked = false, readingTokens = false;
 let uncertain = false, canRetry = false, nativePrompt: AbortController | null = null;
 // Framed inside an app's page, this page decides the approval while the app controls what surrounds
 // it. The approve button therefore works only while the frame is large enough to show the payment
@@ -77,7 +77,7 @@ function expired() { return !!review && review.expiresAtMs <= Date.now(); }
 const unfunded = () => review?.gas.payer === 'account' && !review.gas.funded;
 function render() {
   const actionable = review?.status === 'pending' && !expired() && !uncertain && !blocked && status.dataset.state === 'ready';
-  approve.hidden = !actionable || unfunded(); approve.disabled = busy || frameTooSmall() || !approveVisible;
+  approve.hidden = !actionable || unfunded(); approve.disabled = busy || readingTokens || frameTooSmall() || !approveVisible;
   cancel.hidden = !actionable; cancel.disabled = busy;
   cancelPrompt.hidden = !nativePrompt;
   retry.hidden = !canRetry || busy || blocked;
@@ -130,30 +130,17 @@ function checkCalls(value: WalletReviewedCallsCentralPublic, operation: ReturnTy
     const entry = record((modeled as unknown[])[index]), source = record((sources as unknown[])[index]), fn = (functions as unknown[])[index];
     if (!exact(record((listed as unknown[])[index])) || !exact(entry) || reviewedCallRefusal(operation.sender, { to: call.target, data: call.callData })) fail();
     if (entry.contractName !== null) text(entry.contractName, 256);
-    if (!Array.isArray(entry.warnings) || entry.warnings.length > 16 || !Array.isArray(entry.tokenAmounts) || entry.tokenAmounts.length > 1) fail();
+    if (!Array.isArray(entry.warnings) || entry.warnings.length > 16) fail();
     for (const warning of entry.warnings as unknown[]) { const { code, text: line } = record(warning); text(code, 64); text(line, 512); }
-    if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || (entry.tokenAmounts as unknown[]).length || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return; }
+    if (source.source === 'raw') { if (fn !== null || entry.functionName !== null || !['no-abi', 'lookup-failed'].includes(source.lookup as string)) fail(); return; }
     if (source.source !== 'etherscan' && source.source !== 'first-party') fail();
     const found = exactFunction(source.source === 'etherscan' ? source.abi : [fn], call.callData as Hex);
     if (!found || found.item.name !== entry.functionName) fail();
-    for (const amount of entry.tokenAmounts as unknown[]) boundAmount(amount, call, found!);
   });
 }
-type Found = NonNullable<ReturnType<typeof exactFunction>>;
-/** A served token amount, bound to the decoded call: native ETH is the value of a call whose `token` argument is the
- * native token; any other token is the call's destination or its `token` argument, and its amount one of the call's
- * integer arguments. Only which token and amount come from the server, never decimals or a symbol. */
-function boundAmount(served: unknown, call: { target: string; value: string }, found: Found) {
-  const { token, amount } = record(served), value = BigInt(decimal(amount));
-  const position = found.item.inputs.findIndex((input, at) => /^u?int/.test(input.type) && found.args[at] === value);
-  const at = found.item.inputs.findIndex(input => input.name === 'token'), named = String(found.args[at] ?? '').toLowerCase();
-  if (token === 'native') return value === BigInt(call.value) && named === '0x000000000000000000000000000000000000eeee' ? { token, value, position } : fail();
-  const listed = address(token).toLowerCase();
-  return position >= 0 && (listed === call.target.toLowerCase() || listed === named) ? { token: listed, value, position } : fail();
-}
 /** Each token's decimals and symbol, read by this page from Base's public RPC in one batch. Null where a read failed. */
-async function readTokens(tokens: string[]): Promise<Map<string, { decimals: number; symbol: string | null } | null>> {
-  const read = new Map<string, { decimals: number; symbol: string | null } | null>(tokens.map(token => [token, null]));
+async function readTokens(tokens: string[]): Promise<Map<string, { decimals: number; symbol: string } | null>> {
+  const read = new Map<string, { decimals: number; symbol: string } | null>(tokens.map(token => [token, null]));
   if (!tokens.length) return read;
   try {
     const rpc = signaChains.find(chain => chain.chainId === SIGNA_HOME_CHAIN_ID)!.publicRpc;
@@ -163,9 +150,9 @@ async function readTokens(tokens: string[]): Promise<Map<string, { decimals: num
     tokens.forEach((token, index) => {
       const decimals = results[1 + 2 * index], symbol = results[2 + 2 * index];
       if (typeof decimals !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(decimals) || BigInt(decimals) > 255n) return;
-      let name: string | null = null;
-      try { [name] = decodeAbiParameters([{ type: 'string' }], symbol as Hex); } catch { /* No readable symbol: the amount names the token's address. */ }
-      read.set(token, { decimals: Number(BigInt(decimals)), symbol: name && /^[\x21-\x7e]{1,16}$/.test(name) ? name : null });
+      let name = '';
+      try { [name] = decodeAbiParameters([{ type: 'string' }], symbol as Hex); } catch { /* An unreadable symbol leaves the token unread. */ }
+      if (/^[\x21-\x7e]{1,16}$/.test(name)) read.set(token, { decimals: Number(BigInt(decimals)), symbol: name });
     });
   } catch { /* Every token stays unread: amounts show in base units with a warning. */ }
   return read;
@@ -267,11 +254,11 @@ function showCalls(value: WalletReviewedCallsCentralPublic) {
     sourceLine.dataset.source = source.source; item.append(sourceLine);
     if (BigInt(call.value)) item.append(line('call-line', `Sends ${formatUnits(BigInt(call.value), 18)} ETH`));
     const prefix = calls.length > 1 ? `Call ${index + 1}: ` : '';
-    const amounts = found ? entry.tokenAmounts.map(amount => boundAmount(amount, call, found)) : [];
+    const amount = found && tokenAmountOf(found.item, found.args, call.target);
     found?.item.inputs.forEach((input, position) => {
-      const name = input.name || `#${position}`, amount = amounts.find(bound => bound.position === position);
-      const node = item.appendChild(line('call-line', `${name}: ${amount ? amount.token === 'native' ? `${formatUnits(amount.value, 18)} ETH` : 'reading token' : show(found.args[position])}`));
-      if (amount && amount.token !== 'native') pending.push({ node, name, token: amount.token, value: amount.value, prefix });
+      const name = input.name || `#${position}`, value = found.args[position], counted = amount?.position === position && typeof value === 'bigint';
+      const node = item.appendChild(line('call-line', `${name}: ${counted ? amount.token === 'native' ? `${formatUnits(value, 18)} ETH` : 'reading token' : show(value)}`));
+      if (counted && amount.token !== 'native') pending.push({ node, name, token: amount.token, value, prefix });
     });
     if (!found && call.callData !== '0x') item.append(line('call-line', `Calldata: ${call.callData}`));
     if (source.source === 'raw' && call.callData !== '0x')
@@ -287,14 +274,16 @@ function showCalls(value: WalletReviewedCallsCentralPublic) {
   };
   showWarnings(); element('payment-calls').hidden = false;
   // Amounts format with what this page reads from the chain; a token it can't read shows base units, never a lookalike number.
+  // Approval waits for them (five seconds at most), so the passkey never signs over an amount still being read.
+  readingTokens = pending.length > 0; render();
   void readTokens([...new Set(pending.map(amount => amount.token))]).then(read => {
     for (const { node, name, token, value, prefix } of pending) {
       const info = read.get(token);
-      node.textContent = `${name}: ${info ? `${formatUnits(value, info.decimals)} ${info.symbol ?? `of token ${token}`}` : `${value} base units`}`;
+      node.textContent = `${name}: ${info ? `${formatUnits(value, info.decimals)} ${info.symbol}` : `${value} base units`}`;
       if (!info && !warnings.some(warning => warning.text.startsWith(`${prefix}${DECIMALS_UNREAD}`)))
         warnings.push({ code: 'decimals-unknown', text: `${prefix}${DECIMALS_UNREAD}` });
     }
-    showWarnings();
+    showWarnings(); readingTokens = false; render();
   });
   for (const terms of document.querySelectorAll<HTMLElement>('.payment-terms')) terms.hidden = true;
   document.querySelector('h1')!.textContent = 'Review transaction'; approve.textContent = 'Approve';

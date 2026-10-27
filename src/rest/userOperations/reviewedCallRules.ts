@@ -47,3 +47,21 @@ export function exactFunction(abi: unknown, data: Hex): { item: AbiFunction; arg
     return encodeFunctionData({ abi: [item], functionName: item.name, args }).toLowerCase() === data.toLowerCase() ? { item, args } : null;
   } catch { return null; }
 }
+
+const NATIVE_TOKEN = "0x000000000000000000000000000000000000eeee";
+// The SDK review's token-amount rule (its TOKEN_CALLS and terminal pay/addToBalanceOf), keyed by exact signature, which
+// the selector binds; argument names are not. A parity test holds this to the SDK's.
+const TOKEN_AMOUNTS: Record<string, { token?: number; amount: number }> = {
+  "approve(address,uint256)": { amount: 1 }, "increaseAllowance(address,uint256)": { amount: 1 }, "transfer(address,uint256)": { amount: 1 },
+  "transferFrom(address,address,uint256)": { amount: 2 }, "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)": { amount: 2 },
+  "approve(address,address,uint160,uint48)": { token: 0, amount: 2 },
+  "pay(uint256,address,uint256,address,uint256,string,bytes)": { token: 1, amount: 2 },
+  "addToBalanceOf(uint256,address,uint256,bool,string,bytes)": { token: 1, amount: 2 },
+};
+/** The token a decoded call's amount counts (lowercase, or "native") and that amount's argument position; null when it moves none. */
+export function tokenAmountOf(item: AbiFunction, args: readonly unknown[], target: string): { token: string; position: number } | null {
+  const shape = TOKEN_AMOUNTS[`${item.name}(${item.inputs.map(input => input.type).join(",")})`];
+  if (!shape) return null;
+  const token = String(shape.token === undefined ? target : args[shape.token]).toLowerCase();
+  return { token: token === NATIVE_TOKEN ? "native" : token, position: shape.amount };
+}

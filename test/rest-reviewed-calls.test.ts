@@ -8,6 +8,7 @@ import { chromium, type Browser, type Page } from 'playwright';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeAbiParameters, encodeFunctionData, erc20Abi, padHex, parseAbi, toFunctionSelector, type Abi, type Address, type Hex } from 'viem';
 import { getJBContractAddress, jbControllerAbi, jbMultiTerminalAbi, jbPermissionsAbi } from '@bananapus/nana-sdk-core';
+import { buildReviewModel } from '@bananapus/nana-sdk-core/review';
 import { Hono } from 'hono';
 import { createRestApp, type RestDependencies } from '../src/rest/app.js';
 import type { RestPrincipal } from '../src/rest/auth/store.js';
@@ -19,7 +20,7 @@ import { getUserOperationHash, normalizeUserOperation, userOperationMaximumCost 
 import { etherscanAbiSource } from '../src/rest/userOperations/etherscanAbi.js';
 import { recognizeReviewedCalls, REVIEWED_CALLS_KIND, REVIEWED_CALLS_OPERATION, reviewCalls, reviewedCallsView, verifyReviewedCallsEffects,
   type CallSource, type EtherscanAbiSource, type SignaCall } from '../src/rest/userOperations/reviewedCalls.js';
-import { ETHERSCAN_SOURCE_LINE, LOOKUP_FAILED_LINE, RAW_CALL_WARNING } from '../src/rest/userOperations/reviewedCallRules.js';
+import { ETHERSCAN_SOURCE_LINE, exactFunction, LOOKUP_FAILED_LINE, RAW_CALL_WARNING, tokenAmountOf } from '../src/rest/userOperations/reviewedCallRules.js';
 import { createWalletPaymentReviewDraft, validateWalletPaymentReviewDraft, verifyWalletPaymentReviewProof,
   walletReviewFromStored, walletReviewToStored, type WalletPaymentReviewContext } from '../src/rest/wallet/paymentReviews.js';
 import { Ajv2020 } from 'ajv/dist/2020.js';
@@ -266,7 +267,7 @@ describe('reviewed calls approval page', () => {
   let server: Server, browser: Browser, page: Page, origin: string, html: string, css: string, script: string;
   let review: WalletReviewedCallsCentralPublic;
   // Base's public RPC as the page reads it, stubbed: each token's decimals and symbol, or a failed decimals read. Never the live RPC.
-  let tokens: Record<string, { decimals: number | 'fail'; symbol: string }> = {};
+  let tokens: Record<string, { decimals: number | 'fail'; symbol: string }> = {}, rpcDelayMs = 0;
   const reviewId = '77777777-7777-4777-8777-777777777777';
   const status = (value: string) => expect.poll(() => page.locator('#payment-status').getAttribute('data-state')).toBe(value);
   beforeAll(async () => {
@@ -322,6 +323,7 @@ describe('reviewed calls approval page', () => {
     await page.route('https://mainnet.base.org/**', async route => {
       const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type' };
       if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+      await new Promise(resolve => setTimeout(resolve, rpcDelayMs));
       const batch = route.request().postDataJSON() as { id: number; method: string; params: [{ to: string; data: string }] }[];
       await route.fulfill({ headers: cors, contentType: 'application/json', body: JSON.stringify(batch.map(({ id, method, params }) => {
         if (method === 'eth_chainId') return { jsonrpc: '2.0', id, result: '0x2105' };
@@ -333,7 +335,7 @@ describe('reviewed calls approval page', () => {
     });
     await page.goto(`${origin}/wallet/payment?review=${reviewId}`);
   }
-  beforeEach(async () => { await page?.close(); tokens = { [usdtLike.toLowerCase()]: { decimals: 6, symbol: 'USDT' } }; });
+  beforeEach(async () => { await page?.close(); tokens = { [usdtLike.toLowerCase()]: { decimals: 6, symbol: 'USDT' } }; rpcDelayMs = 0; });
 
   it('describes an ETH pay, an ERC-20 pay with a USDT-style reset, a cash out, queueRulesetsOf, setSplitGroupsOf and setPermissionsFor with admin warnings first', async () => {
     const calls: SignaCall[] = [
@@ -393,19 +395,56 @@ describe('reviewed calls approval page', () => {
     expect(warnings.filter(text => /decimals/.test(text))).toEqual(["Couldn't read this token's decimals, so its amount shows in base units."]);
   });
 
-  it('ignores decimals and a symbol the server supplies, and refuses an amount the bytes do not carry', async () => {
+  it('ignores decimals, a symbol and argument names the server supplies', async () => {
     const approve = encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [terminal, 2_000_000n] });
+    tokens[terminal.toLowerCase()] = { decimals: 18, symbol: 'WETH' };
     await serve([{ to: usdtLike, value: 0n, data: approve }]);
-    const served = review.reviewedCalls.model.calls[0]!;
-    served.tokenAmounts = [{ ...served.tokenAmounts[0]!, decimals: 18, symbol: 'FAKE' } as typeof served.tokenAmounts[0]];
+    Object.assign(review.reviewedCalls.model.calls[0]!, { decimals: 18, symbol: 'FAKE', tokenAmounts: [{ token: terminal, amount: '2000000', decimals: 18, symbol: 'FAKE' }] });
+    // Renaming the spender `token` keeps the selector; the token is still the destination, by signature.
+    const fn = review.reviewedCalls.functions[0]!;
+    review.reviewedCalls.functions[0] = { ...fn, inputs: [{ ...fn.inputs[0]!, name: 'token' }, fn.inputs[1]!] };
     await open(); await status('ready');
     await expect.poll(() => page.locator('#payment-calls').textContent()).toContain('amount: 2 USDT');
-    expect(await page.locator('#payment-calls').textContent()).not.toContain('FAKE');
+    expect(await page.locator('#payment-calls').textContent()).not.toMatch(/FAKE|WETH/);
     await page.close();
-    for (const tokenAmounts of [[{ token: usdtLike, amount: '3000000' }], [{ token: other, amount: '2000000' }], [{ token: 'native', amount: '2000000' }]]) {
-      await serve([{ to: usdtLike, value: 0n, data: approve }]);
-      review.reviewedCalls.model.calls[0]!.tokenAmounts = tokenAmounts as typeof served.tokenAmounts;
-      await open(); await status('error'); await page.close();
+    // The amount is the signature's amount argument, not whichever argument holds the same number.
+    await serve([{ to: terminal, value: 0n, data: encodeFunctionData({ abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, usdtLike, 7n, account, 0n, '', '0x'] }) }]);
+    await open(); await status('ready');
+    await expect.poll(() => page.locator('#payment-calls').textContent()).toContain('amount: 0.000007 USDT');
+    expect(await page.locator('#payment-calls').textContent()).toContain('projectId: 7');
+  });
+
+  it('an unreadable symbol is a failed read, and approval waits for the reads', async () => {
+    tokens[usdtLike.toLowerCase()]!.symbol = '';
+    rpcDelayMs = 1500;
+    await serve([{ to: usdtLike, value: 0n, data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [terminal, 2_000_000n] }) }]);
+    await open(); await status('ready');
+    expect(await page.locator('#payment-approve').isDisabled()).toBe(true);
+    await expect.poll(() => page.locator('#payment-calls').textContent()).toContain('amount: 2000000 base units');
+    expect(await page.locator('#payment-warnings').textContent()).toContain("Couldn't read this token's decimals");
+    expect(await page.locator('#payment-approve').isDisabled()).toBe(false);
+  });
+
+  it("matches the SDK's token amounts for every signature the page formats", () => {
+    const permit2 = parseAbi(['function approve(address token,address spender,uint160 amount,uint48 expiration)']);
+    const permit = parseAbi(['function permit(address owner,address spender,uint256 value,uint256 deadline,uint8 v,bytes32 r,bytes32 s)']);
+    const increase = parseAbi(['function increaseAllowance(address spender,uint256 addedValue)']);
+    const cases: { abi: Abi; functionName: string; args: readonly unknown[]; value?: bigint }[] = [
+      { abi: erc20Abi, functionName: 'approve', args: [terminal, 5n] }, { abi: increase, functionName: 'increaseAllowance', args: [terminal, 5n] },
+      { abi: erc20Abi, functionName: 'transfer', args: [other, 5n] }, { abi: erc20Abi, functionName: 'transferFrom', args: [account, other, 5n] },
+      { abi: permit, functionName: 'permit', args: [account, terminal, 5n, 9n, 27, padHex('0x1', { size: 32 }), padHex('0x2', { size: 32 })] },
+      { abi: permit2, functionName: 'approve', args: [usdtLike, terminal, 5n, 9] },
+      { abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, usdtLike, 5n, account, 0n, '', '0x'] },
+      { abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, nativeToken, 5n, account, 0n, '', '0x'], value: 5n },
+      { abi: jbMultiTerminalAbi, functionName: 'addToBalanceOf', args: [7n, usdtLike, 5n, false, '', '0x'] },
+    ];
+    for (const { abi, functionName, args, value } of cases) {
+      const data = encodeFunctionData({ abi, functionName, args } as never);
+      const [call] = buildReviewModel({ kind: 'transaction', title: 't', calls: [{ chainId: 8453, to: usdtLike, data, value: value ?? 0n, abi, functionName, args }] }).calls;
+      const found = exactFunction(abi.filter(item => item.type === 'function' && item.name === functionName), data)!;
+      const page = tokenAmountOf(found.item, found.args, usdtLike)!;
+      const sdk = call!.tokenAmounts[0]!;
+      expect({ token: page.token, amount: found.args[page.position] }, `${functionName}`).toEqual({ token: sdk.token === 'native' ? 'native' : sdk.token.toLowerCase(), amount: sdk.amount });
     }
   });
 

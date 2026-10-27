@@ -71,9 +71,7 @@ export function reviewedCallsView(review: ReviewedCallsReview, account: Address)
   const decoded = decodedCalls(review, account), model = reviewedCallsModel(review, account);
   return {
     model: { id: model.id, calls: model.calls.map(call => ({ to: call.to, value: call.value.toString(), data: call.data,
-      contractName: call.contractName, functionName: call.functionName, warnings: call.warnings.map(warning => ({ ...warning })),
-      // Which token and amount only: the page reads each token's decimals and symbol from the chain itself.
-      tokenAmounts: call.tokenAmounts.map(({ token, amount }) => ({ token, amount: amount.toString() })) })) },
+      contractName: call.contractName, functionName: call.functionName, warnings: call.warnings.map(warning => ({ ...warning })) })) },
     functions: decoded.map(call => (call.abi?.[0] as AbiFunction | undefined) ?? null),
   };
 }
