@@ -1,5 +1,6 @@
 import { abiParameterJsonSchema } from "../contracts/catalog.js";
 import { ALL_BOT_SCOPES } from "../auth/index.js";
+import { REVIEWED_SIGNATURE_REFUSALS } from "../userOperations/reviewedSignatureRules.js";
 
 export type Schema = Record<string, unknown>;
 export const ref = (name: string): Schema => ({ $ref: `#/components/schemas/${name}` });
@@ -56,6 +57,8 @@ export function sharedSchemas(chainIds: readonly number[]): Record<string, Schem
     Problem: object({
       type: { type: "string", format: "uri" }, title: text, status: { type: "integer", minimum: 400, maximum: 599 },
       detail: text, code: text, requestId: text, retryable: boolean, payFailure: ref("PayFailure"),
+      refusal: { type: "string", enum: [...REVIEWED_SIGNATURE_REFUSALS],
+        description: "Why a signature review was refused before it existed (REVIEWED_SIGNATURE_REFUSED). Nothing was signed." },
     }, ["type", "title", "status", "detail", "code", "requestId", "retryable"]),
     PayFailure: { ...object({ reason: text, received: { ...text, pattern: "^(0|[1-9][0-9]*)$" }, minimum: { ...text, pattern: "^(0|[1-9][0-9]*)$" }, message: text },
       ["reason", "message"]), description: "Why one payment attempt reverts or reverted, decoded from its revert data only; advisory, never authority. It describes only the enclosing refused request or the reverted operation that carries it: never carry it to another payment or a later attempt, and its absence means the reason is unknown. `reason` is a stable SDK code and `message` its fixed sentence. `received` and `minimum` (uint256 integer strings, in the failing check's own units: project tokens for a terminal or buyback minimum, the converted token for a router conversion) are set only for a shortfall. Only a terminal or buyback minimum the payer set can be relaxed; a derived price floor or a conversion is not. Any changed minimum needs a fresh preparation, simulation and owner review. Its presence neither cancels an approval nor proves the operation was never sent. Present on a refused preparation or submission, and on a reverted operation's `observation`." },

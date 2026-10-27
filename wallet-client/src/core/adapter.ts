@@ -1,7 +1,8 @@
 import type { Address, Hex, TypedDataDefinition } from "viem";
 import type { createCenterWalletClient } from "../../../src/rest/client/wallet-package.js";
 import { isSettledPayment } from "../../../src/rest/client/paymentStates.js";
-import { SIGNA_HOME_CHAIN_ID } from "../../../src/rest/wallet/chains.js";
+import { SIGNA_HOME_CHAIN_ID, signaChainName } from "../../../src/rest/wallet/chains.js";
+import type { ReviewedSignatureRefusal } from "../../../src/rest/userOperations/reviewedSignatureRules.js";
 
 /** The slice of a Signa wallet client the adapter needs (`createCenterWalletClient` satisfies it). */
 export type SignaAdapterWallet = {
@@ -36,12 +37,22 @@ const rejected = (message: string) => failure(message, 4001);
 const unsupported = (message = "This wallet request is not supported.") => failure(message, 4200);
 /** Refusals Signa states about the request itself, before any review of it exists: nothing can be sent or signed. */
 const refusedBeforeReview = ["REVIEWED_CALLS_REFUSED", "REVIEWED_CALLS_INPUT", "REVIEWED_SIGNATURE_REFUSED", "REVIEWED_SIGNATURE_INPUT"];
-const preparing = async <T>(work: Promise<T>): Promise<T> => {
+/** The line an app shows for a signature Signa refused before reviewing it, by its reason. */
+const signatureRefused = (refusal: unknown, chainId: number) =>
+  ({
+    "account-not-deployed": `Your Signa account isn't on ${signaChainName(chainId)} yet.`,
+    "owners-diverged": `Your Signa account on ${signaChainName(chainId)} needs an update first.`,
+    "chain-mismatch": "This request names another network.",
+    "account-self-administration": "Signa doesn't sign changes to your account for apps.",
+  } satisfies Record<ReviewedSignatureRefusal, string> as Record<string, string>)[String(refusal)] ?? "Signa can't sign this request.";
+const preparing = async <T>(work: Promise<T>, chainId?: number): Promise<T> => {
   try {
     return await work;
   } catch (error) {
-    const { code, message } = (error ?? {}) as { code?: unknown; message?: string };
-    if (typeof code === "string" && refusedBeforeReview.includes(code)) throw Object.assign(rejected(message ?? "Signa refused this."), { cause: error });
+    const { code, message, refusal } = (error ?? {}) as { code?: unknown; message?: string; refusal?: unknown };
+    if (typeof code === "string" && refusedBeforeReview.includes(code))
+      throw Object.assign(rejected(code === "REVIEWED_SIGNATURE_REFUSED" && chainId !== undefined ? signatureRefused(refusal, chainId)
+        : message ?? "Signa refused this."), { cause: error });
     throw error;
   }
 };
@@ -73,7 +84,7 @@ export function signaWalletAdapter(
 ): SignaWalletAdapter {
   const sign = async (request: Parameters<ReturnType<SignaAdapterWallet["reviews"]>["prepareSignature"]>[0]) => {
     const reviews = wallet.reviews();
-    let status = await preparing(reviews.prepareSignature(request));
+    let status = await preparing(reviews.prepareSignature(request), request.chainId);
     let callback: string | null = "";
     if (status.status === "reviewing") {
       // A review in progress always names its page. A page closed without its callback is withdrawn on

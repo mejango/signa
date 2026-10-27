@@ -58,9 +58,12 @@ export type ClientOptions = {
 export class RestClientError extends Error {
   /** Why this refused payment attempt would revert, when its calls say. Advisory and for this attempt only; a changed minimum needs a fresh preparation and review. */
   readonly payFailure?: PayFailure;
-  constructor(readonly code: string, message: string, readonly status?: number, payFailure?: PayFailure) {
+  /** Why Signa refused a request before reviewing it, as a bounded token (for example "account-not-deployed"). */
+  readonly refusal?: string;
+  constructor(readonly code: string, message: string, readonly status?: number, payFailure?: PayFailure, refusal?: string) {
     super(message); this.name = "RestClientError";
     if (payFailure) this.payFailure = payFailure;
+    if (refusal) this.refusal = refusal;
   }
 }
 function invalid(message: string): never { throw new RestClientError("INVALID_INPUT", message); }
@@ -233,7 +236,8 @@ export class SignedRestClient {
           const code = error && typeof error === "object" && "code" in error
             && typeof error.code === "string" && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : "REQUEST_FAILED";
           throw new RestClientError(code, `The service rejected this request (${response.status}, ${code})`, response.status,
-            error && typeof error === "object" && "payFailure" in error ? this.config.payFailure?.(error.payFailure) : undefined);
+            error && typeof error === "object" && "payFailure" in error ? this.config.payFailure?.(error.payFailure) : undefined,
+            error && typeof error === "object" && "refusal" in error && typeof error.refusal === "string" && /^[a-z0-9-]{1,40}$/.test(error.refusal) ? error.refusal : undefined);
         }
         return result as T;
       } catch (error) {

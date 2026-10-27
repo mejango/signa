@@ -692,6 +692,23 @@ describe('Signa reviews of any call set and signature', () => {
     expect(error!.code).not.toBe(4001);
   });
 
+  it('an Optimism signature for a Base-only account is refused with a chain-specific line, not a generic error', async () => {
+    const mail = { domain: { name: 'Mail', chainId: 10, verifyingContract: '0x9999999999999999999999999999999999999999' as const },
+      types: { Mail: [{ name: 'contents', type: 'string' }] }, primaryType: 'Mail' as const, message: { contents: 'hi' } };
+    for (const [reason, message] of [
+      ['account-not-deployed', "Your Signa account isn't on Optimism yet."],
+      ['owners-diverged', 'Your Signa account on Optimism needs an update first.'],
+      ['chain-mismatch', 'This request names another network.'],
+      ['account-self-administration', "Signa doesn't sign changes to your account for apps."],
+      [undefined, "Signa can't sign this request."],
+    ] as const) {
+      const f = createWalletReviewsFixture(), reviews = f.reviews(); f.signatures(); f.refuse(422, 'REVIEWED_SIGNATURE_REFUSED', reason);
+      const adapter = signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews }, { approve: async () => null });
+      // Nothing was signed, so it stays a rejection, with a line the app can show.
+      await expect(adapter.signTypedData(mail)).rejects.toMatchObject({ code: 4001, message });
+    }
+  });
+
   it('a signature review past its window is reconciled before the same request is asked again', async () => {
     const posts = (f: ReturnType<typeof createWalletReviewsFixture>) => f.calls.filter(call => call.path === '/api/v1/wallet/signature-reviews').length;
     // Expired and never approved: the same request prepares a fresh review.

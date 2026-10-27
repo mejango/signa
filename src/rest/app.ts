@@ -1384,7 +1384,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       throw new RestError(403, 'USER_OPERATION_APP_CHAIN_UNAVAILABLE', "Signa accounts don't sign on this network.");
     const owner = actor(principal), account = getAddress(owner.accountId.split(':')[2]!);
     const review = await reviewSignature({ account, request, chain, abis: reviewed.abis });
-    if (!review.ok) throw new RestError(422, 'REVIEWED_SIGNATURE_REFUSED', signatureRefused[review.refusal]);
+    if (!review.ok) throw new RestError(422, 'REVIEWED_SIGNATURE_REFUSED', signatureRefused[review.refusal], { refusal: review.refusal });
     const view = await service.prepareSignature(owner, { review: review.review, state: body.state, ...(body.id === undefined ? {} : { id: body.id }) }, idempotency(principal));
     return response(context, publicWalletPaymentReview(view), 201);
   });
