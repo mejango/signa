@@ -25,6 +25,7 @@ function setup(input: { approve?: string | null; complete?: Status; submit?: Sta
     clearReview: vi.fn(),
     prepareSignature: vi.fn(async () => ({ status: "reviewing", approvalUrl })),
     completeSignature: vi.fn(async () => ({ status: "approved", approvalUrl, signature: "0xabcd" as `0x${string}` })),
+    refreshSignature: vi.fn(async () => ({ status: "reviewing", approvalUrl })),
   };
   const wallet = { restoreConnection: () => ({ address: account }), reviews: () => reviews };
   const approve = vi.fn(async () => (input.approve === undefined ? callbackUrl : input.approve));
@@ -76,10 +77,28 @@ describe("signaWalletAdapter", () => {
   });
 
   test("an outcome Signa cannot prove sent or unsent is never a rejection", async () => {
+    // Refused is proven unsent: the app releases the calls.
     const refused = setup({ submit: status("refused") });
-    const error = await refused.adapter.submitToReviewer!({ account, calls: [call] }).catch((caught: unknown) => caught);
-    expect(error).toMatchObject({ message: "Signa did not send this. Nothing was charged; review it again." });
-    expect((error as { code?: unknown }).code).toBeUndefined();
+    await expect(refused.adapter.submitToReviewer!({ account, calls: [call] }))
+      .rejects.toMatchObject({ code: 4001, message: "Signa did not send this. Nothing was charged; review it again." });
+    // A send Signa refused and retired is the same.
+    const retired = setup();
+    retired.reviews.submitReview.mockRejectedValueOnce(new Error("refused"));
+    retired.reviews.pendingReview.mockReturnValueOnce(null).mockReturnValue(status("refused"));
+    await expect(retired.adapter.submitToReviewer!({ account, calls: [call] })).rejects.toMatchObject({ code: 4001 });
+    expect(retired.reviews.clearReview).toHaveBeenCalled();
+    // Mined, but the account's own execution failed: never done, never unsent.
+    const reverted = setup({ submit: status("confirming", { ...receipt(transactionHash), semantic: { status: "failed" } }) });
+    const failure = await reverted.adapter.submitToReviewer!({ account, calls: [call] }).catch((caught: unknown) => caught);
+    expect(failure).toMatchObject({ message: "This ran onchain and failed, so none of it took effect.", transactionHash });
+    expect((failure as { code?: unknown }).code).toBeUndefined();
+    // A failed send Signa did not retire may have gone out.
+    const failed = setup();
+    failed.reviews.submitReview.mockRejectedValueOnce(new Error("lost"));
+    failed.reviews.pendingReview.mockReturnValue(status("unknown"));
+    const lost = await failed.adapter.submitToReviewer!({ account, calls: [call] }).catch((caught: unknown) => caught);
+    expect(lost).toMatchObject({ message: "lost" });
+    expect((lost as { code?: unknown }).code).toBeUndefined();
     const waiting = setup({ submit: status("pending") });
     const late = await waiting.adapter.submitToReviewer!({ account, calls: [call] }).catch((caught: unknown) => caught);
     expect(late).toMatchObject({ message: "Submitted. Signa is still waiting for it onchain; check its status again shortly." });

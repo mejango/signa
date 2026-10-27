@@ -656,6 +656,25 @@ describe('Signa reviews of any call set and signature', () => {
     expect(f.calls.some(call => call.path === '/api/v1/wallet/payment-reviews')).toBe(false);
   });
 
+  it('a closed signature page is read back before it is called unsigned', async () => {
+    const f = createWalletReviewsFixture(), reviews = f.reviews(); f.signatures();
+    const wallet = { restoreConnection: () => ({ address: f.safe }), reviews: () => reviews };
+    // Approved on the page, its callback lost with the close: the signature is returned.
+    await expect(signaWalletAdapter(wallet, { approve: async () => { f.approve(); return null; } }).signMessage(f.signatureRequest.message))
+      .resolves.toBe(f.accountSignature);
+    // Still undecided when closed: nothing was signed.
+    const g = createWalletReviewsFixture(), open = g.reviews(); g.signatures(); g.undecided();
+    await expect(signaWalletAdapter({ restoreConnection: () => ({ address: g.safe }), reviews: () => open }, { approve: async () => null })
+      .signMessage(g.signatureRequest.message)).rejects.toMatchObject({ code: 4001, message: 'The review was closed. Nothing was signed.' });
+    // Signa could not be read: the outcome is unknown, never a rejection.
+    const h = createWalletReviewsFixture(), lost = h.reviews(); h.signatures();
+    const error = await signaWalletAdapter({ restoreConnection: () => ({ address: h.safe }), reviews: () => ({ ...lost,
+      refreshSignature: async () => { throw new Error('offline'); } }) }, { approve: async () => null })
+      .signMessage(h.signatureRequest.message).then(() => undefined, (caught: { code?: unknown }) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error!.code).toBeUndefined();
+  });
+
   it('a review closed without Cancel lets the next different call set prepare at once', async () => {
     const f = createWalletReviewsFixture(), reviews = f.reviews(); f.undecided();
     const adapter = signaWalletAdapter({ restoreConnection: () => ({ address: f.safe }), reviews: () => reviews }, { approve: async () => null });

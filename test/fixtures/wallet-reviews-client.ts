@@ -26,7 +26,7 @@ export function createWalletReviewsFixture() {
   const signatureRequest = { kind: 'message' as const, chainId: 8453, message: 'Sign in to Beep' };
   const signatureSigning_ = signatureSigning(f.safe, signatureRequest);
   const accountSignature = `0x${'00'.repeat(20)}${'ab'.repeat(97)}` as `0x${string}`;
-  let state = '', reviewStatus = 'approved', operation: any = f.observedOperation('pending'), cancellations = 0, approveOnCancel = false, kind: 'calls' | 'signature' = 'calls';
+  let state = '', reviewStatus = 'approved', operation: any = f.observedOperation('pending'), cancellations = 0, approveOnCancel = false, refuseSubmission = false, kind: 'calls' | 'signature' = 'calls';
   const app = { origin: grant.origin, callbackUri: grant.callbackUri, grantId: grant.id, grantIncarnation: grant.incarnation };
   function view(status: string, appView: boolean) {
     const decided = { status, approvedAtMs: status === 'approved' ? f.nowMs : null, cancelledAtMs: status === 'cancelled' ? f.nowMs : null };
@@ -60,7 +60,10 @@ export function createWalletReviewsFixture() {
       if (reviewStatus === 'approved') return Response.json({ code: 'WALLET_PAYMENT_REVIEW_CONFLICT', message: 'The original payment review cannot be replaced or reused.' }, { status: 409 });
       reviewStatus = 'cancelled'; return Response.json(view('cancelled', true));
     }
-    if (path === '/api/v1/user-operations/' + f.prepared.id + '/submissions') return Response.json(operation);
+    if (path === '/api/v1/user-operations/' + f.prepared.id + '/submissions') return refuseSubmission
+      ? Response.json({ code: 'USER_OPERATION_REFUSED', message: 'The provider refused this operation before any send.' }, { status: 422 }) : Response.json(operation);
+    // Nothing claimed it: retired, never sent.
+    if (path === '/api/v1/user-operations/' + f.prepared.id + '/retirement') return Response.json({ ...structuredClone(f.prepared), state: 'retired', revision: 2 });
     if (path === '/api/v1/user-operations/' + f.prepared.id) return Response.json(operation);
     throw new Error('Unexpected request ' + path);
   }) as typeof fetch;
@@ -74,7 +77,7 @@ export function createWalletReviewsFixture() {
     callback: () => f.callbackUri + '?' + new URLSearchParams({ review: reviewId, state, iss: f.issuer }),
     signatures: () => { kind = 'signature'; }, cancel: () => { reviewStatus = 'cancelled'; }, observed: (value: any) => { operation = value; },
     /** Signa's page is open, or was closed, with no decision. */
-    undecided: () => { reviewStatus = 'pending'; }, approve: () => { reviewStatus = 'approved'; }, approveOnCancel: () => { approveOnCancel = true; }, cancellations: () => cancellations,
+    undecided: () => { reviewStatus = 'pending'; }, approve: () => { reviewStatus = 'approved'; }, approveOnCancel: () => { approveOnCancel = true; }, refuseSubmission: () => { refuseSubmission = true; }, cancellations: () => cancellations,
     /** The app's next action: another call set (a pay with other metadata), its own plan and operation. */
     nextCalls: () => { current = callSet(createWalletPaymentClientFixture(f.nowMs, '0xabcd')); return current; } };
 }

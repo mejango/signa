@@ -124,6 +124,12 @@ describe("Signa wallet API documentation", () => {
     expect(gzipSync(JSON.stringify(terms)).length).toBeLessThanOrEqual(6_144);
   });
 
+  it("declares the review cancellation's empty body as the retirement does", () => {
+    const body = (route: string) => (full.paths[route]!.post as { requestBody?: unknown }).requestBody;
+    expect(body("/api/v1/wallet/payment-reviews/{id}/cancellation")).toBeDefined();
+    expect(body("/api/v1/wallet/payment-reviews/{id}/cancellation")).toEqual(body("/api/v1/user-operations/{id}/retirement"));
+  });
+
   it("serves the wallet reference locally and redirects inherited guides to Center", async () => {
     const mount = (surface?: "wallet") => {
       const app = new Hono<JbcenterEnv>();

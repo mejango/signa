@@ -30,7 +30,7 @@ export type SignaWalletAdapter = {
 const WAITS = 6;
 const failure = (message: string, code?: number) =>
   Object.assign(new Error(message), code === undefined ? {} : { code });
-/** EIP-1193 4001: the review closed or was cancelled, so nothing was sent or signed. */
+/** EIP-1193 4001, the only error that means nothing was sent or signed: closed, cancelled, refused or expired. */
 const rejected = (message: string) => failure(message, 4001);
 /** EIP-1193 4200: a request Signa does not take from an app. */
 const unsupported = (message = "This wallet request is not supported.") => failure(message, 4200);
@@ -50,27 +50,28 @@ const json = (value: unknown): unknown =>
 /**
  * Signa as core's self-reviewing wallet: `sendReviewed` hands it the raw calls, and Signa's own page,
  * shown by `approve`, is the one confirmation. `approve` opens that page (a frame or popup the app
- * shows) and resolves the callback URL Signa sends back, or null when the person closed it. A closed or
- * cancelled review throws EIP-1193 4001: nothing was sent. A call set resolves the canonical transaction
- * hash of its UserOperationEvent, never the userOpHash, so the app waits on a real receipt. Signatures
- * go through the same page and resolve the account's ERC-1271 signature.
+ * shows) and resolves the callback URL Signa sends back, or null when the person closed it. A review
+ * closed, cancelled, refused or expired throws EIP-1193 4001: nothing was sent. A call set resolves the
+ * canonical transaction hash of its UserOperationEvent, never the userOpHash, so the app waits on a real
+ * receipt; one whose execution failed throws a plain error carrying that `transactionHash`. Signatures go
+ * through the same page and resolve the account's ERC-1271 signature.
  */
 export function signaWalletAdapter(
   wallet: SignaAdapterWallet,
   options: { approve(approvalUrl: string): Promise<string | null> },
 ): SignaWalletAdapter {
-  // A review in progress always names its page.
-  const approved = async (approvalUrl: string | null) => {
-    const callback = await options.approve(approvalUrl!);
-    if (callback === null) throw rejected("The review was closed. Nothing was signed.");
-    return callback;
-  };
   const sign = async (request: Parameters<ReturnType<SignaAdapterWallet["reviews"]>["prepareSignature"]>[0]) => {
     const reviews = wallet.reviews();
     let status = await reviews.prepareSignature(request);
-    if (status.status === "reviewing") status = await reviews.completeSignature(await approved(status.approvalUrl));
+    let callback: string | null = "";
+    if (status.status === "reviewing") {
+      // A review in progress always names its page. A page closed without its callback is read back:
+      // an approval that raced the close is the signature; a failed read is no rejection.
+      callback = await options.approve(status.approvalUrl!);
+      status = callback === null ? await reviews.refreshSignature() : await reviews.completeSignature(callback);
+    }
     if (status.status === "approved" && status.signature) return status.signature;
-    throw rejected("The signature was cancelled. Nothing was signed.");
+    throw rejected(callback === null ? "The review was closed. Nothing was signed." : "The signature was cancelled. Nothing was signed.");
   };
   return {
     kind: "self-reviewing",
@@ -105,17 +106,29 @@ export function signaWalletAdapter(
         reviews.clearReview();
         throw rejected(callback === null ? "The review was closed. Nothing was sent." : "The review was cancelled. Nothing was sent.");
       }
-      if (status.status === "approved") status = await reviews.submitReview();
+      if (status.status === "approved") {
+        try {
+          status = await reviews.submitReview();
+        } catch (error) {
+          // A send Signa refused and retired is proven unsent; any other failure may have sent it.
+          if (reviews.pendingReview()?.status !== "refused") throw error;
+          status = reviews.pendingReview()!;
+        }
+      }
       for (let wait = 0; ; wait++) {
         const receipt = status.observation?.receipt;
         if (receipt?.canonical === true && /^0x[0-9a-fA-F]{64}$/.test(receipt.transactionHash) &&
           receipt.transactionHash.toLowerCase() !== status.operationHash.toLowerCase()) {
           if (isSettledPayment(status.status)) reviews.clearReview();
+          // The bundle's receipt succeeds even when the account's own execution failed: EntryPoint says which.
+          if (status.status === "reverted" || receipt.status === "reverted" || status.observation?.semantic?.status === "failed")
+            throw Object.assign(failure("This ran onchain and failed, so none of it took effect."), { transactionHash: receipt.transactionHash });
           return receipt.transactionHash;
         }
+        // Proven never sent and never sendable: the app releases the calls.
         if (status.status === "refused" || status.status === "expired") {
           reviews.clearReview();
-          throw failure(status.status === "refused" ? "Signa did not send this. Nothing was charged; review it again."
+          throw rejected(status.status === "refused" ? "Signa did not send this. Nothing was charged; review it again."
             : "This expired before it was included onchain. Nothing was charged; review it again.");
         }
         if (wait === WAITS) throw failure("Submitted. Signa is still waiting for it onchain; check its status again shortly.");
