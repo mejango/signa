@@ -10,17 +10,18 @@ describe('published wallet package', () => {
       'ownerOperationSignature', 'ownerOperationSigning', 'sponsoredCallsCommitment', 'userOperationMaximumCost',
     ]);
   });
-  it('is a browser package with viem as its only dependency, optional React and wagmi peers, and no executable', () => {
+  it("the root entry installs with the consumer's viem only", () => {
     const manifest = JSON.parse(readFileSync(new URL('../wallet-client/package.json', import.meta.url), 'utf8'));
     expect(manifest.name).toBe('@me.jango/signa');
     expect(manifest.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(Object.keys(manifest.dependencies)).toEqual(['viem']);
+    // No dependency of its own: the app's viem (2.55.19 in Homerun, Sticky, jbm and revnet) is the one copy.
+    expect(manifest.dependencies).toBeUndefined();
     expect(manifest.bin).toBeUndefined();
     expect(manifest.files).toEqual(['index.js', 'index.d.ts', 'core/', 'wagmi/', 'react/', 'README.md']);
     expect(manifest.publishConfig).toEqual({ access: 'public' });
     // The connect subpaths bring React and wagmi only to apps that import them.
     expect(Object.keys(manifest.exports)).toEqual(['.', './core', './wagmi', './react']);
-    expect(Object.keys(manifest.peerDependencies)).toEqual(['react', 'wagmi']);
+    expect(manifest.peerDependencies).toEqual({ viem: '^2.37.5', react: '^18.3.1 || ^19.0.0', wagmi: '^2.10.2 || ^3.0.0' });
     expect(manifest.peerDependenciesMeta).toEqual({ react: { optional: true }, wagmi: { optional: true } });
   });
 });

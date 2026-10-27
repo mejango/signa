@@ -2,7 +2,7 @@ import { toHex, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { RestClientError, type ClientOptions } from './index.js';
 import { CenterClient } from './center.js';
-import { createCenterWalletPaymentClient } from './walletPayments.js';
+import { createCenterWalletPaymentClient, createCenterWalletReviewClient } from './walletPayments.js';
 import {
   validateWalletHandoffToken, walletHandoffPkceChallenge, walletHandoffCodeHash,
   walletHandoffRequestDocument, walletHandoffExchangeDocument, walletHandoffLaunchDocument, type WalletHandoffRequest,
@@ -405,14 +405,17 @@ export function createCenterWalletClient(options: CenterWalletClientOptions) {
       if (storage().getItem(storageKey) !== null) throw new Error();
     } catch { fail('WALLET_STORAGE_UNAVAILABLE', 'This tab could not clear its wallet connection.'); }
   }
-  function payments() {
-    return createCenterWalletPaymentClient({ issuer, audience, callbackUri, location, now: clock,
-      storage: { getItem: key => storage().getItem(key), setItem: (key, value) => storage().setItem(key, value), removeItem: key => storage().removeItem(key) },
-      connection: () => {
-        const saved = read()?.value;
-        return saved?.grant && saved.grant.expiresAt > Math.floor(clock() / 1000)
-          ? { grant: structuredClone(saved.grant), client: connection(saved).client } : null;
-      } });
-  }
-  return Object.freeze({ prepareConnection, completeConnection, retryConnection, restoreConnection, disconnect, payments });
+  const journal = () => ({ issuer, audience, callbackUri, location, now: clock,
+    storage: { getItem: (key: string) => storage().getItem(key), setItem: (key: string, value: string) => storage().setItem(key, value),
+      removeItem: (key: string) => storage().removeItem(key) },
+    connection: () => {
+      const saved = read()?.value;
+      return saved?.grant && saved.grant.expiresAt > Math.floor(clock() / 1000)
+        ? { grant: structuredClone(saved.grant), client: connection(saved).client } : null;
+    } });
+  /** Payments of the configured token through the configured terminal. Kept for 0.5.x apps; `reviews()` covers them. */
+  const payments = () => createCenterWalletPaymentClient(journal());
+  /** Any call set or signature, reviewed on Signa's own page from the raw request. */
+  const reviews = () => createCenterWalletReviewClient(journal());
+  return Object.freeze({ prepareConnection, completeConnection, retryConnection, restoreConnection, disconnect, payments, reviews });
 }

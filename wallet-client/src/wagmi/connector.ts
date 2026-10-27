@@ -1,9 +1,11 @@
 import { createConnector, type CreateConnectorFn } from "wagmi";
 import { base } from "wagmi/chains";
 import type { Address } from "viem";
-import { SIGNA_HOME_CHAIN_ID, signaChainName } from "../../../src/rest/wallet/chains.js";
+import { SIGNA_HOME_CHAIN_ID, signaChains } from "../../../src/rest/wallet/chains.js";
 
-const homeChainHex = `0x${SIGNA_HOME_CHAIN_ID.toString(16)}`;
+/** The chains the account acts on today. */
+const enabled = signaChains.filter((chain) => chain.enabled);
+const isEnabled = (chainId: number) => enabled.some((chain) => chain.chainId === chainId);
 
 /** The slice of a Signa wallet client the connector needs. Signing never crosses this seam. */
 export type CenterAccountWallet = {
@@ -17,7 +19,8 @@ export type CenterAccountWallet = {
 };
 export type CenterAccountConnectorOptions = {
   wallet(): Promise<CenterAccountWallet>;
-  read(input: { method: string; params?: unknown[] }): Promise<unknown>;
+  /** A read on `chainId`, the chain the connector is on. */
+  read(input: { method: string; params?: unknown[]; chainId: number }): Promise<unknown>;
 };
 
 const reads = new Set([
@@ -37,18 +40,19 @@ const unsupported = (chain = false) =>
   Object.assign(
     new Error(
       chain
-        ? `This Signa account uses ${signaChainName(SIGNA_HOME_CHAIN_ID)}. Connect an external wallet for other networks.`
+        ? `This Signa account uses ${enabled.map((item) => item.name).join(" and ")}. Connect an external wallet for other networks.`
         : "This action needs its own review at Signa. Use a payment review, or connect an external wallet.",
     ),
     { code: chain ? 4902 : 4200 },
   );
 
-/** A read-only wagmi connector for a Signa passkey account on Base. The connection's
+/** A read-only wagmi connector for a Signa passkey account on every chain Signa enables. The connection's
  * request key cannot sign or send arbitrary operations; payments go through Signa's review flow. */
 export function centerAccountConnector(
   options: CenterAccountConnectorOptions,
 ): CreateConnectorFn {
   return createConnector((config) => {
+    let chainOn: number = SIGNA_HOME_CHAIN_ID;
     const connection = async () => {
       const value = (await options.wallet()).restoreConnection();
       if (
@@ -63,7 +67,7 @@ export function centerAccountConnector(
     const provider = {
       async request(input: { method: string; params?: unknown[] }) {
         const current = await connection();
-        if (input.method === "eth_chainId") return homeChainHex;
+        if (input.method === "eth_chainId") return `0x${chainOn.toString(16)}`;
         if (
           input.method === "eth_accounts" ||
           input.method === "eth_requestAccounts"
@@ -73,10 +77,12 @@ export function centerAccountConnector(
           const requested = input.params?.[0] as
             | { chainId?: string }
             | undefined;
-          if (requested?.chainId !== homeChainHex) throw unsupported(true);
+          const chainId = Number(requested?.chainId);
+          if (!isEnabled(chainId)) throw unsupported(true);
+          chainOn = chainId;
           return null;
         }
-        if (reads.has(input.method)) return options.read(input);
+        if (reads.has(input.method)) return options.read({ ...input, chainId: chainOn });
         throw unsupported();
       },
     };
@@ -85,7 +91,7 @@ export function centerAccountConnector(
       name: "Signa account",
       type: "juicebox-center",
       async connect(parameters) {
-        if (parameters?.chainId !== undefined && parameters.chainId !== SIGNA_HOME_CHAIN_ID)
+        if (parameters?.chainId !== undefined && !isEnabled(parameters.chainId))
           throw unsupported(true);
         const current = await connection();
         if (!current)
@@ -95,7 +101,8 @@ export function centerAccountConnector(
         )?.withCapabilities
           ? [{ address: current.address, capabilities: {} }]
           : [current.address];
-        return { accounts, chainId: SIGNA_HOME_CHAIN_ID } as never;
+        if (parameters?.chainId !== undefined) chainOn = parameters.chainId;
+        return { accounts, chainId: chainOn } as never;
       },
       async disconnect() {
         (await options.wallet()).disconnect();
@@ -105,7 +112,7 @@ export function centerAccountConnector(
         return current ? [current.address] : [];
       },
       async getChainId() {
-        return SIGNA_HOME_CHAIN_ID;
+        return chainOn;
       },
       async getProvider() {
         return provider;
@@ -114,16 +121,18 @@ export function centerAccountConnector(
         return !!(await connection());
       },
       async switchChain({ chainId }) {
-        if (chainId !== SIGNA_HOME_CHAIN_ID) throw unsupported(true);
+        const chain = config.chains.find((item) => item.id === chainId) ?? (chainId === base.id ? base : undefined);
+        if (!isEnabled(chainId) || !chain) throw unsupported(true);
+        chainOn = chainId;
         config.emitter.emit("change", { chainId });
-        return base;
+        return chain;
       },
       onAccountsChanged(accounts) {
         if (!accounts.length) config.emitter.emit("disconnect");
         else config.emitter.emit("change", { accounts: accounts as Address[] });
       },
       onChainChanged(chainId) {
-        if (Number(chainId) !== SIGNA_HOME_CHAIN_ID) config.emitter.emit("disconnect");
+        if (!isEnabled(Number(chainId))) config.emitter.emit("disconnect");
       },
       onDisconnect() {
         config.emitter.emit("disconnect");

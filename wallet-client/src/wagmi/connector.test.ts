@@ -51,7 +51,7 @@ describe("centerAccountConnector", () => {
     expect(await provider.request({ method: "eth_call", params: [] })).toBe(
       "0x1",
     );
-    expect(read).toHaveBeenCalledWith({ method: "eth_call", params: [] });
+    expect(read).toHaveBeenCalledWith({ method: "eth_call", params: [], chainId: 8453 });
     expect(
       await provider.request({
         method: "wallet_switchEthereumChain",

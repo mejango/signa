@@ -15,6 +15,7 @@ describe("published connect SDK surface", () => {
       "ownerOperationSignature",
       "ownerOperationSigning",
       "passkeyOption",
+      "signaWalletAdapter",
       "sponsoredCallsCommitment",
       "userOperationMaximumCost",
     ]);
