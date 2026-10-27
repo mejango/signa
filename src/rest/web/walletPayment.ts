@@ -257,7 +257,9 @@ function showCalls(value: WalletReviewedCallsCentralPublic) {
     const amount = found && tokenAmountOf(found.item, found.args, call.target);
     found?.item.inputs.forEach((input, position) => {
       const name = input.name || `#${position}`, value = found.args[position], counted = amount?.position === position && typeof value === 'bigint';
-      const node = item.appendChild(line('call-line', `${name}: ${counted ? amount.token === 'native' ? `${formatUnits(value, 18)} ETH` : 'reading token' : show(value)}`));
+      // A native payment pays the call's value, whatever its amount argument says.
+      const native = counted && amount.token === 'native' ? `${formatUnits(BigInt(call.value), 18)} ETH${value === BigInt(call.value) ? '' : ` (argument ${value})`}` : '';
+      const node = item.appendChild(line('call-line', `${name}: ${native || (counted ? 'reading token' : show(value))}`));
       if (counted && amount.token !== 'native') pending.push({ node, name, token: amount.token, value, prefix });
     });
     if (!found && call.callData !== '0x') item.append(line('call-line', `Calldata: ${call.callData}`));

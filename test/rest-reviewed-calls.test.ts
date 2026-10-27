@@ -362,6 +362,12 @@ describe('reviewed calls approval page', () => {
     expect(warnings[0]).toMatch(/^Call 8: This lets another address act for you/);
     expect(warnings.some(text => text.startsWith('Call 2:'))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+ 
+    // A native pay shows the ETH the call sends, not an amount argument that differs from it.
+    await page.close();
+    await serve([{ to: terminal, value: 10n ** 18n, data: encodeFunctionData({ abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, nativeToken, 0n, account, 0n, '', '0x'] }) }]);
+    await open(); await status('ready');
+    expect(await page.locator('#payment-calls').textContent()).toContain('amount: 1 ETH (argument 0)');
   });
 
   it('every source and warning fits in one confirmation', async () => {
@@ -435,7 +441,7 @@ describe('reviewed calls approval page', () => {
       { abi: permit, functionName: 'permit', args: [account, terminal, 5n, 9n, 27, padHex('0x1', { size: 32 }), padHex('0x2', { size: 32 })] },
       { abi: permit2, functionName: 'approve', args: [usdtLike, terminal, 5n, 9] },
       { abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, usdtLike, 5n, account, 0n, '', '0x'] },
-      { abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, nativeToken, 5n, account, 0n, '', '0x'], value: 5n },
+      { abi: jbMultiTerminalAbi, functionName: 'pay', args: [7n, nativeToken, 0n, account, 0n, '', '0x'], value: 5n },
       { abi: jbMultiTerminalAbi, functionName: 'addToBalanceOf', args: [7n, usdtLike, 5n, false, '', '0x'] },
     ];
     for (const { abi, functionName, args, value } of cases) {
@@ -444,7 +450,7 @@ describe('reviewed calls approval page', () => {
       const found = exactFunction(abi.filter(item => item.type === 'function' && item.name === functionName), data)!;
       const page = tokenAmountOf(found.item, found.args, usdtLike)!;
       const sdk = call!.tokenAmounts[0]!;
-      expect({ token: page.token, amount: found.args[page.position] }, `${functionName}`).toEqual({ token: sdk.token === 'native' ? 'native' : sdk.token.toLowerCase(), amount: sdk.amount });
+      expect({ token: page.token, amount: page.token === 'native' ? value : found.args[page.position] }, `${functionName}`).toEqual({ token: sdk.token === 'native' ? 'native' : sdk.token.toLowerCase(), amount: sdk.amount });
     }
   });
 
