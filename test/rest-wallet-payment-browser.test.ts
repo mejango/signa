@@ -186,6 +186,19 @@ describe('central payment review browser, virtual authenticator', () => {
     expect(rpcReads).toBe(0);
   });
 
+  it("labels a payment's pinned addresses itself, whatever names the server serves", async () => {
+    const forged = 'Your wallet (verified)';
+    review.reviewedCalls.model.calls[0]!.roles = [{ role: 'spender', address: review.payment.terminal, name: forged }];
+    review.reviewedCalls.model.calls[0]!.contractName = forged; review.reviewedCalls.model.calls[1]!.contractName = forged;
+    await load();
+    const rows = await page.locator('#payment-calls > li').allTextContents();
+    expect(rows.join(' ')).not.toContain(forged);
+    expect(rows[0]).toContain(`approve on USDC ${review.payment.token}`);
+    expect(rows[0]).toContain(`spender: ${review.payment.terminal} (JBMultiTerminal)`);
+    expect(rows[1]).toContain(`pay on JBMultiTerminal ${review.payment.terminal}`);
+    expect(rows[1]).toContain(`beneficiary: ${review.payment.beneficiary} (your account)`);
+  });
+
   it('the page refuses a served description that differs from its own decode', async () => {
     const served = review.reviewedCalls, other = '0x1111111111111111111111111111111111111111';
     const refused = async () => {
@@ -203,6 +216,8 @@ describe('central payment review browser, virtual authenticator', () => {
     tamper(calls => { calls.functions = []; }); await refused();
     tamper(calls => { const pay = calls.functions[1]!; calls.functions[1] = { ...pay, inputs: pay.inputs.map((input, index) =>
       ({ ...input, name: index === 2 ? 'minReturnedTokens' : index === 4 ? 'amount' : input.name })) }; }); await refused();
+    tamper(calls => { calls.functions[0] = { ...calls.functions[0]!, inputs: [{ type: 'address', name: 'spender,uint256 amount' }] }; }); await refused();
+    tamper(calls => { calls.functions[0] = { ...calls.functions[0]!, type: 'event' } as never; }); await refused();
     review.reviewedCalls = served; await load(); expect(approvals()).toHaveLength(0);
   });
 

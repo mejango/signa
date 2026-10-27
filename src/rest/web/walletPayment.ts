@@ -132,10 +132,11 @@ function checkCalls(value: Review, operation: ReturnType<typeof normalizeUserOpe
   for (const list of [listed, sources, modeled, functions]) if (!Array.isArray(list) || list.length !== calls.length) fail();
   if (!Array.isArray(value.stepIndexes) || value.stepIndexes.length !== calls.length || value.stepIndexes.some((step, index) => step !== index)) fail();
   // A payment's served functions must be the ones this bundle decodes with: same names, same parameters.
-  const shape = (fn: unknown) => { const { name, inputs } = record(fn);
-    return `${text(name, 256)}(${(Array.isArray(inputs) ? inputs : fail()).map(input => { const { type, name } = record(input); return `${text(type, 64)} ${text(name, 64, true)}`; })})`; };
+  const matches = (served: unknown, own: AbiFunction) => { const { type, name, inputs } = record(served);
+    return type === 'function' && name === own.name && Array.isArray(inputs) && inputs.length === own.inputs.length &&
+      inputs.every((input, index) => { const { type, name } = record(input); return type === own.inputs[index]!.type && name === own.inputs[index]!.name; }); };
   if (!('review' in value) && (!Array.isArray(view.functions) || view.functions.length !== calls.length ||
-    view.functions.some((fn, index) => shape(fn) !== shape((functions as unknown[])[index])))) fail();
+    view.functions.some((fn, index) => !matches(fn, (functions as AbiFunction[])[index]!)))) fail();
   calls.forEach((call, index) => {
     const exact = (entry: Json) => address(entry.to).toLowerCase() === call.target.toLowerCase() && entry.value === call.value &&
       text(entry.data, 1_048_576).toLowerCase() === call.callData.toLowerCase();
@@ -263,6 +264,9 @@ const rank = (code: string) => { const at = warningRank.indexOf(code); return at
 function showCalls(value: Review) {
   const calls = decodeSafe7579Execution(value.operation.callData), warnings: { code: string; text: string }[] = [];
   const payment = !('review' in value), { sources, functions } = described(value) as { sources: CallSource[]; functions: (AbiFunction | null)[] };
+  // A payment names its pinned addresses itself; the server's names are not shown for it.
+  const pinned = payment && new Map([[__SIGNA_PAYMENT_PIN__.token.toLowerCase(), 'USDC'],
+    [__SIGNA_PAYMENT_PIN__.directV6Terminal.toLowerCase(), 'JBMultiTerminal'], [value.operation.sender.toLowerCase(), 'your account']]);
   let total = 0n;
   const pending: { node: HTMLElement; name: string; token: string; value: bigint; prefix: string; headline: boolean }[] = [];
   element('payment-calls').replaceChildren(...calls.map((call, index) => {
@@ -270,7 +274,8 @@ function showCalls(value: Review) {
     const found = source.source === 'raw' ? null
       : exactFunction(source.source === 'etherscan' ? source.abi : [functions[index]], call.callData as Hex)!;
     total += BigInt(call.value);
-    item.append(line('call-title', `${found ? found.item.name : 'Raw call'} on ${entry.contractName ? `${entry.contractName} ` : ''}${call.target}`));
+    const contract = pinned ? pinned.get(call.target.toLowerCase()) : entry.contractName;
+    item.append(line('call-title', `${found ? found.item.name : 'Raw call'} on ${contract ? `${contract} ` : ''}${call.target}`));
     const sourceLine = line('call-source', source.source === 'first-party' ? 'Decoded with the Juicebox SDK'
       : source.source === 'etherscan' ? `${ETHERSCAN_SOURCE_LINE}${source.implementation ? `. Implementation ${source.implementation}` : ''}`
       : source.lookup === 'lookup-failed' ? `Raw calldata. ${LOOKUP_FAILED_LINE}` : 'Raw calldata');
@@ -283,8 +288,9 @@ function showCalls(value: Review) {
       // A native payment pays the call's value, whatever its amount argument says.
       const native = counted && amount.token === 'native' ? `${formatUnits(BigInt(call.value), 18)} ETH${value === BigInt(call.value) ? '' : ` (argument ${value})`}` : '';
       // The SDK names the part an address plays (a spender, a beneficiary) and, where it knows it, whose it is.
-      const role = typeof value === 'string' && entry.roles.find(role => role.name && role.address.toLowerCase() === value.toLowerCase());
-      const node = item.appendChild(line('call-line', `${name}: ${native || (counted ? 'reading token' : show(value))}${role ? ` (${role.name})` : ''}`));
+      const role = typeof value === 'string' && (pinned ? pinned.get(value.toLowerCase())
+        : entry.roles.find(role => role.name && role.address.toLowerCase() === value.toLowerCase())?.name);
+      const node = item.appendChild(line('call-line', `${name}: ${native || (counted ? 'reading token' : show(value))}${role ? ` (${role})` : ''}`));
       if (counted && amount.token !== 'native') pending.push({ node, name, token: amount.token, value, prefix, headline: payment && index === calls.length - 1 });
     });
     if (!found && call.callData !== '0x') item.append(line('call-line', `Calldata: ${call.callData}`));
