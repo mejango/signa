@@ -14,7 +14,7 @@ export const rollout = JSON.parse(
       deployments: {
         chainId: number;
         address: Address;
-        generation: 'current' | 'previous' | 'v1';
+        generation: 'current' | 'previous' | 'v2' | 'v1';
         retired: boolean;
         source: string;
       }[];

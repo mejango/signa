@@ -107,6 +107,9 @@ const buybackPaySpecParameters = parseAbiParameters(
 // keccak256 0x228c41a61a032067c67e79cba946dd21f9fe5e039307456376318a0a464b485e
 // matches the deployment's compiler metadata. This generation has no skipSplits word.
 const buyback111 = '0x77bee1ad2ac0ace98a9b5b58d75685c8b4d94948' as Address;
+// Buyback 2.0.0, the rollout's current generation: 1.4's 17-word pay spec plus a trailing
+// floorCoversSettlement word.
+const buyback20 = '0x80717f09461a3fb08364fe8c5259220f7d06e0af' as Address;
 const buyback111PaySpecParameters = parseAbiParameters(
   'bool projectTokenIs0, uint256 amountToMintWith, uint256 minimumSwapAmountOut, bool hasUserSpecifiedQuote, address controller, uint256 tokenCountWithoutHook, uint256 weightRatio, uint256 amountToSwapWith, int24 twapTick, uint128 twapLiquidity, bytes32 poolId, uint256 minimumBeneficiaryTokenCount, uint256 minimumReservedTokenCount, uint256 rawSwapQuote, bool oracleUnseeded',
 );
@@ -824,13 +827,14 @@ export class PaymentService {
           'The pay preview includes an unrecognized active hook. Its final beneficiary output is unknown.',
         );
       const legacy111 = same(context.buybackHook, buyback111);
-      if (spec.metadata.length !== 2 + (legacy111 ? 15 : 17) * 64)
+      const is20 = same(context.buybackHook, buyback20);
+      if (spec.metadata.length !== 2 + (legacy111 ? 15 : is20 ? 18 : 17) * 64)
         unsupported(
           'The selected historical buyback hook uses an unsupported settlement format; its address remains available in the contract catalog.',
         );
       const decoded = legacy111
         ? decodeAbiParameters(buyback111PaySpecParameters, spec.metadata)
-        : decodeAbiParameters(buybackPaySpecParameters, spec.metadata);
+        : decodeAbiParameters(buybackPaySpecParameters, `0x${spec.metadata.slice(2, 2 + 17 * 64)}`);
       const amountToMintWith = decoded[1];
       const previewController = decoded[4];
       const skipSplits = legacy111 ? false : decoded[15];
@@ -872,7 +876,7 @@ export class PaymentService {
       warnings.push(
         legacy111
           ? 'Buyback 1.1.1 output is indicative. A total swap failure can fall back to issuance; a successful swap below its oracle minimum reverts. The terminal also enforces the reviewed beneficiary minimum.'
-          : 'Buyback output is indicative. Buyback 1.4.0 pay quotes encode three words (amountToSwapWith, minimumSwapAmountOut, skipSplits); two-word quotes revert. A pool failure or swap below the TWAP floor falls back to issuance; the transaction reverts if the final beneficiary balance increase is below its reviewed minimum.',
+          : 'Buyback output is indicative. Buyback 2.0.0 and 1.4.0 pay quotes encode three words (amountToSwapWith, minimumSwapAmountOut, skipSplits); two-word quotes revert. A pool failure or swap below the TWAP floor falls back to issuance; the transaction reverts if the final beneficiary balance increase is below its reviewed minimum.',
       );
     }
     if (prepared) {
