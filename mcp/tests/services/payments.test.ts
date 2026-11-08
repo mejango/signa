@@ -229,9 +229,10 @@ function payHookMetadata(
     poolId?: Hex;
   } = {},
 ): Hex {
+  // The current buyback 2.0's spec: 1.4's seventeen words plus floorCoversSettlement.
   return encodeAbiParameters(
     parseAbiParameters(
-      'bool,uint256,uint256,bool,address,uint256,uint256,uint256,int24,uint128,bytes32,uint256,uint256,uint256,bool,bool,uint256',
+      'bool,uint256,uint256,bool,address,uint256,uint256,uint256,int24,uint128,bytes32,uint256,uint256,uint256,bool,bool,uint256,bool',
     ),
     [
       false,
@@ -251,6 +252,7 @@ function payHookMetadata(
       false,
       overrides.skipSplits ?? false,
       1667n,
+      true,
     ],
   );
 }
@@ -956,6 +958,15 @@ describe('payment quotes and approval plans', () => {
       decodeFunctionData({ abi: jbMultiTerminalAbi, data: plan.calls[0]!.data }).args?.slice(4),
     ).toEqual([247n, 'beep:demo', '0x']);
     expect(plan.warnings.join(' ')).toContain('1.1.1');
+    // Buyback 1.4 keeps its seventeen words; 2.0 must carry all eighteen.
+    const v14 = payHookMetadata().slice(0, 2 + 17 * 64) as Hex;
+    const hook14 = '0xb222da5a71e8fb89a5a38b7c920eab5dfbc74b91' as Address;
+    expect((await legacyFixture(v14, hook14).service.preparePay(payInput)).summary).toMatchObject({
+      beneficiaryTokenCount: '250',
+    });
+    await expect(
+      legacyFixture(v14, buybackHook).service.preparePay(payInput),
+    ).rejects.toMatchObject({ code: 'UNSUPPORTED_CONFIGURATION' });
     await expect(
       legacyFixture(metadata, buybackHook).service.preparePay(payInput),
     ).rejects.toMatchObject({ code: 'UNSUPPORTED_CONFIGURATION' });

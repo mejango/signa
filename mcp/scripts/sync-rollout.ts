@@ -55,7 +55,8 @@ function sync() {
     for (const name of names) {
       for (const [suffix, generation] of [
         ['', 'current'],
-        ['_deprecated1', 'previous'],
+        ['_deprecated2', 'previous'],
+        ['_deprecated1', 'v2'],
         ['_deprecated', 'v1'],
       ] as const) {
         const path = `deployments/${chain}/${name}${suffix}.json`;
