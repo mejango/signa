@@ -1,4 +1,5 @@
 import { nativePasskeyError } from './walletPasskeyError.js';
+import { assertion as passkeyAssertion, busy, ceremony, encode, engaged, message, prompt, run, spin } from './ceremony.js';
 import { defaultPasskeyName } from './passkeyName.js';
 import { base } from './walletBase.js';
 import { getAddress, hashTypedData, isAddress, type Address, type Hex, type TypedDataDefinition } from 'viem';
@@ -17,13 +18,13 @@ const next = el<HTMLButtonElement>('recovery-next'), check = el<HTMLButtonElemen
 const resume = el<HTMLButtonElement>('recovery-resume'), reference = el<HTMLInputElement>('recovery-id'), signIn = el<HTMLAnchorElement>('recovery-signin');
 const status = el('wallet-status'), locatorKey = 'center:recovery:reference';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, word = /^0x[0-9a-f]{64}$/;
-let view: WalletRecoveryView | null = null, known = false, busy = false, csrf = '', native: AbortController | null = null;
+let view: WalletRecoveryView | null = null, known = false, csrf = '';
 let pending: { path: string; body: unknown; csrf: string } | null = null;
 type Rotation = { review: WalletRecoveryRotation; document: unknown };
 type Review = { review: WalletRecoveryRotation | null; document: unknown; chains: Rotation[] };
 let rotation: Review | null = null;
 let secret: WalletRecoverySecret | null = null, kit: WalletRecoveryKit | null = null, selectedWallet: Address | null = null;
-let disposed = false, pollCount = 0;
+let pollCount = 0;
 const method = () => el<HTMLFieldSetElement>('recovery-method').querySelector<HTMLInputElement>('input:checked')?.value ?? 'kit';
 // Backup file and backup password both hold the backup key; a wallet signs with the browser's provider instead.
 const kitMode = () => method() !== 'wallet';
@@ -48,9 +49,14 @@ const unfinished = (value = view) => !!value && (value.phase === 'preparing_sign
   ? value.chains.filter(chain => chain.state === 'failed' || chain.state === 'review') : [];
 const polling = () => view?.phase === 'rotating' || view?.phase === 'preparing_sign_in'
   || (view?.phase === 'ready_to_sign_in' && view.chains.some(chain => chain.state === 'approved' || chain.state === 'submitted'));
-const waiting = () => (busy && !native) || polling();
-function message(value: string, error = false) { status.textContent = value; status.dataset.state = error ? 'error' : waiting() ? 'busy' : 'ready'; }
-function spin() { if (waiting()) { if (status.dataset.state !== 'error') status.dataset.state = 'busy'; } else if (status.dataset.state === 'busy') status.dataset.state = 'ready'; }
+ceremony(status, polling, render, async (error, prompt) => {
+  if (error instanceof HttpFailure && error.status >= 400 && error.status < 500) {
+    pending = null; rotation = null;
+    try { accept(await request('state')); } catch { /* Fresh resume proves both owners if the cookie was lost. */ }
+  }
+  return error instanceof DOMException && prompt ? nativePasskeyError(error, prompt.signal.aborted)
+    : { message: error instanceof Error ? error.message : 'Recovery is unavailable. Check the original recovery again.', state: 'error' };
+});
 function invalid(): never { throw new Error('The recovery review changed. Check the original recovery before continuing.'); }
 function sameAddress(a: unknown, b: unknown): boolean { return typeof a === 'string' && typeof b === 'string' && isAddress(a) && isAddress(b) && getAddress(a) === getAddress(b); }
 function fields(value: unknown, expected: string[]) {
@@ -62,7 +68,6 @@ function schema(document: TypedDocument, primaryType: string, entries: readonly 
   if (document.primaryType !== primaryType || JSON.stringify(document.types[primaryType]) !== JSON.stringify(entries.map(([name, type]) => ({ name, type })))) invalid();
 }
 function hash(document: unknown) { return hashTypedData(document as TypedDataDefinition); }
-const encode = (value: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(value))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 function decode(value: string): Uint8Array<ArrayBuffer> {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value)) invalid();
   const bytes = Uint8Array.from(atob(value.replaceAll('-', '+').replaceAll('_', '/')), char => char.charCodeAt(0));
@@ -168,22 +173,6 @@ async function observe() {
   } else if (pending) { const saved = pending; await send(saved.path, saved.body, saved.csrf); }
   else accept(await request('state'));
 }
-// A background poll (`quiet`) guards re-entrancy like any run but never dims the controls.
-let engaged = false;
-async function run(action: () => Promise<void>, quiet = false) {
-  if (busy || disposed) return; busy = true; engaged = !quiet; render();
-  try { await action(); }
-  catch (error) {
-    if (error instanceof HttpFailure && error.status >= 400 && error.status < 500) {
-      pending = null; rotation = null;
-      try { accept(await request('state')); } catch { /* Fresh resume proves both owners if the cookie was lost. */ }
-    }
-    if (error instanceof DOMException && native) {
-      const feedback = nativePasskeyError(error, native.signal.aborted);
-      message(feedback.message, feedback.state === 'error');
-    } else message(error instanceof Error ? error.message : 'Recovery is unavailable. Check the original recovery again.', true);
-  } finally { native = null; busy = false; engaged = false; if (!disposed) render(); }
-}
 function provider(): Ethereum {
   const value = (window as unknown as { ethereum?: Ethereum }).ethereum;
   if (!value?.request) throw new Error('Open this page in the browser that has the wallet you chose at signup.'); return value;
@@ -233,15 +222,7 @@ async function checkChains(items: { chainId: number; review: WalletRecoveryRotat
       || !sameAddress(review.previousOwner, at ? safe.owners[at - 1] : '0x0000000000000000000000000000000000000001') || BigInt(review.safeNonce) !== safe.nonce) invalid();
   }));
 }
-async function assertion(challenge: string, rpId: string) {
-  if (rpId !== location.hostname || !window.isSecureContext) throw new Error('Open the original secure account page.');
-  native = new AbortController(); render();
-  const value = await navigator.credentials.get({ publicKey: { rpId, challenge: challengeBytes(challenge), userVerification: 'required', timeout: 90000 }, signal: native.signal });
-  if (!(value instanceof PublicKeyCredential) || !(value.response instanceof AuthenticatorAssertionResponse)) throw new Error('The passkey response is unavailable.');
-  const response = value.response; native = null;
-  return { credentialId: encode(value.rawId), userHandle: response.userHandle ? encode(response.userHandle) : null,
-    authenticatorData: encode(response.authenticatorData), clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) };
-}
+const assertion = (challenge: string, rpId: string) => passkeyAssertion(challengeBytes(challenge), rpId);
 function possessionDocument() {
   if (!view?.possession || !view.replacementSigner) invalid();
   const own = ownPasskey();
@@ -262,13 +243,12 @@ function possessionDocument() {
 async function advance() {
   if (!view) return;
   if (view.phase === 'awaiting_registration' && view.registration) {
-    native = new AbortController(); render();
-    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
+    const publicKey: PublicKeyCredentialCreationOptions = { rp: { id: view.rpId, name: 'Signa' },
       user: { id: decode(view.registration.userHandle), name: view.passkeyName, displayName: view.passkeyName },
       challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
-      authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' }, attestation: 'none', timeout: 90000 }, signal: native.signal });
+      authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' }, attestation: 'none', timeout: 90000 };
+    const value = await prompt(signal => navigator.credentials.create({ publicKey, signal }));
     if (!(value instanceof PublicKeyCredential) || !(value.response instanceof AuthenticatorAttestationResponse)) throw new Error('The passkey response is unavailable.');
-    native = null;
     try { localStorage.setItem(passkeyKey(view.id), JSON.stringify({ ...walletPasskeyPublicKey(value.response.getPublicKey(), value.response.getPublicKeyAlgorithm()),
       walletAddress: view.walletAddress, recoveryOwner: view.recoveryOwner })); }
     catch (error) { throw error instanceof Error && error.message.startsWith('The recovery') ? error : new Error('Allow this site to store data, then create the replacement passkey again.'); }
@@ -380,7 +360,7 @@ resume.addEventListener('click', () => { void run(resumeRecovery); });
 const timer = setInterval(() => {
   if (!busy && !pending && polling() && !document.hidden && navigator.onLine && pollCount++ < 90) void run(observe, true);
 }, 2000);
-window.addEventListener('pagehide', () => { disposed = true; native?.abort(); clearInterval(timer); secret = null; kit = null;
+window.addEventListener('pagehide', () => { clearInterval(timer); secret = null; kit = null;
   words().value = ''; el<HTMLInputElement>('recovery-file').value = ''; }, { once: true });
 void run(async () => {
   const url = new URL(location.href);
