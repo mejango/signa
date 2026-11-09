@@ -299,4 +299,22 @@ describe("served device pages", () => {
     } finally { await account.close(); networksPending = false; quotesOffered = false; }
   }, 30_000);
 
+  it("after an approval whose answer was lost, Retry reads the device and finishes it without a second approval", async () => {
+    phase = "awaiting_approval"; lostApprovals = 1; approvals = 0; requests.length = 0;
+    const account = await browser.newContext(), accountPage = await account.newPage();
+    await chainRpcs(account);
+    await withAuthenticator(account, accountPage, true);
+    await accountPage.goto(`${origin}/wallet`);
+    await expect.poll(() => accountPage.locator("#wallet-device-add").isVisible()).toBe(true);
+    await accountPage.locator("#wallet-device-add").click();
+    await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible()).toBe(true);
+    await accountPage.locator("#wallet-device-approve").click();
+    await expect.poll(() => accountPage.locator("#wallet-retry").isVisible(), { timeout: 10_000 }).toBe(true);
+    await accountPage.locator("#wallet-retry").click();
+    await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 15_000 }).toContain("The device is added");
+    expect(approvals).toBe(1);
+    expect(requests.filter(item => item.path.endsWith("/review"))).toHaveLength(1);
+    await account.close();
+  }, 30_000);
+
 });

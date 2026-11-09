@@ -755,11 +755,11 @@ async function deviceBegin() {
   void qr.then(module => { if (module && device?.link === link) element("wallet-device-code").innerHTML = module.qrSvg(link, "Link for the other device"); });
   setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
-async function devicePoll() {
+async function devicePoll(running = false) {
   if (!session || !device) return;
   const result = record(await request(`${base}/devices/${device.view.id}`)), view = record(result.view) as unknown as DeviceView;
   device = { ...device, view };
-  if (view.phase === "awaiting_activation") { await run(deviceActivate); return; }
+  if (view.phase === "awaiting_activation") { await (running ? deviceActivate() : run(deviceActivate)); return; }
   render(); setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
 /** Confirmations already given, by challenge: a prompt the browser drops part way keeps the earlier ones for the next click. */
@@ -786,6 +786,8 @@ async function deviceApproveNow() {
       steps.length > 1 ? `Confirm on ${step.name} (${index + 1} of ${steps.length}).` : "Approve the new device with your passkey."));
   }
   setStatus("checking", "Adding the device to your account…");
+  // An approval whose answer is lost may have been accepted: Retry reads the device and goes on from there.
+  stage = () => devicePoll(true);
   const result = record(await request(`${base}/devices/${device.view.id}/approve`, { review: prepared.review, assertion: deviceConfirmed.get(steps[0]!.challenge),
     ...(chains.length ? { chains: steps.slice(1).map(step => ({ chainId: (step as { chainId: number }).chainId, assertion: deviceConfirmed.get(step.challenge) })) } : {}) }, csrf, 60_000));
   deviceConfirmed.clear();
