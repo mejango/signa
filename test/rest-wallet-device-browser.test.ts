@@ -21,7 +21,8 @@ describe("served device pages", () => {
   const requests: { path: string; body: any }[] = [];
   let phase = "awaiting_registration", approvals = 0, activations = 0, beginFailures = 0, otherChains = false, tampered = false, skewed = false, kitScript = "";
   let lostApprovals = 0, networksPending = false, quotesOffered = false, quotes = 0, chainState: string | null = null;
-  let networksApprovals = 0, unfundedApproval = false;
+  let networksApprovals = 0, unfundedApproval = false, heldReads = 0;
+  const held: (() => void)[] = [];
   // The account page rebuilds each addition it signs from the account and the device signer it shows.
   const deviceSigner = `0x${"05".repeat(20)}`, challengeOn = (chainId: number, nonce = "0") => walletDeviceAdditionChallenge(walletAddress, deviceSigner, nonce, chainId);
   const view = () => ({ id: "11111111-1111-4111-8111-111111111111", passkeyName: "Test phone", rpId: "localhost", origin, expiresAtMs: Date.now() + 300_000,
@@ -70,7 +71,11 @@ describe("served device pages", () => {
         response.writeHead(200, { "content-type": "application/json", "content-length": "4096" }); response.write('{"view":', () => response.destroy()); return;
       }
       if (path === "/wallet/devices/begin") return beginFailures-- > 0 ? json({ error: { message: "unavailable" } }, 500) : json({ view: view(), link: `${origin}/wallet/add#${link}` });
-      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111") return json({ view: view() });
+      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111") {
+        // A held read answers late with what it saw when it was asked.
+        if (heldReads > 0) { heldReads--; const seen = view(); held.push(() => json({ view: seen })); return; }
+        return json({ view: view() });
+      }
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/review") return json({ review: { deviceId: "11111111-1111-4111-8111-111111111111", safeNonce: "0" }, document: {}, challenge: challengeOn(8453),
         chains: otherChains ? [{ chainId: 10, review: { chainId: 10, safeNonce: skewed ? "1" : "0" }, challenge: tampered ? `0x${"17".repeat(32)}` : challengeOn(10, skewed ? "1" : "0") },
           { chainId: 42161, review: { chainId: 42161, safeNonce: "0" }, challenge: challengeOn(42161) }] : [] });
@@ -357,4 +362,27 @@ describe("served device pages", () => {
       await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 10_000 }).toContain("Adding it on Optimism did not complete");
     } finally { chainState = null; await account.close(); }
   }, 40_000);
+
+  it("ignores a device read answered after the approval it predates, and finishes the device", async () => {
+    phase = "awaiting_possession"; approvals = 0; activations = 0; heldReads = 1; held.length = 0; requests.length = 0;
+    const account = await browser.newContext(), accountPage = await account.newPage();
+    await chainRpcs(account);
+    await withAuthenticator(account, accountPage, true);
+    try {
+      await accountPage.goto(`${origin}/wallet`);
+      await expect.poll(() => accountPage.locator("#wallet-device-add").isVisible()).toBe(true);
+      await accountPage.locator("#wallet-device-add").click();
+      await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toContain("Waiting for the other device");
+      // The other device proves its passkey; the first read stalls and the next one answers first.
+      phase = "awaiting_approval";
+      await expect.poll(() => held.length, { timeout: 10_000 }).toBe(1);
+      await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible(), { timeout: 10_000 }).toBe(true);
+      await accountPage.locator("#wallet-device-approve").click();
+      await expect.poll(() => approvals).toBe(1);
+      await accountPage.waitForTimeout(300);
+      held.shift()!();
+      await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 15_000 }).toContain("The device is added");
+      expect(approvals).toBe(1);
+    } finally { heldReads = 0; for (const answer of held.splice(0)) answer(); await account.close(); }
+  }, 30_000);
 });

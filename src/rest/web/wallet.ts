@@ -767,8 +767,11 @@ async function deviceBegin() {
 }
 async function devicePoll(running = false) {
   if (!session || !device) return;
-  const result = record(await request(`${base}/devices/${device.view.id}`)), view = record(result.view) as unknown as DeviceView;
-  device = { ...device, view };
+  const asked = device;
+  const result = record(await request(`${base}/devices/${asked.view.id}`)), view = record(result.view) as unknown as DeviceView;
+  // A read that a later read, an approval or a cancel overtook belongs to an earlier step.
+  if (device !== asked) return;
+  device = { ...asked, view };
   if (view.phase === "awaiting_activation") { await (running ? deviceActivate() : run(deviceActivate)); return; }
   render(); setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
