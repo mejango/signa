@@ -1,4 +1,5 @@
 import { carrySignInNotice, nativePasskeyError } from './walletPasskeyError.js';
+import { beginLogin, forgetLogin, loginWith, passkeyLogin, pendingLogin, whileChecking } from './walletLogin.js';
 import { assertion as passkeyAssertion, busy, ceremony, disposed, encode, engaged, leave, message, native, prompt, run, spin, waiting } from './ceremony.js';
 import { defaultPasskeyName } from './passkeyName.js';
 import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'viem';
@@ -398,30 +399,21 @@ async function login() {
 }
 async function loginFlow() {
   if (inFrame()) return framedLogin();
-  message('Signing in…');
-  const begun = await walletRequest(`${base}/login/begin`, {}), publicKey = begun.publicKey;
-  if (publicKey?.rpId !== location.hostname || publicKey.userVerification !== 'required' || typeof begun.loginId !== 'string' || typeof begun.csrfToken !== 'string') throw new Error('The account host changed.');
-  const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new Error('Invalid passkey challenge.');
-  message('Sign in with the prompt.');
-  const proof = await assertion('0x' + Array.from(challenge, byte => byte.toString(16).padStart(2, '0')).join(''), publicKey.rpId);
-  message('Signing in…');
-  const result = await walletRequest(`${base}/login/complete`, { loginId: begun.loginId, assertion: proof }, begun.csrfToken, 100000);
-  if (result?.session?.loginId !== begun.loginId) throw new Error('Sign-in could not be confirmed.');
+  if (!pendingLogin) message('Signing in…');
+  await passkeyLogin(prove, location.hostname);
   location.replace((base || '/') + location.search);
 }
+const prove = (challenge: Uint8Array<ArrayBuffer>, rpId: string) => { message('Sign in with the prompt.'); return passkeyAssertion(challenge, rpId); };
 /** Inside the frame: the passkey sign-in the wallet landing page runs framed (the intent admits it, no cookie), then the app's return. */
 async function framedLogin() {
   message('Signing in…');
-  const begun = await walletRequest(`${base}/authorize/${intentId}/begin`, {}), publicKey = begun.publicKey;
-  if (publicKey?.rpId !== location.hostname || publicKey.userVerification !== 'required' || typeof begun.loginId !== 'string' || typeof begun.flowToken !== 'string') throw new Error('The account host changed.');
-  const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new Error('Invalid passkey challenge.');
-  message('Sign in with the prompt.');
-  const proof = await assertion('0x' + Array.from(challenge, byte => byte.toString(16).padStart(2, '0')).join(''), publicKey.rpId);
+  const { loginId, token: flowToken, assertion } = await beginLogin(`${base}/authorize/${intentId}/begin`, 'flowToken', prove, location.hostname);
   message('Signing in…');
-  const result = await walletRequest(`${base}/authorize/${intentId}/approve`, { loginId: begun.loginId, flowToken: begun.flowToken, assertion: proof }, undefined, 100000);
+  const result = await whileChecking(`${base}/authorize/${intentId}/approve`, { loginId, flowToken, assertion }, undefined, 100000);
   message('Returning to your app…');
   location.replace(checkedRedirect(result, intentView(), location.origin));
 }
+loginWith(walletRequest, message, () => { throw new Error('The account host changed.'); });
 async function resumeSignup() {
   await announce('Pick up your signup', 'That passkey belongs to an unfinished signup. One more passkey prompt picks it up where you left off.');
   const begun = await request('resume/begin', {}); message('Pick up your signup with the prompt.');
@@ -433,7 +425,7 @@ resume.addEventListener('click', event => { event.preventDefault(); if (busy || 
   // A passkey with a finished wallet logs in; one from an unfinished signup resumes it. Any other
   // failed sign-in goes back to the sign-in page with its message, never to this signup form.
   try { await login(); return; } catch (error) {
-    if (error instanceof HttpFailure && [400, 401, 403, 404, 410].includes(error.status)) { await resumeSignup(); return; }
+    if (error instanceof HttpFailure && [400, 401, 403, 404, 410].includes(error.status)) { forgetLogin(); await resumeSignup(); return; }
     carrySignInNotice(error instanceof DOMException && native ? nativePasskeyError(error, native.signal.aborted)
       : { message: 'Sign-in didn’t finish. Try again.', state: 'ready' });
     leave(); message(''); // Leaving: nothing repaints the signup form behind the navigation.
