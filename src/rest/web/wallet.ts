@@ -484,11 +484,14 @@ async function networksDeploy() {
   // Only the account's passkey can approve, so the prompt offers that one instead of every passkey for the site.
   const assertion = await askPasskey(hex(challenge), "Approve the new networks with your passkey.");
   setStatus("checking", "Funding the deployments…");
-  // An approval whose answer is lost may have funded the deployments: Retry reads them, never quotes again.
-  stage = async () => { closeNetworks(); await networksStatus(); };
-  const result = record(await request(`${base}/networks/approve`, { bundleId: networksQuote.bundleId, assertion, ...(owners ? { owners } : {}) }, csrf, 60_000));
-  networksView = networkView(result.view as Json); closeNetworks();
-  setStatus("checking", deployingText());
+  // Retry sends this same approval, never a new quote: the service funds a quoted bundle once and answers a later copy with its deployments.
+  const signed = owners;
+  stage = async () => {
+    const result = record(await request(`${base}/networks/approve`, { bundleId: networksQuote.bundleId, assertion, ...(signed ? { owners: signed } : {}) }, csrf, 60_000));
+    networksView = networkView(result.view as Json); closeNetworks();
+    setStatus("checking", deployingText());
+  };
+  await stage();
 }
 function deployingText() {
   const names = networksView?.networks.filter(item => item.state === "pending").map(item => item.name) ?? [];
