@@ -736,8 +736,10 @@ function renderDevice() {
   deviceCancel.hidden = false; deviceCancel.textContent = phase === "ready" || phase === "expired" || phase === "addition_failed" ? "Close" : "Cancel";
   // One dark button on the page: while the approval is the action, Retry is a text button beside Cancel.
   retry.classList.toggle("link", !deviceApprove.hidden);
-  if (!devicePolled(phase) && deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; }
-  if (devicePolled(phase) && !deviceTimer) deviceTimer = setInterval(() => {
+  // A device added on Base is still being added on the account's other networks until each one lands or fails.
+  const polled = devicePolled(phase) || !!device!.view.chains?.some(chain => chain.state === "approved" || chain.state === "submitted");
+  if (!polled && deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; }
+  if (polled && !deviceTimer) deviceTimer = setInterval(() => {
     if (busy || document.hidden || !navigator.onLine) return;
     devicePoll().catch(() => { /* The next poll reads again. */ });
   }, 3000);

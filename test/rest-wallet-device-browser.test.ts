@@ -317,4 +317,20 @@ describe("served device pages", () => {
     await account.close();
   }, 30_000);
 
+  it("keeps reading a device added on Base while another network is still adding it, and shows that network failing", async () => {
+    phase = "awaiting_approval"; chainState = "submitted"; requests.length = 0;
+    const account = await browser.newContext(), accountPage = await account.newPage();
+    await chainRpcs(account);
+    await withAuthenticator(account, accountPage, true);
+    try {
+      await accountPage.goto(`${origin}/wallet`);
+      await expect.poll(() => accountPage.locator("#wallet-device-add").isVisible()).toBe(true);
+      await accountPage.locator("#wallet-device-add").click();
+      await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible()).toBe(true);
+      await accountPage.locator("#wallet-device-approve").click();
+      await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 15_000 }).toContain("Optimism follows shortly");
+      chainState = "failed";
+      await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 10_000 }).toContain("Adding it on Optimism did not complete");
+    } finally { chainState = null; await account.close(); }
+  }, 40_000);
 });
