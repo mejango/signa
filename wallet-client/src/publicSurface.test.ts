@@ -12,6 +12,8 @@ describe("published connect SDK surface", () => {
       "createCenterWalletClient",
       "createConnectController",
       "deliverCenterCallback",
+      "isFollowedPayment",
+      "isSettledPayment",
       "ownerOperationSignature",
       "ownerOperationSigning",
       "passkeyOption",
@@ -30,5 +32,16 @@ describe("published connect SDK surface", () => {
       react.JBConnectModal,
     ])
       expect(value).toBeTypeOf("function");
+  });
+});
+
+describe("published payment rules", () => {
+  test("a payment is settled or followed by its status, and never both", () => {
+    const settled = ["paid", "cancelled", "reverted", "expired", "refused"];
+    const followed = ["pending", "confirming", "submitting"];
+    for (const status of [...settled, ...followed, "reviewing", "approved", "unknown", "nonsense"]) {
+      expect(core.isSettledPayment(status)).toBe(settled.includes(status));
+      expect(core.isFollowedPayment(status)).toBe(followed.includes(status));
+    }
   });
 });

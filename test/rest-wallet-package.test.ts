@@ -6,7 +6,7 @@ import * as wallet from '../src/rest/client/wallet-package.js';
 describe('published wallet package', () => {
   it('exports exactly the connection and payment surface', () => {
     expect(Object.keys(wallet).sort()).toEqual([
-      'RestClientError', 'assertReviewedOperation', 'createCenterWalletClient',
+      'RestClientError', 'assertReviewedOperation', 'createCenterWalletClient', 'isFollowedPayment', 'isSettledPayment',
       'ownerOperationSignature', 'ownerOperationSigning', 'sponsoredCallsCommitment', 'userOperationMaximumCost',
     ]);
   });
