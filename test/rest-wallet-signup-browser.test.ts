@@ -231,4 +231,31 @@ describe("served Center signup page", () => {
     expect(await page.locator("body").textContent()).not.toContain("private-detail");
     expect(errors).toEqual([]);
   }, 20_000);
+
+  it("offers the check once its background poll stops, and polls again after it", async () => {
+    const context = await browser.newContext(), signup = await context.newPage();
+    try {
+      let reads = 0;
+      const view = { enrollmentId: "11111111-1111-4111-8111-111111111111", origin, rpId: "localhost", phase: "deploying", passkeyName: "Test",
+        recoveryOwner: `0x${"01".repeat(20)}`, walletAddress: `0x${"02".repeat(20)}`, initializerHash: `0x${"03".repeat(32)}`, transactionHash: null, preconfirmed: false };
+      await signup.route("**/wallet/signup/state", route => { reads++; return route.fulfill({ json: { view } }); });
+      await signup.clock.install();
+      await signup.goto(`${origin}/wallet`);
+      await expect.poll(() => reads).toBe(1);
+      // A deployment that outlasts the poll: the page stops reading and must still offer a way on.
+      await expect.poll(async () => {
+        if (await signup.locator("#signup-check").isVisible()) return true;
+        await signup.clock.runFor(2_000); return false;
+      }, { timeout: 50_000, interval: 20 }).toBe(true);
+      // The first read and the 150 the poll makes.
+      await expect.poll(() => reads).toBe(151);
+      const stopped = reads;
+      await signup.clock.runFor(10_000);
+      expect(reads).toBe(stopped);
+      await signup.locator("#signup-check").click();
+      await expect.poll(() => reads).toBe(stopped + 1);
+      await signup.clock.runFor(2_000);
+      await expect.poll(() => reads).toBe(stopped + 2);
+    } finally { await context.close(); }
+  }, 60_000);
 });
