@@ -74,9 +74,9 @@ function render() {
   cancel.hidden = !actionable; cancel.disabled = busy;
   cancelPrompt.hidden = !nativePrompt;
   retry.hidden = !canRetry || busy || blocked;
-  // The way back is the callback verified at load: shown once the review is settled here, and
-  // whenever this page cannot go on, so the app can check the payment instead.
-  returnToApp.hidden = !review || busy || (!blocked && (uncertain || !['approved', 'cancelled'].includes(review.status)));
+  // The way back is the callback verified at load: shown once the review is settled here or has
+  // expired, and whenever this page cannot go on, so the app can check the payment instead.
+  returnToApp.hidden = !review || busy || (!blocked && !expired() && (uncertain || !['approved', 'cancelled'].includes(review.status)));
   details.hidden = !review;
 }
 async function request(path: string, body?: unknown): Promise<Json> {
