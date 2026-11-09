@@ -22,7 +22,7 @@ const status = element("wallet-status"), account = element("wallet-account"), ad
 type NetworksView = { networks: { chainId: number; name: string; state: string; txHash: string | null; owners: string | undefined }[];
   offered: { chainId: number; name: string; family: string; centerPays: boolean }[]; pending: { id: string; state: string; chainIds: number[] }[]; backup: string | null };
 const networksList = element("wallet-networks"), networksAdd = element<HTMLButtonElement>("wallet-networks-add"), networksForm = element<HTMLFormElement>("wallet-networks-form");
-let networksView: NetworksView | null = null, networksQuote: { bundleId: string; challenge: string } | null = null, networksTimer: ReturnType<typeof setInterval> | null = null, networksOpen = false, networksPolls = 0;
+let networksView: NetworksView | null = null, networksTimer: ReturnType<typeof setInterval> | null = null, networksOpen = false, networksPolls = 0;
 /** The open form updates out-of-date networks instead of adding new ones. The backup file is held only while the form is open. */
 let networksUpdating = false, networksBackupWords: string | null = null, networksBackupNeeded = false, networksBackupInitializer: `0x${string}` | null = null;
 const networksUpdate = element<HTMLButtonElement>("wallet-networks-update");
@@ -188,7 +188,6 @@ async function run(action: () => Promise<void>) {
       setStatus("error", "This wallet request could not be verified. Return to the app and start again.");
       // An unverified result never makes a previously unknown session safe to replace.
     } else if (error instanceof HttpFailure && error.code && networksMessages[error.code]) {
-      networksQuote = null;
       setStatus("ready", networksMessages[error.code]!);
     } else if (error instanceof HttpFailure && error.code === 'WALLET_LOGIN_UNKNOWN_PASSKEY') {
       pending = null; csrf = ""; completionAttempted = false;
@@ -413,7 +412,7 @@ function renderNetworks() {
     if (busy || document.hidden || !navigator.onLine || networksPolls++ > 200) return;
     networksStatus().catch(() => { /* The next poll reads again. */ });
   }, 3000);
-  if (view && !waiting && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
+  if (!waiting && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
 }
 function chosenFamily(): string {
   return (networksForm?.querySelector<HTMLInputElement>("input[name=family]:checked")?.value) ?? "mainnet";
@@ -432,10 +431,10 @@ function renderChoices() {
 function openNetworks(updating = false) {
   if (!networksView) return;
   renderChoices();
-  networksQuote = null; networksOpen = true; networksUpdating = updating; render();
+  networksOpen = true; networksUpdating = updating; render();
 }
 function closeNetworks() {
-  networksOpen = networksUpdating = networksBackupNeeded = false; networksQuote = null; networksBackupWords = networksBackupInitializer = null;
+  networksOpen = networksUpdating = networksBackupNeeded = false; networksBackupWords = networksBackupInitializer = null;
   element<HTMLInputElement>("wallet-networks-words").value = ""; element<HTMLInputElement>("wallet-networks-file").value = "";
 }
 /** The backup's words, from the file loaded in this tab or the password field, read when needed and not kept in the field. */
@@ -529,7 +528,7 @@ async function networksDeploy() {
     setStatus("checking", "Updating the owners. Actions there wait until it lands."); return;
   }
   const bundle = record(quoted.bundle);
-  networksQuote = { bundleId: string(bundle.id, 36), challenge: string(quoted.challenge, 66) };
+  const networksQuote = { bundleId: string(bundle.id, 36), challenge: string(quoted.challenge, 66) };
   if (!configuration) throw new InvalidResponse();
   const challenge = networksQuote.challenge; if (!/^0x[0-9a-fA-F]{64}$/.test(challenge)) throw new InvalidResponse();
   // Only the account's passkey can approve, so the prompt offers that one instead of every passkey for the site.
@@ -570,7 +569,7 @@ if (networksAdd && networksForm) {
     } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); }
   }); });
   networksForm.addEventListener("submit", event => { event.preventDefault(); void run(networksDeploy); });
-  for (const radio of networksForm.querySelectorAll<HTMLInputElement>("input[name=family]")) radio.addEventListener("change", () => { networksQuote = null; renderChoices(); render(); });
+  for (const radio of networksForm.querySelectorAll<HTMLInputElement>("input[name=family]")) radio.addEventListener("change", () => { renderChoices(); render(); });
   element("wallet-networks-cancel").addEventListener("click", () => { closeNetworks(); render(); });
   window.addEventListener("pagehide", () => { networksBackupWords = networksBackupInitializer = null; });
 }
