@@ -474,8 +474,13 @@ async function networksDeploy() {
   if (quoted.bundle === null) {
     if (!owners) { closeNetworks(); setStatus("ready", "Your account is already on those networks."); return; }
     setStatus("checking", "Updating the owners…");
-    networksView = networkView(record(record(await request(`${base}/networks/owners`, owners, csrf, 60_000)).view)); closeNetworks();
-    setStatus("checking", "Updating the owners. Actions there wait until it lands."); return;
+    // Retry sends this same signed update: the service takes it once and answers a later copy with the networks.
+    const signed = owners;
+    stage = async () => {
+      networksView = networkView(record(record(await request(`${base}/networks/owners`, signed, csrf, 60_000)).view)); closeNetworks();
+      setStatus("checking", "Updating the owners. Actions there wait until it lands.");
+    };
+    await stage(); return;
   }
   const bundle = record(quoted.bundle);
   const networksQuote = { bundleId: string(bundle.id, 36), challenge: string(quoted.challenge, 66) };

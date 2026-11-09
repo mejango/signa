@@ -147,6 +147,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   let onramp = false, balancesAnswered = false;
   // Owner-update routes answer only in the backup update test.
   let ownerUpdate: { steps: Hex[]; owners?: Hex[] } | null = null, kitScript = "";
+  let lostOwnerUpdates = 0;
   const backupWords = generateMnemonic(english, 256), backupOwner = mnemonicToAccount(backupWords, { path: "m/44'/60'/0'/0/0" }).address;
   const ownerAbi = parseAbi(["function swapOwner(address prevOwner,address oldOwner,address newOwner)", "function removeOwner(address prevOwner,address owner,uint256 _threshold)"]);
   const [oldPasskey, newPasskey] = [getAddress(`0x${"a0".repeat(20)}`), getAddress(`0x${"a1".repeat(20)}`)];
@@ -274,7 +275,11 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       if (ownerUpdate && path === "/wallet/networks/quote") return json({ bundle: null, challenge: null, view: updateView("diverged"), owners: { changeId: "33333333-3333-4333-8333-333333333333",
         recoveryOwner: backupOwner, chains: [{ version: "center-wallet-network-owners-v1", chainId: 10, walletAddress, recoveryOwner: backupOwner,
           from: [oldPasskey, backupOwner], owners: ownerUpdate.owners ?? [newPasskey, backupOwner], safeNonce: "3", steps: ownerUpdate.steps, createSigners: [] }] } });
-      if (ownerUpdate && path === "/wallet/networks/owners") return json({ view: updateView("updating") });
+      if (ownerUpdate && path === "/wallet/networks/owners") {
+        // Accepted, with the answer cut: the browser cannot replay a request whose acceptance it does not know.
+        if (lostOwnerUpdates-- > 0) { response.writeHead(200, { "content-type": "application/json", "content-length": "4096" }); response.write('{"view":', () => response.destroy()); return; }
+        return json({ view: updateView("updating") });
+      }
       if (onramp && networksDown && path === "/wallet/networks") return json({ error: { code: "WALLET_NETWORKS_UNAVAILABLE", message: "unavailable" } }, 503);
       if (onramp && path === "/wallet/networks") return json({ offered: [], pending: [], networks: [
         { chainId: 8453, name: "Base", state: "deployed", txHash: null, owners: "consistent" },
@@ -302,7 +307,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
 
   beforeEach(async () => {
     walletAddress = `0x${"03".repeat(20)}`; networksDown = false;
-    authenticated = false; landingWays = false; onramp = false; balancesAnswered = false; ownerUpdate = null; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
+    authenticated = false; landingWays = false; onramp = false; balancesAnswered = false; ownerUpdate = null; lostOwnerUpdates = 0; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
     redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0; failedIssues = 0;
     requests.length = 0; errors.length = 0;
@@ -534,6 +539,26 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     expect(await recoverAddress({ hash: hashTypedData(walletOwnerChangeSafeTx(walletAddress as Hex, ownerUpdate.steps[0]!, "3", 10)), signature: signature! })).toBe(backupOwner);
     expect(await page.locator("#wallet-networks-form").isHidden()).toBe(true);
     expect(errors).toEqual([]);
+  });
+
+  it("after an owner update whose answer was lost, Retry sends the same signed update instead of asking for the backup again", async () => {
+    const sentinel = "0x0000000000000000000000000000000000000001";
+    ownerUpdate = { steps: [encodeFunctionData({ abi: ownerAbi, functionName: "swapOwner", args: [sentinel, oldPasskey, newPasskey] })] };
+    lostOwnerUpdates = 1;
+    await chainRpc(page, "https://mainnet.base.org", 8453, [newPasskey, backupOwner], 9n);
+    await chainRpc(page, "https://mainnet.optimism.io", 10, [oldPasskey, backupOwner], 3n);
+    await loadAndEnroll(); await page.locator("#wallet-signin").click(); await status("signed-in");
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Needs update");
+    await page.locator("#wallet-networks-update").click();
+    await page.locator("#wallet-networks-words").fill(backupWords);
+    await page.locator("#wallet-networks-deploy").click();
+    await expect.poll(() => page.locator("#wallet-retry").isVisible(), { timeout: 10_000 }).toBe(true);
+    await page.locator("#wallet-retry").click();
+    await expect.poll(() => page.locator("#wallet-networks").textContent()).toContain("Optimism: Updating…");
+    const sent = requests.filter(item => item.path === "/wallet/networks/owners");
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.body).toEqual(sent[0]!.body);
+    expect(requests.filter(item => item.path === "/wallet/networks/quote")).toHaveLength(1);
   });
 
   it("updates an out-of-date network with the backup wallet chosen at signup when no backup file or password is given", async () => {
