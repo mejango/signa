@@ -20,12 +20,14 @@ describe("served device pages", () => {
     types: { WalletDevice: [{ name: "purpose", type: "string" }] }, primaryType: "WalletDevice", message: { purpose: "add-device" } } as const;
   const requests: { path: string; body: any }[] = [];
   let phase = "awaiting_registration", approvals = 0, activations = 0, beginFailures = 0, otherChains = false, tampered = false, skewed = false, kitScript = "";
+  let lostApprovals = 0, networksPending = false, quotesOffered = false, quotes = 0, chainState: string | null = null;
   // The account page rebuilds each addition it signs from the account and the device signer it shows.
   const deviceSigner = `0x${"05".repeat(20)}`, challengeOn = (chainId: number, nonce = "0") => walletDeviceAdditionChallenge(walletAddress, deviceSigner, nonce, chainId);
   const view = () => ({ id: "11111111-1111-4111-8111-111111111111", passkeyName: "Test phone", rpId: "localhost", origin, expiresAtMs: Date.now() + 300_000,
     walletAddress, primarySigner: `0x${"04".repeat(20)}`, deviceSigner: phase === "awaiting_registration" ? null : `0x${"05".repeat(20)}`, phase, transactionHashes: [],
     registration: phase === "awaiting_registration" ? { challenge: encode(Buffer.alloc(32, 13)), userHandle: encode(Buffer.alloc(32, 14)), excludeCredentialIds: [encode(Buffer.alloc(16, 7))] } : null,
-    possession: phase === "awaiting_possession" ? { credentialId: "x", document: possessionDocument, challenge: hashTypedData(possessionDocument) } : null });
+    possession: phase === "awaiting_possession" ? { credentialId: "x", document: possessionDocument, challenge: hashTypedData(possessionDocument) } : null,
+    ...(chainState ? { chains: [{ chainId: 10, name: "Optimism", state: chainState }] } : {}) });
   const session = () => ({ accountId: `eip155:8453:${walletAddress}`, loginId: "22222222-2222-4222-8222-222222222222", walletAddress, chainId: 8453, expiresAtMs: Date.now() + 3_600_000, passkeyName: "Mac" });
 
   beforeAll(async () => {
@@ -51,14 +53,31 @@ describe("served device pages", () => {
       requests.push({ path, body });
       if (path === "/wallet/config") return json({ version: "center-wallet-v1", issuer: origin, audience: `${origin}/v1`, rpId: "localhost" });
       if (path === "/wallet/session") return json({ session: session(), csrfToken: csrf });
-      if (path === "/wallet/networks") return json({ networks: [{ chainId: 8453, name: "Base", state: "deployed", txHash: null },
-        ...(otherChains ? [{ chainId: 10, name: "Optimism", state: "deployed", txHash: null }, { chainId: 42161, name: "Arbitrum", state: "deployed", txHash: null }] : [])], offered: [], pending: [] });
+      const networks = () => ({ networks: [{ chainId: 8453, name: "Base", state: "deployed", txHash: null },
+        ...(otherChains ? [{ chainId: 10, name: "Optimism", state: "deployed", txHash: null }, { chainId: 42161, name: "Arbitrum", state: "deployed", txHash: null }] : []),
+        ...(networksPending ? [{ chainId: 10, name: "Optimism", state: "pending", txHash: null }] : [])],
+        offered: otherChains || networksPending || !quotesOffered ? [] : [{ chainId: 10, name: "Optimism", family: "mainnet", centerPays: true }],
+        pending: networksPending ? [{ id: "33333333-3333-4333-8333-333333333333", state: "funded", chainIds: [10] }] : [] });
+      if (path === "/wallet/networks" || path === "/wallet/networks/status") return json(networks());
+      if (path === "/wallet/networks/quote") { quotes++; return networksPending ? json({ error: { message: "pending" } }, 409)
+        : json({ view: networks(), bundle: { id: "33333333-3333-4333-8333-333333333333" }, challenge: `0x${"17".repeat(32)}` }); }
+      if (path === "/wallet/networks/approve") {
+        networksPending = true;
+        response.writeHead(200, { "content-type": "application/json", "content-length": "4096" }); response.write('{"view":', () => response.destroy()); return;
+      }
       if (path === "/wallet/devices/begin") return beginFailures-- > 0 ? json({ error: { message: "unavailable" } }, 500) : json({ view: view(), link: `${origin}/wallet/add#${link}` });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111") return json({ view: view() });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/review") return json({ review: { deviceId: "11111111-1111-4111-8111-111111111111", safeNonce: "0" }, document: {}, challenge: challengeOn(8453),
         chains: otherChains ? [{ chainId: 10, review: { chainId: 10, safeNonce: skewed ? "1" : "0" }, challenge: tampered ? `0x${"17".repeat(32)}` : challengeOn(10, skewed ? "1" : "0") },
           { chainId: 42161, review: { chainId: 42161, safeNonce: "0" }, challenge: challengeOn(42161) }] : [] });
-      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/approve") { approvals++; phase = "adding"; setTimeout(() => { phase = "awaiting_activation"; }, 200); return json({ view: view() }); }
+      if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/approve") {
+        approvals++; phase = "adding"; setTimeout(() => { phase = "awaiting_activation"; }, 200);
+        if (lostApprovals-- > 0) {
+          // The answer starts and is cut: the browser cannot replay a request whose acceptance it does not know.
+          response.writeHead(200, { "content-type": "application/json", "content-length": "4096" }); response.write('{"view":', () => response.destroy()); return;
+        }
+        return json({ view: view() });
+      }
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/activate") { activations++; phase = "ready"; return json({ view: view() }); }
       if (path === "/wallet/devices/link/state") return body?.linkToken === link ? json({ view: view() }) : json({ error: { message: "no" } }, 403);
       if (path === "/wallet/devices/link/register") { if (body?.linkToken !== link || body.type !== "public-key") return json({ error: {} }, 400); phase = "awaiting_possession"; return json({ view: view() }); }
@@ -261,4 +280,23 @@ describe("served device pages", () => {
     expect(requests.filter(item => item.path === "/wallet/devices/begin")).toHaveLength(2);
     await account.close();
   });
+
+  it("after a networks approval whose answer was lost, Retry reads the deployment instead of quoting again", async () => {
+    networksPending = false; quotesOffered = true; quotes = 0; requests.length = 0;
+    const account = await browser.newContext(), accountPage = await account.newPage();
+    await withAuthenticator(account, accountPage, true);
+    try {
+      await accountPage.goto(`${origin}/wallet`);
+      await expect.poll(() => accountPage.locator("#wallet-networks-add").isVisible()).toBe(true);
+      await accountPage.locator("#wallet-networks-add").click();
+      await accountPage.locator("#wallet-networks-choices input[value='10']").check();
+      await accountPage.locator("#wallet-networks-deploy").click();
+      await expect.poll(() => accountPage.locator("#wallet-retry").isVisible(), { timeout: 10_000 }).toBe(true);
+      await accountPage.locator("#wallet-retry").click();
+      await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toContain("Deploying on Optimism");
+      expect(quotes).toBe(1);
+      expect(await accountPage.locator("#wallet-networks").textContent()).toContain("Optimism (deploying…)");
+    } finally { await account.close(); networksPending = false; quotesOffered = false; }
+  }, 30_000);
+
 });

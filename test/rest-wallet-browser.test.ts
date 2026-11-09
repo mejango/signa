@@ -171,7 +171,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
   let walletAddress = `0x${"03".repeat(20)}`, networksDown = false;
   const requests: { path: string; body: any; headers: Record<string, string | string[] | undefined> }[] = [];
   let authenticated: boolean, unavailableSessions: number, unavailableCompletions: number, droppedCompletion: boolean;
-  let unavailableIssues = 0;
+  let unavailableIssues = 0, failedIssues = 0;
   let requireSessionCookie: boolean, recoveredLoginId: string | undefined;
   let redirectOverride: string | undefined, sessionReads: number, begins: number, completions: number, issues: number;
   let authenticatorId: string, cdp: CDPSession;
@@ -263,6 +263,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
       }
       if (path === "/wallet/authorize/issue") {
         issues++;
+        if (failedIssues-- > 0) return json({ error: { message: "private-provider-detail" } }, 500);
         if (unavailableIssues-- > 0) return json({ error: { code: "WALLET_AUTHORITY_CHECKING", message: "private-provider-detail" } }, 503);
         return json({ redirectUri: redirectOverride ?? `${callback()}?${new URLSearchParams({ code, state, iss: origin })}` });
       }
@@ -303,7 +304,7 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     walletAddress = `0x${"03".repeat(20)}`; networksDown = false;
     authenticated = false; landingWays = false; onramp = false; balancesAnswered = false; ownerUpdate = null; unavailableSessions = 0; unavailableCompletions = 0; droppedCompletion = false;
     requireSessionCookie = false; recoveredLoginId = undefined;
-    redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0;
+    redirectOverride = undefined; sessionReads = 0; begins = 0; completions = 0; issues = 0; failedIssues = 0;
     requests.length = 0; errors.length = 0;
     const context = await browser.newContext({ viewport: { width: 360, height: 780 } });
     page = await context.newPage(); page.setDefaultTimeout(3_000);
@@ -826,6 +827,16 @@ describe("served Center wallet UI (local HTTP contract, virtual authenticator)",
     await expect.poll(() => page.url()).toBe(`${origin}/wallet/payment?review=${review}`);
     expect(issues).toBe(0); expect(begins).toBe(0);
     expect(await page.evaluate(() => (window as any).passkeyRequests)).toBe(0);
+  });
+
+  it("after a sign-in, Retry repeats the failed app return without asking for the passkey again", async () => {
+    await loadAndEnroll(); failedIssues = 1;
+    await page.goto(`${origin}/wallet?intent=${intentId}`); await status("ready");
+    await page.locator("#wallet-signin").click(); await status("retry");
+    await page.locator("#wallet-retry").click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/app/callback");
+    // One begin and one completion: Retry did not open the passkey prompt again.
+    expect(begins).toBe(1); expect(completions).toBe(1); expect(issues).toBe(2);
   });
 
   it("returns a fresh passkey sign-in to the same fixed payment review without approving payment", async () => {

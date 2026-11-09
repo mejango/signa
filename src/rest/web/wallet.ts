@@ -44,6 +44,9 @@ let configuration: Configuration, intent: Intent | null = null, session: Session
 let sessionKnown = false, busy = false, csrf = "";
 let paymentReviewId: string | null = null;
 let nativePrompt: AbortController | null = null, retryAction: (() => Promise<void>) | null = null;
+/** What Retry repeats after an uncertain failure: the action, or the stage it reached. A stage past a
+ * step the service may have taken (a sign-in, an approval) never repeats that step. */
+let stage: () => Promise<void> = async () => {};
 // A sign-in that failed on the signup page comes back here with its message.
 let notice = takeSignInNotice();
 // Framed inside an admitted app's page, this page signs in without a Center session or cookie: the
@@ -155,7 +158,7 @@ function acceptSession(value: Json, required = false) {
 }
 async function run(action: () => Promise<void>) {
   if (busy) return;
-  busy = true; retryAction = null; render();
+  busy = true; retryAction = null; stage = action; render();
   try { await action(); }
   catch (error) {
     if (error instanceof HttpFailure && error.code === 'WALLET_HANDOFF_EXPIRED') {
@@ -185,7 +188,7 @@ async function run(action: () => Promise<void>) {
         setStatus("retry", "Account access changed or the request expired. Check your account again.");
       }
     } else {
-      retryAction = action;
+      retryAction = stage;
       setStatus("retry", pendingLogin
         ? "Sign-in confirmation is unavailable. Retry to check the same sign-in without using your passkey again."
         : "Wallet access is temporarily unavailable. Retry to check again.");
@@ -302,6 +305,7 @@ function appReturn(result: Json): string {
 }
 async function issue() {
   if (!intent || !session) throw new InvalidResponse();
+  stage = issue;
   future(intent.expiresAtMs); future(session.expiresAtMs);
   setStatus("returning", "Returning to your app…");
   // Issuing needs fresh on-chain authority; after idle that is a hosted refresh of ~25 s.
@@ -480,6 +484,8 @@ async function networksDeploy() {
   // Only the account's passkey can approve, so the prompt offers that one instead of every passkey for the site.
   const assertion = await askPasskey(hex(challenge), "Approve the new networks with your passkey.");
   setStatus("checking", "Funding the deployments…");
+  // An approval whose answer is lost may have funded the deployments: Retry reads them, never quotes again.
+  stage = async () => { closeNetworks(); await networksStatus(); };
   const result = record(await request(`${base}/networks/approve`, { bundleId: networksQuote.bundleId, assertion, ...(owners ? { owners } : {}) }, csrf, 60_000));
   networksView = networkView(result.view as Json); closeNetworks();
   setStatus("checking", deployingText());
