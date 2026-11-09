@@ -116,6 +116,9 @@ export type PreparedUserOperation = Omit<
   signing: OwnerSigningPayload | PasskeyOwnerSigningPayload | SessionSigningPayload;
   submission?: { commitment: Hex; startedAt: number };
 };
+/** The operation states nothing moves on from: a saved reference to one can be dropped. */
+const settledUserOperationStates: readonly PreparedUserOperation["state"][] = ["confirmed", "reverted", "expired", "retired"];
+export const isSettledUserOperation = (state: string) => (settledUserOperationStates as readonly string[]).includes(state);
 const prefix = "/api/v1";
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const invalid = (message: string): never => {

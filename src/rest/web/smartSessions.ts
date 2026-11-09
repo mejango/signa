@@ -8,6 +8,7 @@ import {
   assertReviewedOperation,
   assertWalletIdentity,
   clientAudience,
+  isSettledUserOperation,
   newRequestNonce,
   ownerOperationSignature,
   ownerOperationSigning,
@@ -185,7 +186,7 @@ export function installSmartWalletUI(options: {
           const result = await ownerClient().userOperation(record.operationId!); check();
           if (result.id !== record.operationId || result.chainId !== record.chainId || !same(result.operation.sender, record.walletAddress))
             fail("The recovered operation differs from its saved wallet and network.");
-          if (["confirmed", "reverted"].includes(result.state)) removeWalletRecovery(c.accountId, record.attemptId);
+          if (isSettledUserOperation(result.state)) removeWalletRecovery(c.accountId, record.attemptId);
           options.status(`Saved transaction on ${networkName(record.chainId)}: ${result.state}. No transaction was submitted by this check.`);
           return;
         }
@@ -1091,7 +1092,7 @@ export function installSmartWalletUI(options: {
     check();
     assertSameOperation(result, reviewed!);
     operation = result;
-    if (submissionKey && ["confirmed", "reverted"].includes(result.state)) removeWalletRecovery(c.accountId, submissionKey);
+    if (submissionKey && isSettledUserOperation(result.state)) removeWalletRecovery(c.accountId, submissionKey);
     refreshRecovery();
     show("operation-review", result);
     element("operation-result").textContent =
