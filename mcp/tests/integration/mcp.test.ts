@@ -77,7 +77,7 @@ describe('real MCP application protocol', () => {
     expect(publish?.annotations?.readOnlyHint).toBe(false);
     expect(deploy?.annotations?.readOnlyHint).toBe(false);
     expect(publish?.annotations?.idempotentHint).toBe(true);
-    expect(deploy?.annotations?.idempotentHint).toBe(true);
+    expect(deploy?.annotations?.idempotentHint).toBe(false);
     expect(publish?.description).toContain('already signed');
     expect(deploy?.description).toContain('sponsor');
     expect(Object.keys(publish?.inputSchema.properties ?? {}).sort()).toEqual(

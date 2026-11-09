@@ -1120,6 +1120,37 @@ describe("sponsored deploy requests", () => {
     ).toBe(400);
   });
 
+  it("keeps a failed chain that carries a bundle as it is and charges nothing for naming it", async () => {
+    const store = new MemoryStore();
+    const app = createApp(store, { sponsor });
+    const intent = (await (await publishWith(app, testnetEnvelope)).json()) as Intent;
+    const deploy = (target: ReturnType<typeof createApp>) =>
+      target.request(`/v1/intents/${intent.id}/deploy`, {
+        method: "POST",
+        headers: trusted,
+        body: JSON.stringify({ chainIds: [84532] }),
+      });
+    expect((await deploy(app)).status).toBe(202);
+    await store.claimQueuedDeploys(30, 10);
+    await store.updateDeploy(intent.id, 84532, { bundleUuid: "bundle-1" });
+    await store.updateDeploy(intent.id, 84532, { status: "failed", error: "bundle unresolved" });
+
+    // Relayr may yet execute the bundle, so the row is not asked for again: no budget check, no quota.
+    const tight = createApp(store, {
+      sponsor: { ...sponsor, policy: { ...sponsor.policy, dailyBudgetWei: 1n } },
+    });
+    expect((await deploy(tight)).status).toBe(200);
+    const again = await deploy(app);
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { deploys: IntentDeploy[] }).deploys).toEqual([
+      expect.objectContaining({ chainId: 84532, status: "failed", bundleUuid: "bundle-1" }),
+    ]);
+    expect(
+      [...store.requests.entries()].find(([key]) => key.startsWith("deploy:"))?.[1],
+    ).toBe(1);
+    expect(sponsor.kick).toHaveBeenCalledTimes(1);
+  });
+
   it("enforces the per-requester daily quota", async () => {
     const store = new MemoryStore();
     const app = createApp(store, { sponsor: { ...sponsor, policy: { ...sponsor.policy, perRequesterPerDay: 1 } } });

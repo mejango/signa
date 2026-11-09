@@ -286,8 +286,9 @@ signing message for the reviewed deployment calls; the user signs that message i
 owned account wallet; `jb_publish_intent` stores the envelope with that publisher and signature;
 `jb_deploy_intent` asks Center to execute the committed calls at its own expense on the supported
 rollups, and `jb_get_intent` polls the per-chain rows. Publication is permanent: there is no edit,
-replace or withdraw. A queued row is not a confirmation, a failed row is terminal for that intent,
-and one intent has exactly one deploying sender across all of its chains. The complete recipe is
+replace or withdraw. A queued row is not a confirmation, a failed row is asked for again only when
+`jb_deploy_intent` names its chain and it has no `bundleUuid`, and one intent has exactly one
+deploying sender across all of its chains. The complete recipe is
 Center's [project intents guide](https://juicebox.center/api/docs/project-intents).
 
 ### Reconcile a prepared transaction

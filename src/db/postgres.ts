@@ -394,7 +394,7 @@ export class PostgresStore implements Store {
     reservedWeiPerChain: bigint,
     retryFailed = false,
   ): Promise<IntentDeploy[]> {
-    // A retry starts the row over: a new reservation, no attempts, no claim, and a created_at
+    // Only a retryableDeploy row (failed, no bundle) is started over. A retry starts the row over: a new reservation, no attempts, no claim, and a created_at
     // the day of waiting is measured from. What the lane already spent stays on the row, so the
     // budget keeps counting money that left the key.
     await this.pool.query(

@@ -5,14 +5,15 @@ import { lazyModule } from "./lazyModule.js";
 import { loadRecoveryKit } from "./walletRecoveryKitLoader.js";
 import { signaChains } from "../wallet/chains.js";
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
+import type { WalletDevicePhase } from "../wallet/deviceService.js";
+import { encode, proof } from "./ceremony.js";
+import { beginLogin, forgetLogin, loginWith, passkeyLogin, pendingLogin, whileChecking } from "./walletLogin.js";
 /** No credentials, assertions, CSRF values or handoff codes are persisted by this page. It keeps only Coinbase's
  * returning-user token for Apple Pay (no personal data), per account, on this device. */
 type Json = Record<string, unknown>;
 type Configuration = { issuer: string; audience: string; rpId: string };
 type Session = { accountId: string; loginId: string; walletAddress: string; chainId: number; expiresAtMs: number; passkeyName: string | null };
 type Intent = { id: string; callbackUri: string; state: string; expiresAtMs: number };
-type Completion = { loginId: string; assertion: { credentialId: string; userHandle: string | null;
-  authenticatorData: string; clientDataJSON: string; signature: string } };
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = element("wallet-status"), account = element("wallet-account"), address = element("wallet-address"), passkey = element("wallet-passkey"), passkeyLabel = element("wallet-passkey-label");
@@ -21,13 +22,13 @@ const status = element("wallet-status"), account = element("wallet-account"), ad
 type NetworksView = { networks: { chainId: number; name: string; state: string; txHash: string | null; owners: string | undefined }[];
   offered: { chainId: number; name: string; family: string; centerPays: boolean }[]; pending: { id: string; state: string; chainIds: number[] }[]; backup: string | null };
 const networksList = element("wallet-networks"), networksAdd = element<HTMLButtonElement>("wallet-networks-add"), networksForm = element<HTMLFormElement>("wallet-networks-form");
-let networksView: NetworksView | null = null, networksQuote: { bundleId: string; challenge: string } | null = null, networksTimer: ReturnType<typeof setInterval> | null = null, networksOpen = false, networksPolls = 0;
+let networksView: NetworksView | null = null, networksTimer: ReturnType<typeof setInterval> | null = null, networksOpen = false, networksPolls = 0;
 /** The open form updates out-of-date networks instead of adding new ones. The backup file is held only while the form is open. */
 let networksUpdating = false, networksBackupWords: string | null = null, networksBackupNeeded = false, networksBackupInitializer: `0x${string}` | null = null;
 const networksUpdate = element<HTMLButtonElement>("wallet-networks-update");
 const destination = element("wallet-destination");
 // Adding a device: begin here, show the other device its link, approve with this passkey once it has proved its own.
-type DeviceView = { id: string; phase: string; passkeyName: string | null; deviceSigner: string | null; expiresAtMs: number; transactionHashes: string[];
+type DeviceView = { id: string; phase: WalletDevicePhase; passkeyName: string | null; deviceSigner: string | null; expiresAtMs: number; transactionHashes: string[];
   chains?: { chainId: number; name: string; state: string }[] };
 const deviceAdd = element<HTMLButtonElement>("wallet-device-add"), devicePanel = element("wallet-device"), deviceApprove = element<HTMLButtonElement>("wallet-device-approve");
 let device: { view: DeviceView; link: string } | null = null, deviceTimer: ReturnType<typeof setInterval> | null = null;
@@ -40,11 +41,14 @@ const deviceSignInPrompt = `Use ${deviceSignInLabel} to sign in.`;
 signIn.textContent = "Signa in";
 const signOut = element<HTMLButtonElement>("wallet-logout");
 let configuration: Configuration, intent: Intent | null = null, session: Session | null = null, framerOrigin: string | null = null;
-let sessionKnown = false, busy = false, csrf = "", pending: Completion | null = null;
-let completionAttempted = false;
+let sessionKnown = false, busy = false, csrf = "";
+/** A page sign-in is between its begin and its session: a refusal then means that sign-in is over. */
+let signingIn = false;
 let paymentReviewId: string | null = null;
 let nativePrompt: AbortController | null = null, retryAction: (() => Promise<void>) | null = null;
-let nextRetry: () => Promise<void> = load;
+/** What Retry repeats after an uncertain failure: the action, or the stage it reached. A stage past a
+ * step the service may have taken (a sign-in, an approval) never repeats that step. */
+let stage: () => Promise<void> = async () => {};
 // A sign-in that failed on the signup page comes back here with its message.
 let notice = takeSignInNotice();
 // Framed inside an admitted app's page, this page signs in without a Center session or cookie: the
@@ -68,6 +72,7 @@ if (framed) {
 const frameTooSmall = () => framed && window.innerWidth < 300;
 
 class InvalidResponse extends Error {}
+function invalid(): never { throw new InvalidResponse(); }
 class HttpFailure extends Error { constructor(readonly status: number, readonly code?: string, readonly appOrigin?: string) { super("Wallet request failed"); } }
 function record(value: unknown): Json {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new InvalidResponse();
@@ -80,9 +85,6 @@ function string(value: unknown, maximum = 2048): string {
 function future(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= Date.now()) throw new InvalidResponse();
   return value;
-}
-function encode(value: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(value))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 function decode(value: unknown): Uint8Array<ArrayBuffer> {
   const encoded = string(value, 4096);
@@ -99,7 +101,7 @@ function token(value: unknown): string {
 }
 function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; if (state === 'brand') signaBrandLink(status); }
 function render() {
-  signIn.hidden = !sessionKnown || !!session || !!pending || !!retryAction || fundsPage;
+  signIn.hidden = !sessionKnown || !!session || !!pendingLogin || !!retryAction || fundsPage;
   signIn.disabled = busy || frameTooSmall() || !signInVisible;
   if (openAsPage) openAsPage.hidden = !framed || !intent;
   retry.hidden = !retryAction || busy;
@@ -139,19 +141,6 @@ async function request(path: string, body?: unknown, csrfToken?: string, timeout
     return record(await response.json());
   } finally { clearTimeout(timer); }
 }
-/** Retries a 503 while the wallet's authority is being checked. Reads stop after three quick
- * attempts; an action the user is waiting on (`attempts`, `delayMs`) may wait for a hosted
- * authority refresh, which takes tens of seconds after the account has been idle. */
-async function readyRequest(path: string, body?: unknown, csrfToken?: string, timeoutMs?: number, attempts = 3, delayMs?: number): Promise<Json> {
-  for (let attempt = 0; ; attempt++) {
-    try { return await request(path, body, csrfToken, timeoutMs); }
-    catch (error) {
-      if (!(error instanceof HttpFailure) || error.status !== 503 || attempt === attempts - 1) throw error;
-      setStatus("checking", "Checking current wallet access. This may take a moment…");
-      await new Promise(resolve => setTimeout(resolve, delayMs ?? (attempt + 1) * 400));
-    }
-  }
-}
 function acceptSession(value: Json, required = false) {
   if (value.session === null && !required) { session = null; csrf = ""; sessionKnown = true; return; }
   const current = record(value.session), walletAddress = string(current.walletAddress, 42);
@@ -171,7 +160,7 @@ function acceptSession(value: Json, required = false) {
 }
 async function run(action: () => Promise<void>) {
   if (busy) return;
-  busy = true; retryAction = null; render();
+  busy = true; retryAction = null; stage = action; signingIn = false; render();
   try { await action(); }
   catch (error) {
     if (error instanceof HttpFailure && error.code === 'WALLET_HANDOFF_EXPIRED') {
@@ -188,29 +177,28 @@ async function run(action: () => Promise<void>) {
       setStatus("error", "This wallet request could not be verified. Return to the app and start again.");
       // An unverified result never makes a previously unknown session safe to replace.
     } else if (error instanceof HttpFailure && error.code && networksMessages[error.code]) {
-      networksQuote = null;
       setStatus("ready", networksMessages[error.code]!);
     } else if (error instanceof HttpFailure && error.code === 'WALLET_LOGIN_UNKNOWN_PASSKEY') {
-      pending = null; csrf = ""; completionAttempted = false;
+      forgetLogin(); csrf = "";
       setStatus("ready", "That passkey isn't linked to an account here. It may be left over from a signup that didn't finish. Try another passkey, or sign up.");
     } else if (error instanceof HttpFailure && [400, 401, 403, 404, 410].includes(error.status)) {
-      if (pending) {
-        pending = null; csrf = ""; completionAttempted = false;
+      if (signingIn) {
+        forgetLogin(); csrf = "";
         setStatus("ready", "This sign-in expired or could not be authorized. Try your passkey again.");
       } else {
         retryAction = framed ? load : readSession;
         setStatus("retry", "Account access changed or the request expired. Check your account again.");
       }
     } else {
-      retryAction = nextRetry;
-      setStatus("retry", pending
+      retryAction = stage;
+      setStatus("retry", pendingLogin
         ? "Sign-in confirmation is unavailable. Retry to check the same sign-in without using your passkey again."
         : "Wallet access is temporarily unavailable. Retry to check again.");
     }
   } finally { nativePrompt = null; busy = false; render(); }
 }
 async function load() {
-  nextRetry = load; setStatus("loading", "Checking your account…");
+  setStatus("loading", "Checking your account…");
   const query = new URL(location.href);
   // The funds page carries no app return or payment review: those belong to the pages that sign.
   if (query.hash || [...query.searchParams.keys()].some(key => !["intent", "payment"].includes(key)) || query.searchParams.size > (fundsPage ? 0 : 1)) throw new InvalidResponse();
@@ -220,7 +208,7 @@ async function load() {
   // The reads this page opens with do not depend on one another: they go out together and are checked in order.
   const configRead = request(`${base}/config`);
   const authorization = intentId ? request(`${base}/authorize/${intentId}`) : null;
-  ahead = readyRequest(`${base}/session`, undefined, undefined, 100_000);
+  ahead = whileChecking(`${base}/session`, undefined, undefined, 100_000);
   for (const read of [authorization, ahead]) read?.catch(() => undefined);
   const config = await configRead;
   if (config.version !== "center-wallet-v1" || config.issuer !== location.origin) throw new InvalidResponse();
@@ -263,8 +251,8 @@ async function load() {
 }
 let ahead: Promise<Json> | null = null;
 async function readSession() {
-  nextRetry = readSession; setStatus("checking", "Checking current wallet access…");
-  const read = ahead ?? readyRequest(`${base}/session`, undefined, undefined, 100_000); ahead = null;
+  setStatus("checking", "Checking current wallet access…");
+  const read = ahead ?? whileChecking(`${base}/session`, undefined, undefined, 100_000); ahead = null;
   acceptSession(await read);
   await continueSession();
 }
@@ -279,55 +267,29 @@ async function continueSession() {
   else { const carried = notice; notice = null; setStatus(carried?.state ?? "ready", carried?.message ?? "Use Face ID, Touch ID, a screen lock, or a security key."); }
 }
 async function login() {
-  nextRetry = login;
   if (framed && intent) return framedSignIn();
-  if (pending) return completeLogin();
-  if (!window.isSecureContext || !navigator.credentials?.get) {
-    setStatus("error", "This browser cannot use passkeys here. Open Signa in a browser that supports passkeys."); return;
-  }
-  setStatus("checking", "Preparing your sign-in…");
-  const begun = await request(`${base}/login/begin`, {}), publicKey = record(begun.publicKey);
-  if (publicKey.rpId !== configuration.rpId || publicKey.userVerification !== "required" || publicKey.timeout !== 90_000) throw new InvalidResponse();
-  const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new InvalidResponse();
-  const loginId = string(begun.loginId, 36); future(begun.expiresAtMs);
-  const flowCsrf = token(begun.csrfToken);
-  nativePrompt = new AbortController(); setStatus("authenticating", deviceSignInPrompt); render();
-  const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge,
-    userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
-  if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
-  const assertion = credential.response;
-  pending = { loginId, assertion: { credentialId: encode(credential.rawId), userHandle: assertion.userHandle ? encode(assertion.userHandle) : null,
-    authenticatorData: encode(assertion.authenticatorData), clientDataJSON: encode(assertion.clientDataJSON), signature: encode(assertion.signature) } };
-  csrf = flowCsrf; nativePrompt = null; render();
-  completionAttempted = false;
-  await completeLogin();
-}
-async function completeLogin() {
-  nextRetry = completeLogin;
-  if (!pending) throw new InvalidResponse();
-  setStatus("checking", "Confirming your account access…");
-  if (completionAttempted) {
-    // Success headers can install the session and clear the flow cookie before its body
-    // arrives. Only this exact login can recover the selected credential's completion.
-    const recovered = await readyRequest(`${base}/session`);
-    if (recovered.session && record(recovered.session).loginId === pending.loginId) {
-      acceptSession(recovered, true); pending = null; completionAttempted = false;
-      await continueSession(); return;
+  if (!pendingLogin) {
+    if (!window.isSecureContext || !navigator.credentials?.get) {
+      setStatus("error", "This browser cannot use passkeys here. Open Signa in a browser that supports passkeys."); return;
     }
-    // A different tab's session must neither replace this identity nor its flow CSRF.
+    setStatus("checking", "Preparing your sign-in…");
   }
-  completionAttempted = true;
-  // Completion may refresh the account's authority on Base first; the site holds the request up to 90 s.
-  setStatus("checking", "Checking your account. This can take up to a minute…");
-  const result = await readyRequest(`${base}/login/complete`, pending, csrf, 100_000);
-  if (record(result.session).loginId !== pending.loginId) throw new InvalidResponse();
+  signingIn = true;
+  const result = await passkeyLogin(prove, configuration.rpId);
+  signingIn = false;
   acceptSession(result, true);
-  pending = null; completionAttempted = false;
   await continueSession();
 }
+/** One prompt for the account's passkey; Cancel aborts it. */
+async function askPasskey(challenge: Uint8Array<ArrayBuffer>, ask = deviceSignInPrompt) {
+  nativePrompt = new AbortController(); setStatus("authenticating", ask); render();
+  const value = proof(await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge, userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal }), invalid);
+  nativePrompt = null; render(); return value;
+}
+const prove = (challenge: Uint8Array<ArrayBuffer>) => askPasskey(challenge);
+const hex = (value: string) => Uint8Array.from(value.slice(2).match(/../g)!.map(pair => parseInt(pair, 16)));
 // The framed sign-in: begin, one passkey prompt, approve; the approval's answer is the app's callback.
 async function framedSignIn() {
-  nextRetry = framedSignIn;
   if (!intent) throw new InvalidResponse();
   if (frameTooSmall() || !signInVisible) { setStatus("ready", "Open this sign-in as a page of its own to continue."); return; }
   if (!window.isSecureContext || !navigator.credentials?.get) {
@@ -335,22 +297,10 @@ async function framedSignIn() {
   }
   future(intent.expiresAtMs);
   setStatus("checking", "Preparing your sign-in…");
-  const begun = await request(`${base}/authorize/${intent.id}/begin`, {}), publicKey = record(begun.publicKey);
-  if (publicKey.rpId !== configuration.rpId || publicKey.userVerification !== "required" || publicKey.timeout !== 90_000) throw new InvalidResponse();
-  const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new InvalidResponse();
-  const loginId = string(begun.loginId, 36), flowToken = token(begun.flowToken); future(begun.expiresAtMs);
-  nativePrompt = new AbortController(); setStatus("authenticating", deviceSignInPrompt); render();
-  const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge,
-    userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
-  if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
-  const assertion = credential.response;
-  nativePrompt = null;
+  const { loginId, token: flowToken, assertion } = await beginLogin(`${base}/authorize/${intent.id}/begin`, "flowToken", prove, configuration.rpId);
   // Approval may refresh the account's authority on Base first; the site holds the request up to 90 s.
   setStatus("checking", "Checking your account. This can take up to a minute…");
-  const result = await readyRequest(`${base}/authorize/${intent.id}/approve`, { loginId, flowToken, assertion: {
-    credentialId: encode(credential.rawId), userHandle: assertion.userHandle ? encode(assertion.userHandle) : null,
-    authenticatorData: encode(assertion.authenticatorData), clientDataJSON: encode(assertion.clientDataJSON), signature: encode(assertion.signature) } },
-    undefined, 100_000);
+  const result = await whileChecking(`${base}/authorize/${intent.id}/approve`, { loginId, flowToken, assertion }, undefined, 100_000);
   setStatus("returning", "Returning to your app…");
   location.replace(appReturn(result));
 }
@@ -359,19 +309,19 @@ function appReturn(result: Json): string {
   try { return checkedRedirect(result, intent!, configuration.issuer); } catch { throw new InvalidResponse(); }
 }
 async function issue() {
-  nextRetry = issue;
   if (!intent || !session) throw new InvalidResponse();
+  stage = issue;
   future(intent.expiresAtMs); future(session.expiresAtMs);
   setStatus("returning", "Returning to your app…");
   // Issuing needs fresh on-chain authority; after idle that is a hosted refresh of ~25 s.
-  const result = await readyRequest(`${base}/authorize/issue`, { intentId: intent.id }, csrf, undefined, 90, 1000);
+  const result = await whileChecking(`${base}/authorize/issue`, { intentId: intent.id }, csrf, undefined, 90, 1000);
   location.replace(appReturn(result));
 }
 async function logout() {
-  nextRetry = logout; setStatus("checking", "Signing out…");
+  setStatus("checking", "Signing out…");
   const result = await request(`${base}/logout`, {}, csrf);
   if (result.loggedOut !== true) throw new InvalidResponse();
-  session = null; csrf = ""; pending = null; completionAttempted = false; sessionKnown = true;
+  session = null; csrf = ""; forgetLogin(); sessionKnown = true;
   if (fundsPage) { location.replace(base || "/"); return; }
   setStatus("ready", "You are signed out. You can sign in again with your passkey.");
 }
@@ -417,7 +367,7 @@ function renderNetworks() {
     if (busy || document.hidden || !navigator.onLine || networksPolls++ > 200) return;
     networksStatus().catch(() => { /* The next poll reads again. */ });
   }, 3000);
-  if (view && !waiting && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
+  if (!waiting && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
 }
 function chosenFamily(): string {
   return (networksForm?.querySelector<HTMLInputElement>("input[name=family]:checked")?.value) ?? "mainnet";
@@ -436,10 +386,10 @@ function renderChoices() {
 function openNetworks(updating = false) {
   if (!networksView) return;
   renderChoices();
-  networksQuote = null; networksOpen = true; networksUpdating = updating; render();
+  networksOpen = true; networksUpdating = updating; render();
 }
 function closeNetworks() {
-  networksOpen = networksUpdating = networksBackupNeeded = false; networksQuote = null; networksBackupWords = networksBackupInitializer = null;
+  networksOpen = networksUpdating = networksBackupNeeded = false; networksBackupWords = networksBackupInitializer = null;
   element<HTMLInputElement>("wallet-networks-words").value = ""; element<HTMLInputElement>("wallet-networks-file").value = "";
 }
 /** The backup's words, from the file loaded in this tab or the password field, read when needed and not kept in the field. */
@@ -529,25 +479,29 @@ async function networksDeploy() {
   if (quoted.bundle === null) {
     if (!owners) { closeNetworks(); setStatus("ready", "Your account is already on those networks."); return; }
     setStatus("checking", "Updating the owners…");
-    networksView = networkView(record(record(await request(`${base}/networks/owners`, owners, csrf, 60_000)).view)); closeNetworks();
-    setStatus("checking", "Updating the owners. Actions there wait until it lands."); return;
+    // Retry sends this same signed update: the service takes it once and answers a later copy with the networks.
+    const signed = owners;
+    stage = async () => {
+      networksView = networkView(record(record(await request(`${base}/networks/owners`, signed, csrf, 60_000)).view)); closeNetworks();
+      setStatus("checking", "Updating the owners. Actions there wait until it lands.");
+    };
+    await stage(); return;
   }
   const bundle = record(quoted.bundle);
-  networksQuote = { bundleId: string(bundle.id, 36), challenge: string(quoted.challenge, 66) };
+  const networksQuote = { bundleId: string(bundle.id, 36), challenge: string(quoted.challenge, 66) };
   if (!configuration) throw new InvalidResponse();
   const challenge = networksQuote.challenge; if (!/^0x[0-9a-fA-F]{64}$/.test(challenge)) throw new InvalidResponse();
   // Only the account's passkey can approve, so the prompt offers that one instead of every passkey for the site.
-  nativePrompt = new AbortController(); setStatus("authenticating", "Approve the new networks with your passkey."); render();
-  const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge: Uint8Array.from(challenge.slice(2).match(/../g)!.map(pair => parseInt(pair, 16))),
-    userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
-  if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
-  const response = credential.response; nativePrompt = null;
+  const assertion = await askPasskey(hex(challenge), "Approve the new networks with your passkey.");
   setStatus("checking", "Funding the deployments…");
-  const result = record(await request(`${base}/networks/approve`, { bundleId: networksQuote.bundleId, assertion: { credentialId: encode(credential.rawId),
-    userHandle: response.userHandle ? encode(response.userHandle) : null, authenticatorData: encode(response.authenticatorData),
-    clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) }, ...(owners ? { owners } : {}) }, csrf, 60_000));
-  networksView = networkView(result.view as Json); closeNetworks();
-  setStatus("checking", deployingText());
+  // Retry sends this same approval, never a new quote: the service funds a quoted bundle once and answers a later copy with its deployments.
+  const signed = owners;
+  stage = async () => {
+    const result = record(await request(`${base}/networks/approve`, { bundleId: networksQuote.bundleId, assertion, ...(signed ? { owners: signed } : {}) }, csrf, 60_000));
+    networksView = networkView(result.view as Json); closeNetworks();
+    setStatus("checking", deployingText());
+  };
+  await stage();
 }
 function deployingText() {
   const names = networksView?.networks.filter(item => item.state === "pending").map(item => item.name) ?? [];
@@ -574,7 +528,7 @@ if (networksAdd && networksForm) {
     } catch { setStatus("ready", networksMessages.WALLET_NETWORKS_BACKUP_INVALID!); }
   }); });
   networksForm.addEventListener("submit", event => { event.preventDefault(); void run(networksDeploy); });
-  for (const radio of networksForm.querySelectorAll<HTMLInputElement>("input[name=family]")) radio.addEventListener("change", () => { networksQuote = null; renderChoices(); render(); });
+  for (const radio of networksForm.querySelectorAll<HTMLInputElement>("input[name=family]")) radio.addEventListener("change", () => { renderChoices(); render(); });
   element("wallet-networks-cancel").addEventListener("click", () => { closeNetworks(); render(); });
   window.addEventListener("pagehide", () => { networksBackupWords = networksBackupInitializer = null; });
 }
@@ -755,7 +709,9 @@ element("wallet-funds-coinbase").addEventListener("click", () => void run(() => 
 element("wallet-funds-cancel").addEventListener("click", () => { fundsShown = false; render(); });
 // The last hex characters of the new device's signer show on both pages, so a swapped device is visible before approval.
 // The mark spins only while the service works (adding, finishing); waiting on a person does not spin.
-const deviceWorking = (phase: string) => phase === "adding" || phase === "awaiting_activation";
+const deviceWorking = (phase: WalletDevicePhase) => phase === "adding" || phase === "awaiting_activation";
+// The panel reads the device only while the other device or the service is moving it on; waiting on this person, or an end, needs no reads.
+const devicePolled = (phase: WalletDevicePhase) => phase === "awaiting_registration" || phase === "awaiting_possession" || deviceWorking(phase);
 const deviceTag = (signer: string | null) => typeof signer === "string" && /^0x[0-9a-fA-F]{40}$/.test(signer) ? signer.slice(-6).toUpperCase() : "";
 const listed = (names: string[]) => names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "";
 /** The account's other networks follow Base; one that did not take the device stays blocked there and is named. */
@@ -765,7 +721,7 @@ function deviceChainsText() {
   return (coming.length ? ` ${listed(coming)} ${coming.length > 1 ? "follow" : "follows"} shortly.` : "")
     + (failed.length ? ` Adding it on ${listed(failed)} did not complete; actions there wait until it does.` : "");
 }
-function deviceText(phase: string, signer: string | null = device?.view.deviceSigner ?? null) {
+function deviceText(phase: WalletDevicePhase, signer: string | null = device?.view.deviceSigner ?? null) {
   const networks = networksView?.networks.filter(item => item.state === "deployed").map(item => item.name) ?? [];
   return phase === "awaiting_registration" || phase === "awaiting_possession" ? "Waiting for the other device to create its passkey…"
     : phase === "awaiting_approval" ? (networks.length > 1 ? `The other device is ready and shows ${deviceTag(signer)}. Add this device on ${listed(networks)}. Your current device confirms each.`
@@ -793,7 +749,10 @@ function renderDevice() {
   deviceCancel.hidden = false; deviceCancel.textContent = phase === "ready" || phase === "expired" || phase === "addition_failed" ? "Close" : "Cancel";
   // One dark button on the page: while the approval is the action, Retry is a text button beside Cancel.
   retry.classList.toggle("link", !deviceApprove.hidden);
-  if (!deviceTimer && ["awaiting_registration", "awaiting_possession", "adding", "awaiting_activation"].includes(phase)) deviceTimer = setInterval(() => {
+  // A device added on Base is still being added on the account's other networks until each one lands or fails.
+  const polled = devicePolled(phase) || !!device!.view.chains?.some(chain => chain.state === "approved" || chain.state === "submitted");
+  if (!polled && deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; }
+  if (polled && !deviceTimer) deviceTimer = setInterval(() => {
     if (busy || document.hidden || !navigator.onLine) return;
     devicePoll().catch(() => { /* The next poll reads again. */ });
   }, 3000);
@@ -811,11 +770,14 @@ async function deviceBegin() {
   void qr.then(module => { if (module && device?.link === link) element("wallet-device-code").innerHTML = module.qrSvg(link, "Link for the other device"); });
   setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
-async function devicePoll() {
+async function devicePoll(running = false) {
   if (!session || !device) return;
-  const result = record(await request(`${base}/devices/${device.view.id}`)), view = record(result.view) as unknown as DeviceView;
-  device = { ...device, view };
-  if (view.phase === "awaiting_activation") { await run(deviceActivate); return; }
+  const asked = device;
+  const result = record(await request(`${base}/devices/${asked.view.id}`)), view = record(result.view) as unknown as DeviceView;
+  // A read that a later read, an approval or a cancel overtook belongs to an earlier step.
+  if (device !== asked) return;
+  device = { ...asked, view };
+  if (view.phase === "awaiting_activation") { await (running ? deviceActivate() : run(deviceActivate)); return; }
   render(); setStatus(deviceWorking(view.phase) ? "checking" : "ready", deviceText(view.phase));
 }
 /** Confirmations already given, by challenge: a prompt the browser drops part way keeps the earlier ones for the next click. */
@@ -838,16 +800,12 @@ async function deviceApproveNow() {
   if (steps.some((step, index) => step.challenge.toLowerCase() !== expected[index])) throw new InvalidResponse();
   for (const [index, step] of steps.entries()) {
     if (deviceConfirmed.has(step.challenge)) continue;
-    nativePrompt = new AbortController();
-    setStatus("authenticating", steps.length > 1 ? `Confirm on ${step.name} (${index + 1} of ${steps.length}).` : "Approve the new device with your passkey."); render();
-    const credential = await navigator.credentials.get({ publicKey: { rpId: configuration.rpId, challenge: Uint8Array.from(step.challenge.slice(2).match(/../g)!.map(pair => parseInt(pair, 16))),
-      userVerification: "required", timeout: 90_000 }, signal: nativePrompt.signal });
-    if (!(credential instanceof PublicKeyCredential) || !(credential.response instanceof AuthenticatorAssertionResponse)) throw new InvalidResponse();
-    const response = credential.response; nativePrompt = null;
-    deviceConfirmed.set(step.challenge, { credentialId: encode(credential.rawId), userHandle: response.userHandle ? encode(response.userHandle) : null,
-      authenticatorData: encode(response.authenticatorData), clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) });
+    deviceConfirmed.set(step.challenge, await askPasskey(hex(step.challenge),
+      steps.length > 1 ? `Confirm on ${step.name} (${index + 1} of ${steps.length}).` : "Approve the new device with your passkey."));
   }
   setStatus("checking", "Adding the device to your account…");
+  // An approval whose answer is lost may have been accepted: Retry reads the device and goes on from there.
+  stage = () => devicePoll(true);
   const result = record(await request(`${base}/devices/${device.view.id}/approve`, { review: prepared.review, assertion: deviceConfirmed.get(steps[0]!.challenge),
     ...(chains.length ? { chains: steps.slice(1).map(step => ({ chainId: (step as { chainId: number }).chainId, assertion: deviceConfirmed.get(step.challenge) })) } : {}) }, csrf, 60_000));
   deviceConfirmed.clear();
@@ -866,6 +824,7 @@ if (deviceAdd && devicePanel) {
   deviceApprove.addEventListener("click", () => void run(deviceApproveNow));
   element("wallet-device-cancel").addEventListener("click", () => { device = null; deviceConfirmed.clear(); render(); });
 }
+loginWith(request, text => setStatus("checking", text), invalid);
 signIn.addEventListener("click", () => void run(login));
 if (framed) window.addEventListener("resize", render);
 retry.addEventListener("click", () => { if (retryAction) void run(retryAction); });

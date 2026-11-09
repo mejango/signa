@@ -191,12 +191,16 @@ describe('transport-independent protocol operations', () => {
       kind: 'prepare',
       transaction: false,
     });
-    for (const id of ['publish_intent', 'deploy_intent']) {
+    // Naming a failed chain with no bundle queues a new funded attempt, so a deploy request is not idempotent.
+    for (const [id, idempotent] of [
+      ['publish_intent', true],
+      ['deploy_intent', false],
+    ] as const) {
       expect(operations.get(id)).toMatchObject({
         kind: 'center-write',
         sources: ['center'],
         transaction: false,
-        effects: { externalMutation: true, idempotent: true },
+        effects: { externalMutation: true, idempotent },
       });
     }
     for (const id of ['pin_project_logo', 'pin_project_metadata']) {

@@ -1,4 +1,6 @@
 import { carrySignInNotice, nativePasskeyError } from './walletPasskeyError.js';
+import { beginLogin, forgetLogin, loginWith, passkeyLogin, pendingLogin, whileChecking } from './walletLogin.js';
+import { assertion as passkeyAssertion, busy, ceremony, disposed, encode, engaged, leave, message, native, prompt, run, spin, waiting } from './ceremony.js';
 import { defaultPasskeyName } from './passkeyName.js';
 import { getAddress, hashTypedData, isAddress, type Address, type Hex } from 'viem';
 import type { createLocalWalletSignup } from '../wallet/signup.js';
@@ -31,7 +33,7 @@ function announce(title: string, text: string) {
     explain.returnValue = ''; explain.showModal();
   });
 }
-let view: View | null = null, known = false, busy = false, csrf = '', native: AbortController | null = null;
+let view: View | null = null, known = false, csrf = '';
 // Inside an admitted app's frame the signup is the app's intent's: no cookie reaches a cross-site frame, so the
 // flow token rides in every request body and each request is admitted by the intent behind the framed launch.
 // The account made here is the same account; at the end the app gets its code and the frame returns to it.
@@ -43,7 +45,9 @@ const intentView = () => { if (!intentReturn) throw new Error('Return to the ori
 // A log-in in progress is the whole page; the signup form waits until it fails.
 let loggingIn = false;
 let pending: { path: string; body: unknown; csrf: string } | null = null;
-let disposed = false, pollCount = 0;
+let pollCount = 0;
+/** The background poll stops after 150 reads; the check then stands in for it. */
+const pollStopped = () => polling() && pollCount >= 150;
 let recoverySecret: WalletRecoverySecret | null = null, kitSavedWallet: string | null = null;
 let approvedHere = false, sessionTried = false, activationTried = false;
 const downloadUrls = new Set<string>();
@@ -80,8 +84,21 @@ const steps: Record<View['phase'], string> = {
 // While work is in flight the status line's mark spins (Croptop's text ticker) instead of showing the lightning.
 // A native prompt waiting on the user is not work in flight, so the mark holds still for it.
 const polling = () => view?.phase === 'deploying' || view?.phase === 'preparing_sign_in';
-const waiting = () => (busy && !native) || polling();
-function message(value: string, error = false) { status.textContent = value; status.dataset.state = error ? 'error' : waiting() ? 'busy' : 'ready'; status.toggleAttribute('data-brand', inFrame() && value === 'Signa'); if (status.hasAttribute('data-brand')) signaBrandLink(status); }
+ceremony(status, polling, render, async (error, prompt) => {
+  known = true; // Whatever failed, the page stops waiting and offers its ways in.
+  if (error instanceof HttpFailure && error.status >= 400 && error.status < 500) {
+    pending = null;
+    try { accept(await request('state')); } catch { /* Resume with a fresh proof if the cookie is no longer valid. */ }
+  }
+  if (error instanceof DOMException && prompt) {
+    const feedback = nativePasskeyError(error, prompt.signal.aborted);
+    const fullscreen = inFrame() && error.name === 'NotAllowedError' && !prompt.signal.aborted && view?.phase === 'awaiting_registration'
+      ? ' You can also open Fullscreen below to try on a page of its own.' : '';
+    return { message: feedback.message + fullscreen, state: feedback.state };
+  }
+  return { message: error instanceof DOMException && error.name === 'AbortError' ? 'The account service took too long to answer. Try again.'
+    : error instanceof Error ? error.message : 'Signup is unavailable. Check the original signup again.', state: 'error' };
+}, value => { status.toggleAttribute('data-brand', inFrame() && value === 'Signa'); if (status.hasAttribute('data-brand')) signaBrandLink(status); });
 /** The first word links to the creation transaction on Basescan when the signup has one. */
 function messageLinked(word: string, rest: string) {
   const hash = view?.transactionHash;
@@ -89,8 +106,6 @@ function messageLinked(word: string, rest: string) {
   const link = document.createElement('a'); link.href = 'https://basescan.org/tx/' + hash; link.target = '_blank'; link.rel = 'noopener'; link.textContent = word;
   status.replaceChildren(link, document.createTextNode(rest)); status.dataset.state = waiting() ? 'busy' : 'ready'; status.removeAttribute('data-brand');
 }
-function spin() { if (waiting()) { if (status.dataset.state !== 'error') status.dataset.state = 'busy'; } else if (status.dataset.state === 'busy') status.dataset.state = 'ready'; }
-function encode(value: ArrayBuffer) { return btoa(String.fromCharCode(...new Uint8Array(value))).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', ''); }
 function decode(value: string): Uint8Array<ArrayBuffer> {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,4096}$/.test(value)) throw new Error('Invalid passkey challenge.');
   const bytes = Uint8Array.from(atob(value.replaceAll('-', '+').replaceAll('_', '/')), char => char.charCodeAt(0));
@@ -186,8 +201,8 @@ function render() {
   // "log in" resumes with a passkey; a finished wallet lands at sign-in. Once the state is known (or its load failed),
   // it stays offered unless a signup with a passkey is under way, so a returning user is never without a way in.
   resume.hidden = !known || loggingIn || (!!view && view.phase !== 'expired' && view.phase !== 'awaiting_registration');
-  // "Check signup" only matters for a lost reply; creation and login preparation are pushed.
-  check.hidden = stranded || !pending; check.disabled = engaged;
+  // "Check signup" only matters for a lost reply or a stopped poll; creation and login preparation are pushed.
+  check.hidden = stranded || (!pending && !pollStopped()); check.disabled = engaged;
   // One filled button per page: the check is the primary only when it stands alone.
   check.classList.toggle('link', !form.hidden); check.classList.toggle('secondary', form.hidden && !next.hidden);
   // Forgetting this browser's continuation; the signup and its passkey stay usable through "log in".
@@ -207,29 +222,6 @@ async function observe() {
   if (pending) { const saved = pending; await send(saved.path, saved.body, saved.csrf); }
   else accept(await request('state', inFrame() ? {} : undefined));
 }
-// A background poll (`quiet`) guards re-entrancy like any run but never dims the controls: the
-// person is not waiting on a button, so nothing should flash every couple of seconds.
-let engaged = false;
-async function run(action: () => Promise<void>, quiet = false) {
-  if (busy || disposed) return;
-  busy = true; engaged = !quiet; render();
-  try { await action(); }
-  catch (error) {
-    known = true; // Whatever failed, the page stops waiting and offers its ways in.
-    if (error instanceof HttpFailure && error.status >= 400 && error.status < 500) {
-      pending = null;
-      try { accept(await request('state')); } catch { /* Resume with a fresh proof if the cookie is no longer valid. */ }
-    }
-    if (error instanceof DOMException && native) {
-      const feedback = nativePasskeyError(error, native.signal.aborted);
-      const fullscreen = inFrame() && error.name === 'NotAllowedError' && !native.signal.aborted && view?.phase === 'awaiting_registration'
-        ? ' You can also open Fullscreen below to try on a page of its own.' : '';
-      message(feedback.message + fullscreen, feedback.state === 'error');
-    } else message(error instanceof DOMException && error.name === 'AbortError'
-      ? 'The account service took too long to answer. Try again.'
-      : error instanceof Error ? error.message : 'Signup is unavailable. Check the original signup again.', true);
-  } finally { native = null; busy = false; engaged = false; if (!disposed) render(); }
-}
 function provider(): Ethereum {
   const value = (window as unknown as { ethereum?: Ethereum }).ethereum;
   if (!value?.request) throw new Error('Open this page with your recovery wallet browser extension available.');
@@ -241,17 +233,7 @@ async function recoveryOwner(expected?: Address) {
     throw new Error('Select the original recovery wallet before continuing.');
   return getAddress(accounts[0]);
 }
-/** Discoverable on purpose: Center pins the expected passkey when it verifies; an allow list only lets
- * iOS refuse a passkey it cannot preselect. */
-async function assertion(challenge: string, rpId: string) {
-  if (rpId !== location.hostname || !window.isSecureContext) throw new Error('Open the original secure wallet page.');
-  native = new AbortController(); render();
-  const value = await navigator.credentials.get({ publicKey: { rpId, challenge: hexBytes(challenge), userVerification: 'required', timeout: 90000 }, signal: native.signal });
-  if (!(value instanceof PublicKeyCredential) || !(value.response instanceof AuthenticatorAssertionResponse)) throw new Error('The passkey response is unavailable.');
-  const response = value.response; native = null;
-  return { credentialId: encode(value.rawId), userHandle: response.userHandle ? encode(response.userHandle) : null,
-    authenticatorData: encode(response.authenticatorData), clientDataJSON: encode(response.clientDataJSON), signature: encode(response.signature) };
-}
+const assertion = (challenge: string, rpId: string) => passkeyAssertion(hexBytes(challenge), rpId);
 async function advance() {
   if (!view) return;
   if (view.phase === 'awaiting_deployment_approval' && !kitMode()) await recoveryOwner(view.recoveryOwner);
@@ -259,14 +241,14 @@ async function advance() {
     if (inFrame()) { view = null; flowToken = ''; } else await send('restart', {});
     csrf = '';
   } else if (view.phase === 'awaiting_registration' && view.registration) {
-    message('Use Face ID, Touch ID, a screen lock, or a security key.'); native = new AbortController(); render();
-    const value = await navigator.credentials.create({ publicKey: { rp: { id: view.rpId, name: 'Signa' },
+    message('Use Face ID, Touch ID, a screen lock, or a security key.');
+    const publicKey: PublicKeyCredentialCreationOptions = { rp: { id: view.rpId, name: 'Signa' },
       user: { id: decode(view.registration.userHandle), name: view.passkeyName, displayName: view.passkeyName },
       challenge: decode(view.registration.challenge), pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
       authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
-      attestation: 'none', timeout: 90000 }, signal: native.signal });
+      attestation: 'none', timeout: 90000 };
+    const value = await prompt(signal => navigator.credentials.create({ publicKey, signal }));
     if (!(value instanceof PublicKeyCredential) || !(value.response instanceof AuthenticatorAttestationResponse)) throw new Error('The passkey response is unavailable.');
-    native = null;
     await send('register', { type: 'public-key', credentialId: encode(value.rawId), rawId: encode(value.rawId),
       clientDataJSON: encode(value.response.clientDataJSON), attestationObject: encode(value.response.attestationObject) });
     // The same signup continues into its fresh passkey approval. A cancelled or uncertain
@@ -417,30 +399,21 @@ async function login() {
 }
 async function loginFlow() {
   if (inFrame()) return framedLogin();
-  message('Signing in…');
-  const begun = await walletRequest(`${base}/login/begin`, {}), publicKey = begun.publicKey;
-  if (publicKey?.rpId !== location.hostname || publicKey.userVerification !== 'required' || typeof begun.loginId !== 'string' || typeof begun.csrfToken !== 'string') throw new Error('The account host changed.');
-  const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new Error('Invalid passkey challenge.');
-  message('Sign in with the prompt.');
-  const proof = await assertion('0x' + Array.from(challenge, byte => byte.toString(16).padStart(2, '0')).join(''), publicKey.rpId);
-  message('Signing in…');
-  const result = await walletRequest(`${base}/login/complete`, { loginId: begun.loginId, assertion: proof }, begun.csrfToken, 100000);
-  if (result?.session?.loginId !== begun.loginId) throw new Error('Sign-in could not be confirmed.');
+  if (!pendingLogin) message('Signing in…');
+  await passkeyLogin(prove, location.hostname);
   location.replace((base || '/') + location.search);
 }
+const prove = (challenge: Uint8Array<ArrayBuffer>, rpId: string) => { message('Sign in with the prompt.'); return passkeyAssertion(challenge, rpId); };
 /** Inside the frame: the passkey sign-in the wallet landing page runs framed (the intent admits it, no cookie), then the app's return. */
 async function framedLogin() {
   message('Signing in…');
-  const begun = await walletRequest(`${base}/authorize/${intentId}/begin`, {}), publicKey = begun.publicKey;
-  if (publicKey?.rpId !== location.hostname || publicKey.userVerification !== 'required' || typeof begun.loginId !== 'string' || typeof begun.flowToken !== 'string') throw new Error('The account host changed.');
-  const challenge = decode(publicKey.challenge); if (challenge.length !== 32) throw new Error('Invalid passkey challenge.');
-  message('Sign in with the prompt.');
-  const proof = await assertion('0x' + Array.from(challenge, byte => byte.toString(16).padStart(2, '0')).join(''), publicKey.rpId);
+  const { loginId, token: flowToken, assertion } = await beginLogin(`${base}/authorize/${intentId}/begin`, 'flowToken', prove, location.hostname);
   message('Signing in…');
-  const result = await walletRequest(`${base}/authorize/${intentId}/approve`, { loginId: begun.loginId, flowToken: begun.flowToken, assertion: proof }, undefined, 100000);
+  const result = await whileChecking(`${base}/authorize/${intentId}/approve`, { loginId, flowToken, assertion }, undefined, 100000);
   message('Returning to your app…');
   location.replace(checkedRedirect(result, intentView(), location.origin));
 }
+loginWith(walletRequest, message, () => { throw new Error('The account host changed.'); });
 async function resumeSignup() {
   await announce('Pick up your signup', 'That passkey belongs to an unfinished signup. One more passkey prompt picks it up where you left off.');
   const begun = await request('resume/begin', {}); message('Pick up your signup with the prompt.');
@@ -452,10 +425,10 @@ resume.addEventListener('click', event => { event.preventDefault(); if (busy || 
   // A passkey with a finished wallet logs in; one from an unfinished signup resumes it. Any other
   // failed sign-in goes back to the sign-in page with its message, never to this signup form.
   try { await login(); return; } catch (error) {
-    if (error instanceof HttpFailure && [400, 401, 403, 404, 410].includes(error.status)) { await resumeSignup(); return; }
+    if (error instanceof HttpFailure && [400, 401, 403, 404, 410].includes(error.status)) { forgetLogin(); await resumeSignup(); return; }
     carrySignInNotice(error instanceof DOMException && native ? nativePasskeyError(error, native.signal.aborted)
       : { message: 'Sign-in didn’t finish. Try again.', state: 'ready' });
-    disposed = true; message(''); // Leaving: nothing repaints the signup form behind the navigation.
+    leave(); message(''); // Leaving: nothing repaints the signup form behind the navigation.
     location.replace((base || '/') + location.search);
   }
 }); });
@@ -479,13 +452,13 @@ function stream() {
 }
 const timer = setInterval(() => {
   stream();
-  if (busy || pending || !polling() || document.hidden || !navigator.onLine || pollCount >= 150) return;
+  if (busy || pending || !polling() || document.hidden || !navigator.onLine || pollStopped()) return;
   const interval = source && live() ? 10000 : 2000;
   if (Date.now() - lastPoll < interval) return;
   lastPoll = Date.now(); pollCount++; void run(observe, true);
 }, 2000);
 window.addEventListener('pagehide', () => {
-  disposed = true; native?.abort(); clearInterval(timer); source?.close(); recoverySecret = null;
+  clearInterval(timer); source?.close(); recoverySecret = null;
   el<HTMLInputElement>('recovery-phrase').value = '';
   el<HTMLTextAreaElement>('recovery-words').value = ''; el<HTMLInputElement>('recovery-file').value = '';
   for (const url of downloadUrls) URL.revokeObjectURL(url); downloadUrls.clear();

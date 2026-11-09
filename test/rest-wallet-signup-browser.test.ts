@@ -231,4 +231,123 @@ describe("served Center signup page", () => {
     expect(await page.locator("body").textContent()).not.toContain("private-detail");
     expect(errors).toEqual([]);
   }, 20_000);
+
+  it("offers the check once its background poll stops, and polls again after it", async () => {
+    const context = await browser.newContext(), signup = await context.newPage();
+    try {
+      let reads = 0;
+      const view = { enrollmentId: "11111111-1111-4111-8111-111111111111", origin, rpId: "localhost", phase: "deploying", passkeyName: "Test",
+        recoveryOwner: `0x${"01".repeat(20)}`, walletAddress: `0x${"02".repeat(20)}`, initializerHash: `0x${"03".repeat(32)}`, transactionHash: null, preconfirmed: false };
+      await signup.route("**/wallet/signup/state", route => { reads++; return route.fulfill({ json: { view } }); });
+      await signup.clock.install();
+      await signup.goto(`${origin}/wallet`);
+      await expect.poll(() => reads).toBe(1);
+      // A deployment that outlasts the poll: the page stops reading and must still offer a way on.
+      await expect.poll(async () => {
+        if (await signup.locator("#signup-check").isVisible()) return true;
+        await signup.clock.runFor(2_000); return false;
+      }, { timeout: 50_000, interval: 20 }).toBe(true);
+      // The first read and the 150 the poll makes.
+      await expect.poll(() => reads).toBe(151);
+      const stopped = reads;
+      await signup.clock.runFor(10_000);
+      expect(reads).toBe(stopped);
+      await signup.locator("#signup-check").click();
+      await expect.poll(() => reads).toBe(stopped + 1);
+      await signup.clock.runFor(2_000);
+      await expect.poll(() => reads).toBe(stopped + 2);
+    } finally { await context.close(); }
+  }, 60_000);
+  it("signs in through a 503 with one passkey prompt", async () => {
+    const context = await browser.newContext(), signup = await context.newPage();
+    try {
+      const cdp = await context.newCDPSession(signup); await cdp.send("WebAuthn.enable");
+      await cdp.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal",
+        hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+      const b64 = (fill: number) => Buffer.alloc(32, fill).toString("base64url"), loginId = "33333333-3333-4333-8333-333333333333";
+      let begins = 0, completions = 0;
+      await signup.route("**/wallet/login/begin", route => { begins++; return route.fulfill({ status: 201, json: { loginId, csrfToken: b64(7),
+        expiresAtMs: Date.now() + 180_000, publicKey: { rpId: "localhost", challenge: b64(9), userVerification: "required", timeout: 90_000 } } }); });
+      await signup.route("**/wallet/login/complete", route => ++completions === 1
+        ? route.fulfill({ status: 503, json: { error: { message: "checking" } } })
+        : route.fulfill({ json: { session: { loginId }, csrfToken: b64(8) } }));
+      await signup.goto(`${origin}/wallet`);
+      await expect.poll(() => signup.locator("#signup-resume").isVisible()).toBe(true);
+      await signup.evaluate(async () => {
+        await navigator.credentials.create({ publicKey: { rp: { id: "localhost", name: "Fixture" }, user: { id: new Uint8Array(16).fill(4), name: "Fixture", displayName: "Fixture" },
+          challenge: new Uint8Array(32), pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+          authenticatorSelection: { residentKey: "required", userVerification: "required" }, attestation: "none" } });
+      });
+      const left = signup.waitForRequest(request => request.isNavigationRequest());
+      await signup.locator("#signup-resume").click();
+      await left;
+      expect({ begins, completions }).toEqual({ begins: 1, completions: 2 });
+    } finally { await context.close(); }
+  }, 30_000);
+
+  /** A signup ready to sign in, with a passkey on a virtual authenticator; `answers` replies to each completion in turn. */
+  async function readyToSignIn(answers: ((route: import("playwright").Route) => Promise<void>)[], test: (signup: Page, counts: { begins: number; completions: number; prompts: () => Promise<number> }) => Promise<void>) {
+    const context = await browser.newContext(), signup = await context.newPage();
+    try {
+      const cdp = await context.newCDPSession(signup); await cdp.send("WebAuthn.enable");
+      await cdp.send("WebAuthn.addVirtualAuthenticator", { options: { protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal",
+        hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+      await signup.addInitScript(() => {
+        const original = navigator.credentials.get.bind(navigator.credentials);
+        (window as any).prompts = 0; navigator.credentials.get = options => { (window as any).prompts++; return original(options); };
+      });
+      const view = { enrollmentId: "11111111-1111-4111-8111-111111111111", origin, rpId: "localhost", phase: "ready_to_sign_in", passkeyName: "Test",
+        recoveryOwner: `0x${"01".repeat(20)}`, walletAddress: `0x${"02".repeat(20)}`, initializerHash: `0x${"03".repeat(32)}`, transactionHash: null, preconfirmed: false };
+      const b64 = (fill: number) => Buffer.alloc(32, fill).toString("base64url"), loginId = (n: number) => `3333333${n}-3333-4333-8333-333333333333`;
+      const counts = { begins: 0, completions: 0, prompts: () => signup.evaluate(() => (window as any).prompts as number) };
+      await signup.route("**/wallet/signup/state", route => route.fulfill({ json: { view } }));
+      await signup.route("**/wallet/session", route => route.fulfill({ json: { session: null } }));
+      await signup.route("**/wallet/login/begin", route => { counts.begins++; return route.fulfill({ status: 201, json: { loginId: loginId(counts.begins), csrfToken: b64(7),
+        expiresAtMs: Date.now() + 180_000, publicKey: { rpId: "localhost", challenge: b64(9), userVerification: "required", timeout: 90_000 } } }); });
+      await signup.route("**/wallet/login/complete", route => {
+        const answer = answers[counts.completions++];
+        return answer ? answer(route) : route.fulfill({ json: { session: { loginId: loginId(counts.begins) }, csrfToken: b64(8) } });
+      });
+      await signup.goto(`${origin}/wallet`);
+      await signup.evaluate(async () => {
+        await navigator.credentials.create({ publicKey: { rp: { id: "localhost", name: "Fixture" }, user: { id: new Uint8Array(16).fill(4), name: "Fixture", displayName: "Fixture" },
+          challenge: new Uint8Array(32), pubKeyCredParams: [{ type: "public-key", alg: -7 }],
+          authenticatorSelection: { residentKey: "required", userVerification: "required" }, attestation: "none" } });
+      });
+      await expect.poll(() => signup.locator("#signup-next").isEnabled()).toBe(true);
+      await test(signup, counts);
+    } finally { await context.close(); }
+  }
+  const refuse = (status: number, code: string) => (route: import("playwright").Route) => route.fulfill({ status, json: { error: { code, message: code } } });
+  const clicked = async (signup: Page) => {
+    await expect.poll(() => signup.locator("#signup-next").isEnabled(), { timeout: 10_000 }).toBe(true);
+    await signup.locator("#signup-next").click();
+  };
+
+  it("asks for a passkey again after a login refused the one picked", async () => {
+    await readyToSignIn([refuse(403, "WALLET_LOGIN_UNKNOWN_PASSKEY")], async (signup, counts) => {
+      await clicked(signup);
+      await expect.poll(() => counts.completions, { timeout: 10_000 }).toBe(1);
+      const left = signup.waitForRequest(request => request.isNavigationRequest());
+      await clicked(signup);
+      await left;
+      // A fresh begin runs its own passkey prompt; a replay would complete again without one.
+      expect({ begins: counts.begins, completions: counts.completions }).toEqual({ begins: 2, completions: 2 });
+    });
+  }, 30_000);
+
+  it("asks for a passkey again when a login whose reply was lost has expired", async () => {
+    await readyToSignIn([route => route.abort("failed"), refuse(410, "WALLET_LOGIN_EXPIRED")], async (signup, counts) => {
+      await clicked(signup);
+      await expect.poll(() => counts.completions, { timeout: 10_000 }).toBe(1);
+      // The lost reply is replayed with the same proof, without a prompt; the service says it expired.
+      await clicked(signup);
+      await expect.poll(() => counts.completions, { timeout: 10_000 }).toBe(2);
+      expect({ begins: counts.begins, prompts: await counts.prompts() }).toEqual({ begins: 1, prompts: 1 });
+      const left = signup.waitForRequest(request => request.isNavigationRequest());
+      await clicked(signup);
+      await left;
+      expect({ begins: counts.begins, completions: counts.completions }).toEqual({ begins: 2, completions: 3 });
+    });
+  }, 30_000);
 });

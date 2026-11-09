@@ -870,6 +870,16 @@ it.each(["submit", "status"])("retains the reviewed operation and recovery refer
   expect(f.signatures).toHaveLength(1);
 });
 
+it.each<PreparedUserOperation["state"]>(["expired", "retired"])("drops the saved reference once the operation is %s", async (state) => {
+  const f = await harness({ sessions: null });
+  await f.click("operation-plan"); await f.click("operation-prepare"); await f.click("operation-sign"); await f.click("operation-submit");
+  expect(walletRecoveries(f.accountId)).toMatchObject([{ operationId: "web-operation" }]);
+  f.changeOperationResponse({ state });
+  await f.click("operation-status");
+  expect(f.errors).toEqual([]);
+  expect(walletRecoveries(f.accountId)).toEqual([]);
+});
+
 it("submits the session's real EIP191 USE signature and allows expired sessions to be explicitly retired", async () => {
   const f = await harness();
   f.field("operation-authority").value = "session";

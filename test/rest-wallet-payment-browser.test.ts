@@ -332,6 +332,9 @@ describe('central payment review browser, virtual authenticator', () => {
   it('does not prompt for an already expired or approved review', async () => {
     review.expiresAtMs = Date.now() - 1; await page.goto(`${origin}/wallet/payment?review=${reviewId}`); await status('expired');
     expect(await page.locator('#payment-approve').isVisible()).toBe(false);
+    // Nothing more can happen here, so the way back to the app is offered.
+    expect(await page.locator('#payment-return').isVisible()).toBe(true);
+    expect(await page.locator('#payment-return').getAttribute('href')).toBe(callback());
     review.status = 'approved'; review.approvedAtMs = Date.now() - 2;
     await page.reload(); await status('approved'); expect(await page.evaluate(() => (window as any).passkeyRequests.length)).toBe(0);
   });

@@ -45,6 +45,7 @@ import {
 import {
   ConflictError,
   StorageLimitError,
+  retryableDeploy,
   type StorageLimits,
   type StorageUsage,
   type Store,
@@ -924,11 +925,11 @@ export function createApp(
     if (!selected.length) throw new BadRequest("intent has no sponsored chain left to deploy");
     if (!sponsorFamily(selected)) throw new BadRequest("intent chains are not sponsorable");
     const queued = intent.deploys.filter((deploy) => selected.includes(deploy.chainId));
-    // A named chain that failed is asked for again, so its row counts as absent and the retry is
-    // reserved, budgeted and rated like a first request. An unnamed one keeps its failure.
+    // A named chain whose row is retryable is asked for again, so its row counts as absent and the
+    // retry is reserved, budgeted and rated like a first request. An unnamed one keeps its failure.
     const retryable = (chainId: number) =>
       requested !== undefined &&
-      intent.deploys.some((deploy) => deploy.chainId === chainId && deploy.status === "failed");
+      intent.deploys.some((deploy) => deploy.chainId === chainId && retryableDeploy(deploy));
     const fresh = selected.filter(
       (chainId) =>
         !intent.deploys.some((deploy) => deploy.chainId === chainId) || retryable(chainId),

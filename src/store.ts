@@ -45,6 +45,11 @@ export type DeployPatch = {
   spentWei?: bigint;
 };
 
+/** A failed row is asked for again only when no bundle was ever paid for it: a bundle may yet
+ * execute. The route, the stores and `queueDeploys`' SQL all follow this one rule. */
+export const retryableDeploy = (deploy: Pick<IntentDeploy, "status" | "bundleUuid">) =>
+  deploy.status === "failed" && deploy.bundleUuid === null;
+
 export type SearchFilters = {
   owner?: Address;
   publisher?: Address;
