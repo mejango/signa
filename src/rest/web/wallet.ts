@@ -5,6 +5,7 @@ import { lazyModule } from "./lazyModule.js";
 import { loadRecoveryKit } from "./walletRecoveryKitLoader.js";
 import { signaChains } from "../wallet/chains.js";
 import { checkedRedirect, framed, listenForTheme, signaBrandLink } from "./walletFramed.js";
+import type { WalletDevicePhase } from "../wallet/deviceService.js";
 /** No credentials, assertions, CSRF values or handoff codes are persisted by this page. It keeps only Coinbase's
  * returning-user token for Apple Pay (no personal data), per account, on this device. */
 type Json = Record<string, unknown>;
@@ -27,7 +28,7 @@ let networksUpdating = false, networksBackupWords: string | null = null, network
 const networksUpdate = element<HTMLButtonElement>("wallet-networks-update");
 const destination = element("wallet-destination");
 // Adding a device: begin here, show the other device its link, approve with this passkey once it has proved its own.
-type DeviceView = { id: string; phase: string; passkeyName: string | null; deviceSigner: string | null; expiresAtMs: number; transactionHashes: string[];
+type DeviceView = { id: string; phase: WalletDevicePhase; passkeyName: string | null; deviceSigner: string | null; expiresAtMs: number; transactionHashes: string[];
   chains?: { chainId: number; name: string; state: string }[] };
 const deviceAdd = element<HTMLButtonElement>("wallet-device-add"), devicePanel = element("wallet-device"), deviceApprove = element<HTMLButtonElement>("wallet-device-approve");
 let device: { view: DeviceView; link: string } | null = null, deviceTimer: ReturnType<typeof setInterval> | null = null;
@@ -750,7 +751,9 @@ element("wallet-funds-coinbase").addEventListener("click", () => void run(() => 
 element("wallet-funds-cancel").addEventListener("click", () => { fundsShown = false; render(); });
 // The last hex characters of the new device's signer show on both pages, so a swapped device is visible before approval.
 // The mark spins only while the service works (adding, finishing); waiting on a person does not spin.
-const deviceWorking = (phase: string) => phase === "adding" || phase === "awaiting_activation";
+const deviceWorking = (phase: WalletDevicePhase) => phase === "adding" || phase === "awaiting_activation";
+// The panel reads the device only while the other device or the service is moving it on; waiting on this person, or an end, needs no reads.
+const devicePolled = (phase: WalletDevicePhase) => phase === "awaiting_registration" || phase === "awaiting_possession" || deviceWorking(phase);
 const deviceTag = (signer: string | null) => typeof signer === "string" && /^0x[0-9a-fA-F]{40}$/.test(signer) ? signer.slice(-6).toUpperCase() : "";
 const listed = (names: string[]) => names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] ?? "";
 /** The account's other networks follow Base; one that did not take the device stays blocked there and is named. */
@@ -760,7 +763,7 @@ function deviceChainsText() {
   return (coming.length ? ` ${listed(coming)} ${coming.length > 1 ? "follow" : "follows"} shortly.` : "")
     + (failed.length ? ` Adding it on ${listed(failed)} did not complete; actions there wait until it does.` : "");
 }
-function deviceText(phase: string, signer: string | null = device?.view.deviceSigner ?? null) {
+function deviceText(phase: WalletDevicePhase, signer: string | null = device?.view.deviceSigner ?? null) {
   const networks = networksView?.networks.filter(item => item.state === "deployed").map(item => item.name) ?? [];
   return phase === "awaiting_registration" || phase === "awaiting_possession" ? "Waiting for the other device to create its passkey…"
     : phase === "awaiting_approval" ? (networks.length > 1 ? `The other device is ready and shows ${deviceTag(signer)}. Add this device on ${listed(networks)}. Your current device confirms each.`
@@ -788,7 +791,8 @@ function renderDevice() {
   deviceCancel.hidden = false; deviceCancel.textContent = phase === "ready" || phase === "expired" || phase === "addition_failed" ? "Close" : "Cancel";
   // One dark button on the page: while the approval is the action, Retry is a text button beside Cancel.
   retry.classList.toggle("link", !deviceApprove.hidden);
-  if (!deviceTimer && ["awaiting_registration", "awaiting_possession", "adding", "awaiting_activation"].includes(phase)) deviceTimer = setInterval(() => {
+  if (!devicePolled(phase) && deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; }
+  if (devicePolled(phase) && !deviceTimer) deviceTimer = setInterval(() => {
     if (busy || document.hidden || !navigator.onLine) return;
     devicePoll().catch(() => { /* The next poll reads again. */ });
   }, 3000);

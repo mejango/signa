@@ -175,11 +175,15 @@ describe("served device pages", () => {
     await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible(), { timeout: 10_000 }).toBe(true);
     expect(await accountPage.locator("#wallet-device-code").isHidden()).toBe(true);
     expect(await accountPage.locator("#wallet-status").textContent()).toContain("if it shows 050505");
+    // Waiting on this person is not work in flight: the panel stops reading the device until something changes here.
+    const polls = () => requests.filter(item => item.path === "/wallet/devices/11111111-1111-4111-8111-111111111111").length;
+    let read = polls(); await accountPage.waitForTimeout(3_500); expect(polls()).toBe(read);
     // The approval stands alone: the account details and the section heading step aside.
     expect(await accountPage.locator("#wallet-details").isHidden()).toBe(true);
     expect(await accountPage.locator("#wallet-device-title").isHidden()).toBe(true);
     await accountPage.locator("#wallet-device-approve").click();
     await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 15_000 }).toContain("The device is added");
+    read = polls(); await accountPage.waitForTimeout(3_500); expect(polls()).toBe(read);
     expect(await accountPage.locator("#wallet-details").isVisible()).toBe(true);
     expect(approvals).toBe(1);
     const approval = requests.find(item => item.path.endsWith("/approve"))!;
