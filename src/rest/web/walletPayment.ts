@@ -66,10 +66,13 @@ function decode(value: unknown, max = 4096): Uint8Array<ArrayBuffer> {
   if (encode(bytes.buffer) !== encoded) fail(); return bytes;
 }
 function token(value: unknown): string { return decode(value).length === 32 ? value as string : fail(); }
-function setStatus(state: string, message: string) { status.dataset.state = state; status.textContent = message; }
+/** Where the review stands on this page; the status line shows it, and only `ready` offers Approve and Decline. */
+type PaymentPhase = 'loading' | 'preparing' | 'ready' | 'authenticating' | 'checking' | 'approved' | 'cancelled' | 'expired' | 'unknown' | 'error';
+let phase: PaymentPhase = 'loading';
+function setStatus(state: PaymentPhase, message: string) { phase = state; status.dataset.state = state; status.textContent = message; }
 function expired() { return !!review && review.expiresAtMs <= Date.now(); }
 function render() {
-  const actionable = review?.status === 'pending' && !expired() && !uncertain && !blocked && status.dataset.state === 'ready';
+  const actionable = review?.status === 'pending' && !expired() && !uncertain && !blocked && phase === 'ready';
   approve.hidden = !actionable; approve.disabled = busy || frameTooSmall() || !approveVisible;
   cancel.hidden = !actionable; cancel.disabled = busy;
   cancelPrompt.hidden = !nativePrompt;
