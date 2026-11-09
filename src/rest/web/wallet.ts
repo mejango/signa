@@ -44,7 +44,6 @@ let sessionKnown = false, busy = false, csrf = "", pending: Completion | null = 
 let completionAttempted = false;
 let paymentReviewId: string | null = null;
 let nativePrompt: AbortController | null = null, retryAction: (() => Promise<void>) | null = null;
-let nextRetry: () => Promise<void> = load;
 // A sign-in that failed on the signup page comes back here with its message.
 let notice = takeSignInNotice();
 // Framed inside an admitted app's page, this page signs in without a Center session or cookie: the
@@ -202,7 +201,7 @@ async function run(action: () => Promise<void>) {
         setStatus("retry", "Account access changed or the request expired. Check your account again.");
       }
     } else {
-      retryAction = nextRetry;
+      retryAction = action;
       setStatus("retry", pending
         ? "Sign-in confirmation is unavailable. Retry to check the same sign-in without using your passkey again."
         : "Wallet access is temporarily unavailable. Retry to check again.");
@@ -210,7 +209,7 @@ async function run(action: () => Promise<void>) {
   } finally { nativePrompt = null; busy = false; render(); }
 }
 async function load() {
-  nextRetry = load; setStatus("loading", "Checking your account…");
+  setStatus("loading", "Checking your account…");
   const query = new URL(location.href);
   // The funds page carries no app return or payment review: those belong to the pages that sign.
   if (query.hash || [...query.searchParams.keys()].some(key => !["intent", "payment"].includes(key)) || query.searchParams.size > (fundsPage ? 0 : 1)) throw new InvalidResponse();
@@ -263,7 +262,7 @@ async function load() {
 }
 let ahead: Promise<Json> | null = null;
 async function readSession() {
-  nextRetry = readSession; setStatus("checking", "Checking current wallet access…");
+  setStatus("checking", "Checking current wallet access…");
   const read = ahead ?? readyRequest(`${base}/session`, undefined, undefined, 100_000); ahead = null;
   acceptSession(await read);
   await continueSession();
@@ -279,7 +278,6 @@ async function continueSession() {
   else { const carried = notice; notice = null; setStatus(carried?.state ?? "ready", carried?.message ?? "Use Face ID, Touch ID, a screen lock, or a security key."); }
 }
 async function login() {
-  nextRetry = login;
   if (framed && intent) return framedSignIn();
   if (pending) return completeLogin();
   if (!window.isSecureContext || !navigator.credentials?.get) {
@@ -303,7 +301,6 @@ async function login() {
   await completeLogin();
 }
 async function completeLogin() {
-  nextRetry = completeLogin;
   if (!pending) throw new InvalidResponse();
   setStatus("checking", "Confirming your account access…");
   if (completionAttempted) {
@@ -327,7 +324,6 @@ async function completeLogin() {
 }
 // The framed sign-in: begin, one passkey prompt, approve; the approval's answer is the app's callback.
 async function framedSignIn() {
-  nextRetry = framedSignIn;
   if (!intent) throw new InvalidResponse();
   if (frameTooSmall() || !signInVisible) { setStatus("ready", "Open this sign-in as a page of its own to continue."); return; }
   if (!window.isSecureContext || !navigator.credentials?.get) {
@@ -359,7 +355,6 @@ function appReturn(result: Json): string {
   try { return checkedRedirect(result, intent!, configuration.issuer); } catch { throw new InvalidResponse(); }
 }
 async function issue() {
-  nextRetry = issue;
   if (!intent || !session) throw new InvalidResponse();
   future(intent.expiresAtMs); future(session.expiresAtMs);
   setStatus("returning", "Returning to your app…");
@@ -368,7 +363,7 @@ async function issue() {
   location.replace(appReturn(result));
 }
 async function logout() {
-  nextRetry = logout; setStatus("checking", "Signing out…");
+  setStatus("checking", "Signing out…");
   const result = await request(`${base}/logout`, {}, csrf);
   if (result.loggedOut !== true) throw new InvalidResponse();
   session = null; csrf = ""; pending = null; completionAttempted = false; sessionKnown = true;
