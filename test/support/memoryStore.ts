@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   ConflictError,
   StorageLimitError,
+  retryableDeploy,
   type DeployPatch,
   type NewDeployment,
   type NewIntent,
@@ -160,8 +161,7 @@ export class MemoryStore implements Store {
       const existing = (intent.deploys as StoredDeploy[]).find(
         (deploy) => deploy.chainId === chainId,
       );
-      // A failed row that still carries a bundle may yet execute; only an unpaid failure is retried.
-      if (existing && !(retryFailed && existing.status === "failed" && existing.bundleUuid === null)) continue;
+      if (existing && !(retryFailed && retryableDeploy(existing))) continue;
       const now = new Date().toISOString();
       const attempt = {
         status: "queued" as const,

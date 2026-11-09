@@ -172,7 +172,7 @@ const areas = [
     limits: [
       'The server holds no wallet key: it never signs and never broadcasts a transaction.',
       'publish_intent stores an envelope the user already signed; it is a persistent publication, not wallet approval, and there is no edit, replace or withdraw.',
-      'deploy_intent requests Center-funded execution of the committed calls, for every sponsored chain or for a named subset. Queued rows are not confirmations, a failed row is terminal for that chain, and every chain of one intent is deployed by the same sender.',
+      'deploy_intent requests Center-funded execution of the committed calls, for every sponsored chain or for a named subset. Queued rows are not confirmations and an error on one is a waiting reason, a failed row is asked for again only when chainIds names it and it has no bundleUuid, and every chain of one intent is deployed by the same sender.',
       'Plan tokens expire for simulation; expired tokens remain inspectable for receipt verification.',
       'Nested Safe/Relayr execution cannot be claimed verified without matching inner-call evidence.',
     ],

@@ -641,11 +641,11 @@ states, not outcomes. Keep polling while `status` is not `failed`.
 quote, an exhausted set of attempts — or after 24 hours of waiting: `bundle unresolved` for a row
 whose bundle the execution service never resolved, `retries exhausted` for one that never got that
 far. An operator reconciles an unresolved bundle by recording its deployment through
-`POST /v1/intents/:id/deployments` once the execution service shows the hash. A `failed`
-row is terminal for that intent: Center will not retry it and a second
-`POST /v1/intents/:id/deploy` returns the same rows, including the failed one. Recovery is a new
-intent, or the self-paid path for a fresh intent — never a partial self-paid patch over the same
-one.
+`POST /v1/intents/:id/deployments` once the execution service shows the hash. Center does not retry a
+`failed` row on its own. A later `POST /v1/intents/:id/deploy` that names the chain queues it again
+only when the row has no `bundleUuid`; a row that carries one may yet execute, so it and any row the
+request does not name come back as they are. Otherwise recovery is a new intent, or the self-paid
+path for a fresh intent — never a partial self-paid patch over the same one.
 
 The SDK wraps this as `ensureDeployed({ client, intent, onStep, pollMs, timeoutMs, signal })`,
 which requests the sponsored deploy, polls on a 4-second default interval until every chain is
@@ -800,8 +800,9 @@ suckers link.
   publication of frozen calldata. Deployment is a separate funded transaction.
 - **Publishing from a smart account.** Center recovers the signer from the signature; a contract
   signature is refused. Publish from an externally owned account.
-- **Expecting a failed sponsored row to retry.** It is terminal for that intent. A row that is
-  still `queued` or `sent` with an `error` is the opposite case: Center is retrying it.
+- **Expecting a failed sponsored row to retry by itself.** Center retries it only when a request
+  names its chain and the row has no `bundleUuid`. A row that is still `queued` or `sent` with an
+  `error` is the opposite case: Center is retrying it.
 - **An HTTPS `logoUri`.** The first-party webclients render `ipfs://` only.
 
 ## Related

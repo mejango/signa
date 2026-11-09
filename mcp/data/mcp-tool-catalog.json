@@ -13314,7 +13314,7 @@
     },
     {
       "name": "jb_deploy_intent",
-      "description": "Ask JB Center to sponsor execution of a published intent’s own committed calls on the supported rollups, for every sponsored chain or for the chains named in chainIds. Returns one row per requested chain with status queued, sent, confirmed or failed; repeating the request returns the same rows. Queued is not confirmation and a failed row is terminal for that chain. A chain Center does not sponsor, such as Ethereum, is deployed by its own payer and is never queued here. Refusals return a fixed code: NOT_SPONSORABLE, SPONSOR_QUOTA, SPONSOR_BUDGET or SPONSOR_UNAVAILABLE. This server signs nothing and sends no wallet transaction.",
+      "description": "Ask JB Center to sponsor execution of a published intent’s own committed calls on the supported rollups, for every sponsored chain or for the chains named in chainIds. Returns one row per requested chain with status queued, sent, confirmed or failed. Queued is not confirmation, and an error on a queued or sent row says why it is waiting, not that it failed. A failed row with no bundleUuid is queued again as a new funded attempt when chainIds names its chain; a failed row that carries a bundleUuid, or one a request does not name, stays failed. Otherwise repeating the request returns the same rows. A chain Center does not sponsor, such as Ethereum, is deployed by its own payer and is never queued here. Refusals return a fixed code: NOT_SPONSORABLE, SPONSOR_QUOTA, SPONSOR_BUDGET or SPONSOR_UNAVAILABLE. This server signs nothing and sends no wallet transaction.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -13494,7 +13494,7 @@
       "annotations": {
         "readOnlyHint": false,
         "destructiveHint": false,
-        "idempotentHint": true,
+        "idempotentHint": false,
         "openWorldHint": true
       },
       "execution": {
@@ -14819,7 +14819,7 @@
           },
           {
             "name": "jb_deploy_intent",
-            "description": "Ask JB Center to sponsor execution of a published intent’s own committed calls on the supported rollups, for every sponsored chain or for the chains named in chainIds. Returns one row per requested chain with status queued, sent, confirmed or failed; repeating the request returns the same rows. Queued is not confirmation and a failed row is terminal for that chain. A chain Center does not sponsor, such as Ethereum, is deployed by its own payer and is never queued here. Refusals return a fixed code: NOT_SPONSORABLE, SPONSOR_QUOTA, SPONSOR_BUDGET or SPONSOR_UNAVAILABLE. This server signs nothing and sends no wallet transaction."
+            "description": "Ask JB Center to sponsor execution of a published intent’s own committed calls on the supported rollups, for every sponsored chain or for the chains named in chainIds. Returns one row per requested chain with status queued, sent, confirmed or failed. Queued is not confirmation, and an error on a queued or sent row says why it is waiting, not that it failed. A failed row with no bundleUuid is queued again as a new funded attempt when chainIds names its chain; a failed row that carries a bundleUuid, or one a request does not name, stays failed. Otherwise repeating the request returns the same rows. A chain Center does not sponsor, such as Ethereum, is deployed by its own payer and is never queued here. Refusals return a fixed code: NOT_SPONSORABLE, SPONSOR_QUOTA, SPONSOR_BUDGET or SPONSOR_UNAVAILABLE. This server signs nothing and sends no wallet transaction."
           }
         ],
         "references": [
@@ -14830,7 +14830,7 @@
         "limits": [
           "The server holds no wallet key: it never signs and never broadcasts a transaction.",
           "publish_intent stores an envelope the user already signed; it is a persistent publication, not wallet approval, and there is no edit, replace or withdraw.",
-          "deploy_intent requests Center-funded execution of the committed calls, for every sponsored chain or for a named subset. Queued rows are not confirmations, a failed row is terminal for that chain, and every chain of one intent is deployed by the same sender.",
+          "deploy_intent requests Center-funded execution of the committed calls, for every sponsored chain or for a named subset. Queued rows are not confirmations and an error on one is a waiting reason, a failed row is asked for again only when chainIds names it and it has no bundleUuid, and every chain of one intent is deployed by the same sender.",
           "Plan tokens expire for simulation; expired tokens remain inspectable for receipt verification.",
           "Nested Safe/Relayr execution cannot be claimed verified without matching inner-call evidence."
         ]

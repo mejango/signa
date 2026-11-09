@@ -35,7 +35,7 @@ export const CENTER_INTENT_SEMANTICS = {
   publication:
     'Publishing stores an envelope the user already signed. It is not wallet approval, spends no funds, and cannot be edited, replaced or withdrawn afterwards.',
   sponsoredDeploy:
-    'A sponsored deploy request queues Center-funded execution of the committed calls. Queued rows are not confirmations; a failed row is terminal for that intent.',
+    'A sponsored deploy request queues Center-funded execution of the committed calls. Queued rows are not confirmations, and an error on a queued or sent row is a waiting reason. A failed row stays failed unless a request names its chain and it has no bundleUuid.',
 } as const;
 
 export type CenterConfig = {
