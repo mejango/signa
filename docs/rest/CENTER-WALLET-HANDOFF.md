@@ -413,7 +413,8 @@ Routes: `GET /networks`, `GET /networks/status`, `POST /networks/quote`, `POST /
   step as `/core`, `/wagmi` and `/react` (source and tests in `wallet-client/src/`, React and wagmi as
   optional peers), which moved here from `@bananapus/nana-sdk-connect`. Apps depend on this package directly.
   Since 0.5.0 it exports `isSettledPayment` and `isFollowedPayment`, so an app reads which payment
-  statuses end a payment and which it follows from the package instead of its own list.
+  statuses end a payment and which it follows from the package instead of its own list. The connect
+  controller's state also carries `status` (`idle`, `connecting`, `connected` or `failed`).
 - The app allowlist is database state and starts inactive. Activate or replace it from inside the
   production container, which holds `DATABASE_URL`:
   `railway ssh --service juice-central -- node dist/src/rest/wallet/policyCli.js --expected <revision> https://homerun.money /center/callback https://beep.biz /center/callback`

@@ -18,6 +18,10 @@ export type ConnectOption = {
   }): Promise<void>;
 };
 export type ConnectState = {
+  /** `connecting`: an option is under way. `connected`: it finished: an external wallet is
+   * connected, a popup or framed sign-in reached the app, or a full-page sign-in is leaving the
+   * page. `failed`: it ended with `error`. A person's own rejection or a cancel returns to `idle`. */
+  status: "idle" | "connecting" | "connected" | "failed";
   /** The option being connected, or null when idle. A passkey connection leaves the page, so it
    * stays pending until the browser returns. */
   pending: string | null;
@@ -39,6 +43,7 @@ export type ConnectController = {
 };
 
 const idle: ConnectState = {
+  status: "idle",
   pending: null,
   error: null,
   handoffUri: null,
@@ -68,6 +73,7 @@ export function createConnectController(
       if (!option || option.disabled || current) return;
       const controller = (current = new AbortController());
       set({
+        status: "connecting",
         pending: id,
         error: null,
         handoffUri: null,
@@ -85,14 +91,17 @@ export function createConnectController(
               set({ frameName: name, frameOrigin: origin });
           },
         });
+        if (current === controller) set({ status: "connected" });
       } catch (error) {
+        const message = messageOf(error);
         if (current === controller)
           set({
+            status: message ? "failed" : "idle",
             pending: null,
             handoffUri: null,
             frameName: null,
             frameOrigin: null,
-            error: messageOf(error),
+            error: message,
           });
       } finally {
         if (current === controller) current = null;

@@ -93,8 +93,9 @@ export function JBConnectModal(props: JBConnectModalProps) {
   const wallets = controller.options.filter(
     (option) => option.id !== passkeyId,
   );
-  const pending = state.pending
-    ? controller.options.find((option) => option.id === state.pending)
+  const pending =
+    state.status === "connecting" || state.status === "connected"
+      ? controller.options.find((option) => option.id === state.pending)
     : undefined;
   return (
     <dialog
@@ -192,7 +193,7 @@ export function JBConnectModal(props: JBConnectModalProps) {
           {props.children}
         </>
       )}
-      {state.error && (
+      {state.status === "failed" && (
         <p role="alert" className="jb-connect-error">
           {state.error}
         </p>
