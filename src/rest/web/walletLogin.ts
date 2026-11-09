@@ -8,7 +8,8 @@ type Json = Record<string, any>;
 type Send = (path: string, body?: unknown, proof?: string, timeoutMs?: number) => Promise<Json>;
 type Prove = (challenge: Uint8Array<ArrayBuffer>, rpId: string) => Promise<Proof>;
 let send: Send, say: (text: string) => void, invalid: () => never;
-/** The proved login waiting on its completion; it outlives a failed reply so a retry sends the same proof. */
+/** The proved login waiting on its completion; it outlives a lost or failed reply so a retry sends the same proof,
+ * and ends when the completion is refused. */
 export let pendingLogin: { loginId: string; csrf: string; assertion: Proof } | null = null;
 let attempted = false;
 export function loginWith(request: Send, status: (text: string) => void, unverifiable: () => never) { send = request; say = status; invalid = unverifiable; }
@@ -59,7 +60,15 @@ export async function passkeyLogin(prove: Prove, rpId: string): Promise<Json> {
   attempted = true;
   // Completion may refresh the account's authority on Base first; the site holds the request up to 90 s.
   say('Checking your account. This can take up to a minute…');
-  const result = await whileChecking(`${base}/login/complete`, { loginId, assertion }, csrf, 100_000);
+  let result: Json;
+  try { result = await whileChecking(`${base}/login/complete`, { loginId, assertion }, csrf, 100_000); }
+  catch (error) {
+    // A refused or expired login is over: the next attempt asks for a passkey again. A lost answer, a
+    // server failure or the admission limit (429) keeps the proof, so a retry replays it.
+    const status = (error as { status?: number }).status;
+    if (status && status >= 400 && status < 500 && status !== 429) forgetLogin();
+    throw error;
+  }
   if (result.session?.loginId !== loginId) invalid();
   forgetLogin(); return result;
 }
