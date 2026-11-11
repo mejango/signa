@@ -424,7 +424,9 @@ async function main() {
       await runStep("connect", npm, ["run", "test:connect"], options);
       const report = resolve(temporary, "service.json");
       let testError;
-      try { await runStep("service", npm, ["test", "--", "--reporter=default", "--reporter=json", `--outputFile.json=${report}`], options); }
+      // The full integration suite includes real expiry waits; bounded file concurrency needs a larger aggregate budget.
+      // Per-test, SQL, RPC and authority deadlines remain independently enforced.
+      try { await runStep("service", npm, ["test", "--", "--reporter=default", "--reporter=json", `--outputFile.json=${report}`], { ...options, timeoutMs: 20 * 60_000 }); }
       catch (error) { testError = error; }
       const service = JSON.parse(await readFile(report, "utf8"));
       observation.suites.push(...summarizeVitest(service, root));
