@@ -6,6 +6,7 @@ import { RestError, type RestBlockEvidence, type RestPlanDraft } from "./rest/co
 import { jsonValue, REST_LIMITS } from "./rest/http.js";
 import { getContractCatalog, type ContractCatalog } from "./rest/contracts/catalog.js";
 import { argumentsFor, signature } from "./rest/protocol/abi.js";
+import { payFailureOf } from "./rest/client/payFailure.js";
 
 export interface ProtocolOperation {
   id: string;
@@ -50,7 +51,9 @@ const same = (a: unknown, b: unknown) => typeof a === "string" && typeof b === "
 
 /** Bind the payment and allowance calls to the requested spend, not Center's display fields.
  * Route discovery and quoting stay in Center; Signa's wallet review independently checks its
- * supported terminal, decoded review facts and authority before approval. */
+ * supported terminal, decoded review facts and authority before approval. Constructed hook
+ * metadata (including tier selection and skipSplits) and quotes remain Center preparation;
+ * local review displays the actual metadata, while explicitly supplied bytes must match. */
 function validatePayment(draft: RestPlanDraft, input: Record<string, unknown>) {
   try {
     const last = draft.calls.at(-1)!;
@@ -186,7 +189,14 @@ export function createSignaProtocol(options: { fetch?: typeof fetch } = {}): Pro
         if (response.status >= 400 && response.status < 500 && record(result) && result.status === response.status &&
           typeof result.code === "string" && /^[A-Z][A-Z0-9_]{0,127}$/.test(result.code) &&
           typeof result.detail === "string" && result.detail.length > 0 && result.detail.length <= 4000)
-          throw new RestError(response.status, result.code, result.detail);
+          {
+            const details = record(result.details) ? { ...result.details } : {};
+            const failure = result.payFailure ?? details.payFailure;
+            // Only the existing wire validator may promote a public payment-failure claim.
+            if (payFailureOf(failure)) details.payFailure = failure;
+            else delete details.payFailure;
+            throw new RestError(response.status, result.code, result.detail, Object.keys(details).length ? details : undefined);
+          }
         throw unavailable();
       }
       if (!record(result) || Object.keys(result).length !== 1 || !Object.hasOwn(result,"data")) throw mismatch();

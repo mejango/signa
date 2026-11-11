@@ -135,9 +135,9 @@ describe("Signa protocol dependency boundary", () => {
   });
 
   it("retains actionable Center validation refusals while hiding server failures", async () => {
-    const refusal = { status: 400, code: "PAY_DEFAULT_MINIMUM_ABOVE_FILL", detail: "Choose an explicit minimum." };
+    const refusal = { status: 400, code: "PAY_DEFAULT_MINIMUM_ABOVE_FILL", detail: "Choose an explicit minimum.", details: { refusal: { suggestedMinReturnedTokens: "90" } } };
     await expect(createSignaProtocol({ fetch: fetchResponse(refusal, 400) }).prepare("prepare_pay", input()))
-      .rejects.toMatchObject({ status: 400, code: refusal.code, message: refusal.detail });
+      .rejects.toMatchObject({ status: 400, code: refusal.code, message: refusal.detail, details: refusal.details });
     await expect(createSignaProtocol({ fetch: fetchResponse({ ...refusal, status: 500, detail: "private implementation details" }, 500) }).prepare("prepare_pay", input()))
       .rejects.toMatchObject({ status: 503, code: "PROTOCOL_UNAVAILABLE" });
   });
