@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { types } from "node:util";
 import type { FirstPartyApplication } from "../../firstParty.js";
-import { canonicalJson } from "../../intent.js";
+import { canonicalJson } from "./json.js";
 import type { Json } from "../../types.js";
 import { RestError } from "../core.js";
 import { walletAppGrantMaximumLifetimeSeconds } from "./grantLifetime.js";

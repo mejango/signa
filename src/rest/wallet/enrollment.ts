@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { getAddress, hashTypedData, isAddress, recoverAddress, type Address, type Hex } from "viem";
-import { canonicalJson } from "../../intent.js";
+import { canonicalJson } from "./json.js";
 import type { Json } from "../../types.js";
 import { RestError } from "../core.js";
 import { canonicalEoaSignature } from "../smartAccounts/accountExecution.js";

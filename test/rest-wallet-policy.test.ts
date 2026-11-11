@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { environmentName, firstPartyForEnvironment, originsForEnvironment } from "../src/firstParty.js";
-import { canonicalJson } from "../src/intent.js";
+import { canonicalJson } from "../src/rest/wallet/json.js";
 import type { Json } from "../src/types.js";
 import {
   validateWalletPolicyCallback, validateWalletPolicyConfiguration, validateWalletPolicyOrigin,
