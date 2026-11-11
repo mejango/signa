@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { Pool } from "pg";
-import { createCenterMcp } from "../src/mcp.js";
+import { createSignaProtocol } from "../src/signaProtocol.js";
 import type { Store } from "../src/store.js";
 import { createRestRuntime } from "../src/rest/runtime.js";
 import { readRestExecutionConfiguration } from "../src/rest/executionConfig.js";
 import { Metrics } from "../src/observability.js";
-import { createApp } from "../src/app.js";
 import { PostgresAccountStore } from "../src/rest/auth/index.js";
 import { TransactionService } from "../src/rest/transactions/service.js";
 import { UserOperationService } from "../src/rest/userOperations/service.js";
@@ -37,13 +36,7 @@ async function fixture(configured: boolean, metrics?: Metrics) {
     consumeRequest: async () => ({ allowed: true, remaining: 100 }),
     cleanupRateLimits: async () => 0,
   } as unknown as Store;
-  const mcp = createCenterMcp(store, {
-    rpc: { request, supports: () => true },
-    env: {
-      MCP_PLAN_SECRET: "PUBLIC_TEST_ONLY_RUNTIME_DISCOVERY_SECRET",
-      MCP_PUBLIC_ORIGIN: "https://juicebox.center",
-    },
-  });
+  const operations = createSignaProtocol();
   const executionConfiguration = await readRestExecutionConfiguration(
     configured
       ? JSON.stringify({
@@ -72,8 +65,7 @@ async function fixture(configured: boolean, metrics?: Metrics) {
   const runtime = await createRestRuntime({
     pool,
     store,
-    services: mcp.services,
-    config: mcp.config,
+    operations,
     upstreams: new Map(),
     rpc: { request },
     executionConfiguration,
@@ -88,7 +80,7 @@ async function fixture(configured: boolean, metrics?: Metrics) {
   return { app, request, query, store };
 }
 describe("production execution runtime composition", () => {
-  it("reports bounded recovery failures and stale workers through protected shared metrics", async () => {
+  it("reports bounded recovery failures and stale workers through runtime metrics", async () => {
     vi.useFakeTimers();
     const metrics = new Metrics();
     const pendingAt = Date.now() - 31 * 60_000;
@@ -102,12 +94,8 @@ describe("production execution runtime composition", () => {
     const operations = vi.spyOn(UserOperationService.prototype, "recoverPending")
       .mockResolvedValueOnce({ items: [{ id: "private-operation", state: "verification-unavailable" }], broadcastAttempted: false, oldestPendingAt: pendingAt })
       .mockResolvedValue({ items: [], broadcastAttempted: false, oldestPendingAt: null });
-    const { store } = await fixture(false, metrics);
-    const app = createApp(store, { metrics, metricsToken: "fixture-metrics" });
-    const read = async () => (await app.request("/metrics", {
-      headers: { authorization: "Bearer fixture-metrics" },
-    })).text();
-    expect((await app.request("/metrics")).status).toBe(404);
+    await fixture(false, metrics);
+    const read = () => metrics.render();
     expect(await read()).toContain('jbcenter_rest_recovery_last_completed_timestamp_seconds{task="transactions"} 0');
     await vi.advanceTimersByTimeAsync(30_000);
     const failed = await read();

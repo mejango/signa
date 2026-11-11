@@ -4,8 +4,9 @@ import { spawnAnvil } from "./support/anvil.js";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createServices, loadConfig, type PlanDraft } from "@juicebox/mcp/host";
-import { concatHex, decodeErrorResult, decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeEventTopics,
+import { buildPayTx, previewPay } from "@bananapus/nana-sdk-core/v6";
+import type { RestPlanDraft as PlanDraft } from "../src/rest/core.js";
+import { createPublicClient, custom, concatHex, decodeErrorResult, decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeEventTopics,
   encodeFunctionData, erc20Abi, keccak256, padHex, toHex, zeroAddress, zeroHash, type Abi, type Address, type Hex } from "viem";
 import { assertSafe7579Execution, encodeSafe7579Execution } from "../src/rest/smartAccounts/accountExecution.js";
 import { prepareSafe7579Creation } from "../src/rest/smartAccounts/creation.js";
@@ -48,7 +49,7 @@ const v6Sources = Boolean(process.env.CENTER_V6_SOURCE_ROOT?.trim());
 describe.skipIf(!v6Sources)("actual local V6 payment through passkey Safe and pinned EntryPoint", () => {
   let child: ChildProcess | undefined, endpoint: string, baseline: Hex, sender: Address, backup: Address, beneficiary: Address;
   let account: Address, signer: Address, projectId: string, requestId = 0;
-  let v6: Awaited<ReturnType<typeof deployV6PaymentContracts>>, payments: ReturnType<typeof createServices>["payments"];
+  let v6: Awaited<ReturnType<typeof deployV6PaymentContracts>>;
   async function rpc<T = unknown>(method: string, params: readonly unknown[] = []): Promise<T> {
     const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, redirect: "error",
       body: JSON.stringify({ jsonrpc: "2.0", id: ++requestId, method, params }), signal: AbortSignal.timeout(10_000) });
@@ -83,8 +84,52 @@ describe.skipIf(!v6Sources)("actual local V6 payment through passkey Safe and pi
       beneficiary: await read(v6.get("JBTokens"), "totalBalanceOf", [beneficiary, BigInt(projectId)]), allowance: await allowance() };
   }
   const config = () => ({ chainId, token: v6.token.address, directV6Terminal: v6.at("JBMultiTerminal") } as const);
-  const prepare = () => payments.preparePay({ project: { chainId, projectId, version: 6 }, account, token: v6.token.address,
-    amount: String(amount), beneficiary, slippageBps: 0, memo: "local exact V6 payment", metadata: "0x" });
+  async function prepare(): Promise<PlanDraft> {
+    const chain = await rpc<Hex>("eth_chainId");
+    expect(BigInt(chain)).toBe(BigInt(chainId));
+    const head = await rpc<{ number: Hex; hash: Hex; timestamp: Hex }>("eth_getBlockByNumber", ["latest", false]);
+    // The SDK's reads use a single canonical head. This fixture permits eth_call only;
+    // all setup and execution transactions remain explicit in send().
+    const client = createPublicClient({ transport: custom({
+      async request({ method, params }) {
+        expect(method).toBe("eth_call");
+        const [call] = params as [{ to: Address; data: Hex }];
+        return rpc(method, [{ ...call, from: account }, { blockHash: head.hash, requireCanonical: true }]);
+      },
+    }) });
+    const terminal = v6.at("JBMultiTerminal");
+    const args = { chainId, terminal, projectId: BigInt(projectId), token: v6.token.address, amount, beneficiary } as const;
+    const [preview, prior] = await Promise.all([
+      previewPay(client, { ...args, metadata: "0x" }),
+      client.readContract({ address: v6.token.address, abi: erc20Abi, functionName: "allowance", args: [account, terminal] }),
+    ]);
+    const transaction = buildPayTx({ ...args, minReturnedTokens: preview.beneficiaryTokenCount, memo: "local exact V6 payment", metadata: "0x" });
+    const calls: PlanDraft["calls"] = [];
+    const add = (to: Address, data: Hex, label: string, decoded: unknown, value = "0") => {
+      calls.push({ chainId, to, data, value, label, decoded, dependsOn: calls.length ? [calls.length - 1] : [] });
+    };
+    if (prior < amount) {
+      for (const value of prior > 0n ? [0n, amount] : [amount]) {
+        add(v6.token.address, encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [terminal, value] }),
+          "Approve exact fixture payment", { functionName: "approve", args: [terminal, String(value)] });
+      }
+    }
+    add(transaction.address, encodeFunctionData(transaction), "Pay fixture project", {
+      functionName: transaction.functionName,
+      args: transaction.args.map(value => typeof value === "bigint" ? String(value) : value),
+    }, String(transaction.value));
+    const project = { chainId, projectId, version: 6 } as const;
+    return {
+      operation: "pay", account, project, calls,
+      evidence: [{ chainId, blockNumber: String(BigInt(head.number)), blockHash: head.hash,
+        timestamp: String(BigInt(head.timestamp)), source: "onchain" }],
+      summary: { operation: "pay", account, project, route: "multi-terminal", terminal, terminalPath: [terminal], routerGateway: null,
+        payment: { token: v6.token.address, amount: String(amount), unit: "token-base-units" }, beneficiary,
+        beneficiaryTokenCount: String(preview.beneficiaryTokenCount), reservedTokenCount: String(preview.reservedTokenCount),
+        minimumBeneficiaryTokenCount: String(preview.beneficiaryTokenCount), metadata: "0x" },
+      warnings: [],
+    };
+  }
   async function signed(draft: PlanDraft) {
     const operation: UserOperationV07 = { sender: account, nonce: toHex(await read(entry, "getNonce", [account, 0n]) as bigint),
       callData: encodeSafe7579Execution(draft.calls.map(call => ({ target: call.to, value: call.value, callData: call.data }))),
@@ -202,8 +247,6 @@ describe.skipIf(!v6Sources)("actual local V6 payment through passkey Safe and pi
       args: [sender, "ipfs://local-payment-fixture", [ruleset], terminals, ""] }), v6.at("JBController"));
     projectId = String(await read(v6.get("JBProjects"), "count"));
     await send(encodeFunctionData({ abi: v6.token.abi, functionName: "mint", args: [account, amount * 10n] }), v6.token.address);
-    payments = createServices(loadConfig({ NODE_ENV: "test", JBCENTER_URL: endpoint, RPC_URL_8453: endpoint,
-      PLAN_SECRET: "local-v6-fixture-only-unused-plan-secret" })).payments;
     baseline = await rpc<Hex>("evm_snapshot");
   }, 45_000);
   beforeEach(async () => { expect(await rpc("evm_revert", [baseline])).toBe(true); baseline = await rpc<Hex>("evm_snapshot"); });
@@ -212,7 +255,7 @@ describe.skipIf(!v6Sources)("actual local V6 payment through passkey Safe and pi
       const exited = new Promise<void>(resolve => child!.once("exit", () => resolve())); child.kill("SIGTERM"); await exited;
     }
   });
-  it.each([0n, 1n, amount])("runs the unmodified payment producer and exact real batch with prior allowance %s", async prior => {
+  it.each([0n, 1n, amount])("runs SDK-built payment calls and the exact real batch with prior allowance %s", async prior => {
     if (prior) await setAllowance(prior);
     const draft = await prepare(), count = prior === amount ? 1 : prior === 0n ? 2 : 3;
     expect(draft.calls).toHaveLength(count);

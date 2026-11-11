@@ -26,8 +26,8 @@ jobs:
           node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
-      - run: npm ci --ignore-scripts && npm --prefix mcp ci --ignore-scripts
-      - run: npm run build:mcp && npx tsc && npm run build:client
+      - run: npm ci --ignore-scripts
+      - run: npx tsc && npm run build:client
       - name: Publish @me.jango/signa when its version is new
         working-directory: .generated/rest/wallet-client
         env:

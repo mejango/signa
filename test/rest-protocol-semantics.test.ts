@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  PlanService,
-  type PlanDraft,
-  type OperationReceipt,
-} from "@juicebox/mcp/host";
+import * as operationEvidence from "@bananapus/nana-sdk-core/v6/operation-evidence";
+import type {
+  V6OperationDraft,
+  V6OperationReceipt as OperationReceipt,
+} from "@bananapus/nana-sdk-core/v6/operation-evidence";
 import {
   encodeAbiParameters,
   encodeEventTopics,
@@ -22,7 +22,13 @@ import type {
   StoredPlan,
   StoredReceipt,
 } from "../src/rest/transactions/types.js";
-import type { RestRpc } from "../src/rest/core.js";
+import type { RestCall, RestPlanDraft, RestRpc } from "../src/rest/core.js";
+vi.mock("@bananapus/nana-sdk-core/v6/operation-evidence", { spy: true });
+
+type PlanDraft = Omit<RestPlanDraft, "calls" | "project"> & {
+  project?: NonNullable<V6OperationDraft["project"]>;
+  calls: (RestCall & V6OperationDraft["calls"][number])[];
+};
 
 const account = "0x1111111111111111111111111111111111111111" as const;
 const token = "0x2222222222222222222222222222222222222222" as const;
@@ -33,18 +39,7 @@ const rpc: RestRpc = {
     throw new Error("Semantic evidence must not perform RPC");
   }),
 };
-const plans = new PlanService({
-  rpc: {
-    client: () => {
-      throw new Error("No RPC expected");
-    },
-    snapshot: async () => {
-      throw new Error("No RPC expected");
-    },
-  },
-  secret: "test-only-unused-plan-key-at-least-32-bytes",
-});
-const verifier = createProtocolSemanticVerifier({ plans });
+const verifier = createProtocolSemanticVerifier();
 let catalog: ContractCatalog;
 beforeAll(async () => {
   catalog = await getContractCatalog();
@@ -90,7 +85,7 @@ function draft(
         blockNumber: "99",
         blockHash: zeroHash,
         timestamp: "1",
-        source: "rpc",
+        source: "onchain",
       },
     ],
     summary: {},
@@ -176,7 +171,7 @@ function payLog(overrides: Record<string, unknown> = {}) {
   });
 }
 async function compare(plan: PlanDraft, logs: OperationReceipt["logs"]) {
-  const direct = plans.verifyOperationEvidence(plan, 0, {
+  const direct = operationEvidence.verifyV6OperationEvidence(plan, 0, {
     transactionHash,
     blockHash,
     blockNumber: 100n,
@@ -192,7 +187,7 @@ async function compare(plan: PlanDraft, logs: OperationReceipt["logs"]) {
   return result;
 }
 describe("REST modeled semantic evidence", () => {
-  it("reuses the MCP payment proof and rejects a mismatched project identity", async () => {
+  it("reuses the SDK payment proof and rejects a mismatched project identity", async () => {
     expect((await compare(draft(), [payLog()])).status).toBe("verified");
     expect((await compare(draft(), [payLog({ projectId: 8n })])).status).toBe(
       "unknown",
@@ -315,21 +310,11 @@ describe("REST modeled semantic evidence", () => {
     expect(rpc.request).not.toHaveBeenCalled();
   });
   it("downgrades oversized proof output to a bounded evidence commitment", async () => {
-    const huge = createProtocolSemanticVerifier({
-      plans: {
-        verifyOperationEvidence: () => ({
-          verified: true,
-          events: [
-            {
-              emitter: account as Address,
-              event: "Fixture",
-              logIndex: 0,
-              args: { payload: "a".repeat(9000) },
-            },
-          ],
-        }),
-      },
+    const proof = vi.mocked(operationEvidence.verifyV6OperationEvidence).mockReturnValueOnce({
+      verified: true,
+      events: [{ emitter: account, event: "Fixture", logIndex: 0, args: { payload: "a".repeat(9000) } }],
     });
+    const huge = createProtocolSemanticVerifier();
     const result = await huge.verify(
       stored(draft()),
       0,
@@ -344,5 +329,6 @@ describe("REST modeled semantic evidence", () => {
       },
     });
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(8192);
+    proof.mockRestore();
   });
 });

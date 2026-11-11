@@ -15,7 +15,7 @@ Center account data, migrate existing credentials or forward Center traffic.
 Credential and account-management origins remain separate. The credential host
 does not serve the general Accounts UI or MCP. Keep exact reviewed request bytes,
 RP ID, issuer, audience, callbacks and `/wallet` client compatibility paths.
-Existing Center credentials and operations remain with Center.
+Center account history is not migrated; Signa is the sole account service.
 
 ## Build and run
 
@@ -23,7 +23,6 @@ Use Node 22 and the committed dependency locks:
 
 ```sh
 npm ci --ignore-scripts
-npm --prefix mcp ci --ignore-scripts
 npm run build
 npm start
 ```
@@ -35,27 +34,31 @@ through the hosting environment. Never commit signing keys or connection files.
 
 The build preserves the module-relative layout of contract catalogs, reviewed
 artifacts, factory history, storage-layout evidence, SQL migrations and browser
-assets. The retained `mcp` package supplies protocol libraries; Signa does not mount
-an MCP listener. Client packages and API documentation remain available through
-the API host. Inherited Center source has not all been pruned.
+assets. Shared protocol primitives and outcome verification come from the pinned Juicebox SDK.
+Signa does not package or mount Center's server or MCP implementation.
 
-Apps sign in and review payments through the npm package
-[`@me.jango/signa`](wallet-client/README.md), built by `npm run build:client`. Its
-`/core`, `/wagmi` and `/react` sign-in subpaths live in `wallet-client/src/`;
-`npm run test:connect` runs their tests with the coverage bar, and `npm run check`
-includes it.
+Signa exposes account and bot management, smart wallets, delegated sessions, payment
+reviews, transaction plans, sponsorship and UserOperations. Protocol catalogs,
+project/indexer reads, intents, publication and pinning belong to
+[Juicebox Center](https://juicebox.center/api). Account guides are served by Signa;
+protocol guide links redirect to Center.
 
-The Signa API exposes account and bot management, smart wallets, delegated sessions,
-wallet payment reviews, transaction plans, sponsorship and UserOperations. Its
-`/api` page and OpenAPI document list those routes. Protocol catalogs, project and
-indexer reads remain at [Juicebox Center](https://juicebox.center/api); inherited
-Markdown guide links redirect there. Signa does not serve those protocol read routes.
+New protocol transaction drafts come from Center's public `POST /api/v1/plans`.
+Signa validates the returned unsigned draft and independently verifies ownership,
+canonical chain evidence, simulation, exact approvals and execution. Center receives
+no account credentials or signing authority. Center remains the source of protocol
+routing, quotes and constructed hook metadata. Signa binds explicit request fields
+and presents the actual call bytes for review. Reviewed transaction descriptor schemas
+are packaged with Signa so an unavailable Center prevents new preparation without
+blocking signup, login, existing approvals, receipt reconciliation or recovery.
+Refresh those schemas deliberately with `node scripts/rest/sync-protocol-operations.mjs`
+(or `--input reviewed-catalog.json` for a reviewed response); `--check` verifies
+without writing. A refresh preserves the reviewed operation allowlist. New operations
+also require explicit request binding in Signa before being added to its snapshot.
 
-Protocol project-intent reads query `https://juicebox.center` with Signa's configured
-API origin; they do not read or import Center accounts into Signa's database. Center
-must admit that exact origin for these reference reads. RPC requests use Signa's
-configured provider directly. Center publication and pinning remain outside Signa's
-REST operation surface.
+The local contract catalog and deployment artifacts remain necessary for Signa's
+session-target and account authorization checks. They are not exposed as a second
+protocol read API. RPC requests go directly to Signa's configured provider.
 
 ## Configuration and activation
 
@@ -78,11 +81,9 @@ configuration: signup, recovery, devices, payments and funds all enabled. It che
 bare unframed pages and the files they name, that their policy runs only same-origin
 scripts, and that no response redirects; a server can still answer other requests differently.
 
-Configure a fresh `DATABASE_URL`, `DWELLIR_API_KEY`, the two origins and a new random
-`MCP_PLAN_SECRET` of at least 32 bytes before activation. Keep that plan secret stable
-across Signa restarts and replicas. `MCP_*` settings configure retained protocol
-libraries, including optional Bendystraw endpoints; the protocol public origin is
-bound to `REST_PUBLIC_ORIGIN`.
+Configure `DATABASE_URL`, `DWELLIR_API_KEY` and the two origins before activation.
+Keep existing Signa database state across deployments; no Center account import is
+needed. SDK versions are reviewed build dependencies, never runtime-downloaded code.
 
 Base creation requires all four `WALLET_CREATION_*` settings: a dedicated signer,
 pool UUID, reviewed allocation and initial nonce. Recovery and device addition
@@ -122,9 +123,9 @@ endpoints and readiness criteria.
 
 ## Source provenance
 
-The protocol implementation is vendored from validated Juicebox Center baseline
-`8949a2d4f970a128dfbadf46fed6920731dbbe6b`; the Signa preparation reference is
-`ef1a4c70516a8a0f4e71ed276a92a809f52564b0`. Signa owns its runtime; complete source
-extraction and deduplication are not finished. Protocol sources, artifact hashes,
-manifests, factory-history seeds and API evidence retain their reviewed identities.
-Keep provenance and operation evidence when replacing an inherited adapter.
+Signa originated from reviewed Juicebox Center baseline
+`8949a2d4f970a128dfbadf46fed6920731dbbe6b`; its preparation reference was
+`ef1a4c70516a8a0f4e71ed276a92a809f52564b0`. The inherited Center server and MCP
+implementation have been removed. Protocol preparation uses Center HTTP and portable
+outcome verification uses the SDK. Retained account-execution artifact hashes,
+factory-history seeds, deployment catalogs and evidence keep their reviewed identities.

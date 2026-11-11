@@ -9,7 +9,7 @@ transaction wallet when you want to:
 - Give a bot narrowly limited wallet permissions, only when the required contracts
   are deployed, supported and verified, and you approve activation onchain.
 
-Center supports verified **Safe7579** wallets with the configured contract and
+Signa supports verified **Safe7579** wallets with the configured contract and
 module setup. It cannot link an arbitrary Safe. A supported Safe can have one
 owner and require one signature; a **multisig** has multiple owners and a chosen
 approval threshold. Shared approval is optional. Creating or funding a wallet
@@ -21,21 +21,21 @@ current sponsored-execution availability; `sessions` reports whether recurring
 bot permissions can be activated. An API grant alone authorizes no spending.
 
 A **smart wallet** is an account controlled by code and its owners. A **binding**
-links a verified wallet to a Center API account. A **session** permits a bot to
+links a verified wallet to a Signa API account. A **session** permits a bot to
 repeat specific wallet actions within owner-approved limits and an expiry.
 Linking a wallet grants no permission to spend. See the
-[glossary](https://juicebox.center/api#glossary).
+[glossary](https://api.signa.center/api#glossary).
 
 ## Set up and use several networks
 
 On [Accounts](/accounts), select the networks where your wallet should be
-available. Center prepares the same owners, approval threshold and wallet address
+available. Signa prepares the same owners, approval threshold and wallet address
 across compatible networks. Review the combined setup, then approve each network's
 creation. The page keeps each network's transaction hash and confirmation status
-separate. A submitted transaction is not yet a connected wallet: Center checks
+separate. A submitted transaction is not yet a connected wallet: Signa checks
 the deployed code and ownership before you approve its connection.
 
-Your Center API account and registered bots stay the same when execution switches
+Your Signa API account and registered bots stay the same when execution switches
 networks. Previously connected wallets are listed by address and network. Choose
 one to prepare an action, then add its reviewed operation to the transaction list.
 You can review and send operations for several networks together and follow each
@@ -54,12 +54,12 @@ limits using its own key, without further owner prompts. API relay access alone
 does not activate that permission. See the [worker example](./CLIENT.md#run-payments-without-another-owner-prompt)
 and [session lifecycle](./SESSIONS.md).
 
-Center prepares exact session policies and owner-approved activation or
+Signa prepares exact session policies and owner-approved activation or
 revocation plans, then independently checks the installed policy. Sessions
 require verified deployed contracts, a configured submission service
 (**bundler**) and gas sponsor (**paymaster**), and verified owner-approved
 activation onchain. Direct and prepaid transactions retain their own approval
-rules. Center never silently replaces a linked wallet with its owner's directly
+rules. Signa never silently replaces a linked wallet with its owner's directly
 controlled account (**EOA**).
 
 `createSmartAccountService`, `createSessionPolicyReviewer`, `createLegacySessionCompiler`, and `createInstalledSessionVerifier` are exported from `src/rest/smartAccounts/index.ts`. Runtime configuration owns deployment manifests, module inspectors, reviewed targets/assets and paymasters. HTTP callers cannot supply those trust inputs. Missing configuration fails explicitly; source artifacts do not constitute a live deployment.
@@ -108,7 +108,7 @@ transactions; they give the browser no owner signing authority.
    characters. This bounded public read neither enrolls an account nor consumes
    the nonce.
 2. Review and sign the returned `SetupAccount` EIP-712 document with the current
-   sole owner. Its domain is `Juicebox Center Account Setup`, version `1`, chain
+   sole owner. Its domain is `Juicebox Signa Account Setup`, version `1`, chain
    `8453`, the wallet as `verifyingContract`, and
    `keccak256(UTF8(service audience))` as salt. It binds the API account, owner,
    manifest ID/revision, initializer hash, current state hash, nonce, times and
@@ -124,7 +124,7 @@ transactions; they give the browser no owner signing authority.
    `initializerHash`, `stateHash`, owner `signature` and browser `proofSignature`
    to `/api/v1/smart-accounts/onboarding`. No generic `CenterRequest` signature
    or signed-request headers are needed on either onboarding endpoint. The body
-   approval is required for finalization. Center freshly verifies canonical state
+   approval is required for finalization. Signa freshly verifies canonical state
    and signatures, then atomically enrolls the API identity if absent, claims the
    binding nonce, saves the binding and inserts the exact signed grant UUID.
    HTTP `201` returns `{account,binding,grant}`. Existing account profiles are
@@ -137,7 +137,7 @@ The existing `safe-current-owner-threshold` method and threshold binding route
 remain available. Neither method grants spending permission.
 
 Keep the API private key in browser-controlled storage appropriate to the
-checkout's recovery lifetime. Center receives only its address and proof, never
+checkout's recovery lifetime. Signa receives only its address and proof, never
 the private key, wallet credentials or signing session. Do not put keys,
 credentials or signatures in URLs, logs or analytics. A checkout must retain
 enough local state to recover after switching apps without asking for the same

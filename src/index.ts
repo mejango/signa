@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { keepUpstreamConnections } from "./keepAlive.js";
 import { migrate } from "./db/migrate.js";
 import { createPool, PostgresStore } from "./db/postgres.js";
-import { createRpcGateway, dwellirRpcUpstreams, DWELLIR_RPC_HOSTS } from "./rpc.js";
+import { dwellirRpcUpstreams, DWELLIR_RPC_HOSTS } from "./rpc.js";
 import { createSignaProtocol } from "./signaProtocol.js";
 import { createRestRuntime, type RestWalletConfiguration } from "./rest/runtime.js";
 import { mountRestSite } from "./rest/site.js";
@@ -70,7 +70,7 @@ async function activate(): Promise<void> {
   if (shuttingDown) return;
   const store = new PostgresStore(pool);
   // These are protocol planning/evidence libraries only. Signa mounts no MCP transport or Center app.
-  const protocol = createSignaProtocol(store, { rpc: createRpcGateway(upstreams), rpcSiteLimitPerMinute, audience });
+  const operations = createSignaProtocol();
   const stack = await createBaseWalletProductionStack();
   const wallet: RestWalletConfiguration = { origin, frameableAppOrigins,
     manifest: stack.manifest, utility: stack.utility, basePath: "", payments: stack.payments,
@@ -78,8 +78,7 @@ async function activate(): Promise<void> {
     ...(process.env.CDP_APPLE_PAY_DOMAIN_FILE ? { applePayDomainFile: process.env.CDP_APPLE_PAY_DOMAIN_FILE } : {}) };
   const rpcUrl = `https://${DWELLIR_RPC_HOSTS[8453]}/${process.env.DWELLIR_API_KEY}`;
   accountRuntime = await createRestRuntime({
-    surface: "wallet",
-    pool, store, services: protocol.services, config: protocol.config, upstreams, audience, wallet,
+    pool, store, operations, upstreams, audience, wallet,
     rpcSiteLimitPerMinute, metrics: new Metrics(), executionConfiguration: await readRestExecutionConfiguration(process.env),
     ...(networksPayer ? { walletNetworksPayer: networksPayer } : {}),
     ...(creation ? { walletSignup: (context: Parameters<typeof createBaseWalletSignupHost>[0]) => createBaseWalletSignupHost(context, {

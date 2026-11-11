@@ -44,3 +44,5 @@ for (const name of ["paymaster-manifest.json", "guard-manifest.json"]) {
     join(root, "dist/src/rest/smartAccounts/stack/current-pimlico", name),
   );
 }
+
+await cp(join(root, "src/rest/protocol/operations.json"), join(root, "dist/src/rest/protocol/operations.json"));

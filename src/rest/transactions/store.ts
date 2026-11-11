@@ -13,14 +13,6 @@ import type {
 } from "./types.js";
 import type { TransportReservation } from "./transport-reservations.js";
 
-export type PayTarget = { project: { chainId: number; projectId: string; version?: 6 }; token: Address };
-/** A pay plan's route target, from the quote its draft carries; anything else is not warmed. */
-export function payTargetOf(plan: StoredPlan): PayTarget | null {
-  const summary = plan.draft.summary as { project?: unknown; payment?: { token?: unknown } } | undefined;
-  const project = summary?.project as PayTarget["project"] | undefined, token = summary?.payment?.token;
-  if (plan.draft.operation !== "pay" || !project || typeof project.projectId !== "string" || typeof token !== "string") return null;
-  return { project: { chainId: project.chainId, projectId: project.projectId, ...(project.version === 6 ? { version: 6 } : {}) }, token: token as Address };
-}
 export interface TransactionStore {
   create(
     plan: StoredPlan,
@@ -36,8 +28,6 @@ export interface TransactionStore {
     actor: RestActor,
     options: { account?: Address; limit: number; cursor?: string },
   ): Promise<{ items: StoredPlan[]; nextCursor?: string }>;
-  /** The distinct project and token pairs of pay plans created since `sinceMs`, newest first; what to keep warm. */
-  recentPayTargets(sinceMs: number, limit: number): Promise<PayTarget[]>;
   claimSubmission(
     claim: SubmissionClaim,
   ): Promise<{ plan: StoredPlan; dispatch: boolean }>;

@@ -233,7 +233,7 @@ describe("REST protocol ABI boundaries", () => {
   });
 });
 
-describe("REST protocol canonical reads", () => {
+describe("Signa protocol target proofs", () => {
   it("retains historical addresses without making default destination resolution ambiguous", async () => {
     const current = record();
     const previous = { ...current.deployments[0]!.instances[0]!, address: other, alias: "JBExample_deprecated", retired: true };
@@ -275,19 +275,13 @@ describe("REST protocol canonical reads", () => {
     await expect(service.resolve({ chainId: 1, contractId: router.id, projectId: "2" })).rejects.toMatchObject({ code: "PROJECT_TERMINAL_MISMATCH" });
   });
 
-  it("pins code and calls by canonical block hash and returns narrow and wide integers as strings", async () => {
+  it("pins target code verification to the requested canonical block", async () => {
     const { service, request, record } = fixture();
-    const result = await service.read({
+    const result = await service.resolve({
       chainId: 1,
       contractId: record.id,
-      function: "answer(uint8)",
-      args: ["1"],
       blockNumber: "15",
     });
-    expect(result.outputs.map((item) => item.value)).toEqual([
-      "900719925474099300000",
-      "-17",
-    ]);
     expect(result.evidence[0]).toMatchObject({ blockHash, blockNumber: "15" });
     expect(result.provenance).toMatchObject({
       kind: "published-deployment",
@@ -302,33 +296,6 @@ describe("REST protocol canonical reads", () => {
         ([, method]) => method.includes("send") || method.includes("sign"),
       ),
     ).toBe(false);
-  });
-  it("rejects writes through reads and requires exact overload signatures", async () => {
-    const { service, record } = fixture();
-    await expect(
-      service.read({
-        chainId: 1,
-        contractId: record.id,
-        function: "change(uint256)",
-        args: ["1"],
-      }),
-    ).rejects.toMatchObject({ code: "FUNCTION_MUTABILITY_MISMATCH" });
-    await expect(
-      service.read({
-        chainId: 1,
-        contractId: record.id,
-        function: "answer",
-        args: ["1"],
-      }),
-    ).rejects.toMatchObject({ code: "FUNCTION_SIGNATURE_UNKNOWN" });
-    await expect(
-      service.read({
-        chainId: 1,
-        contractId: record.id,
-        function: "answer(uint8)",
-        args: [1],
-      }),
-    ).rejects.toMatchObject({ code: "ABI_ARGUMENT_INVALID" });
   });
   it("rejects wrong chains, absent code, known mismatching runtime and arbitrary lookalike targets", async () => {
     const wrong = fixture({ chain: "0xa" });
@@ -350,11 +317,9 @@ describe("REST protocol canonical reads", () => {
       }),
     ).rejects.toMatchObject({ code: "TARGET_UNVERIFIED" });
     await expect(
-      test.service.read({
+      test.service.resolve({
         chainId: 1,
         contractId: test.record.id,
-        function: "answer(uint8)",
-        args: ["1"],
         abi: genericAbi,
       } as never),
     ).rejects.toMatchObject({ code: "ABI_ARGUMENT_INVALID" });
@@ -397,80 +362,6 @@ describe("REST protocol canonical reads", () => {
   });
 });
 
-describe("REST protocol unsigned preparations", () => {
-  it("encodes and decodes exact overloaded calls, native value and earlier dependencies", async () => {
-    const { service, record, request } = fixture();
-    const plan = await service.prepare({
-      account: owner,
-      calls: [
-        {
-          chainId: 1,
-          contractId: record.id,
-          function: "change(uint256)",
-          args: ["9007199254740993"],
-        },
-        {
-          chainId: 1,
-          contractId: record.id,
-          function: "change(address)",
-          args: [other],
-          dependsOn: [0],
-        },
-        {
-          chainId: 1,
-          contractId: record.id,
-          function: "fund((address,uint256)[],int24,bytes32)",
-          args: [[[owner, "7"]], "-17", zeroHash],
-          value: "12345678901234567890",
-          dependsOn: [0, 1],
-        },
-      ],
-    });
-    expect(
-      decodeFunctionData({ abi: genericAbi, data: plan.calls[0]!.data }),
-    ).toEqual({ functionName: "change", args: [9007199254740993n] });
-    expect(
-      decodeFunctionData({ abi: genericAbi, data: plan.calls[1]!.data }),
-    ).toEqual({ functionName: "change", args: [other] });
-    expect(plan.calls[2]).toMatchObject({
-      value: "12345678901234567890",
-      dependsOn: [0, 1],
-    });
-    expect(plan.evidence).toHaveLength(1);
-    expect(
-      request.mock.calls.filter(
-        ([, method]) => method === "eth_getBlockByNumber",
-      ),
-    ).toHaveLength(1);
-    expect(
-      request.mock.calls.some(
-        ([, method]) => method === "eth_sendRawTransaction",
-      ),
-    ).toBe(false);
-  });
-  it("rejects nonpayable value, read-only calls and forward/cyclic dependencies", async () => {
-    const { service, record } = fixture();
-    const base = {
-      chainId: 1,
-      contractId: record.id,
-      function: "change(uint256)",
-      args: ["1"],
-    };
-    await expect(
-      service.prepare({ account: owner, calls: [{ ...base, value: "1" }] }),
-    ).rejects.toMatchObject({ code: "NONPAYABLE_VALUE" });
-    await expect(
-      service.prepare({
-        account: owner,
-        calls: [{ ...base, function: "answer(uint8)" }],
-      }),
-    ).rejects.toMatchObject({ code: "FUNCTION_MUTABILITY_MISMATCH" });
-    await expect(
-      service.prepare({ account: owner, calls: [{ ...base, dependsOn: [0] }] }),
-    ).rejects.toMatchObject({ code: "DEPENDENCY_INVALID" });
-  });
-});
-
 describe("REST protocol runtime and factory proofs", () => {
   it("selects the published LP hook ABI instead of incompatible newer source methods", async () => {
     const catalog = await getContractCatalog();
@@ -485,28 +376,17 @@ describe("REST protocol runtime and factory proofs", () => {
       codes: [...catalog.data.codes],
       actualCode: () => catalog.code(deployment.codeId).runtimeTemplate,
     });
-    const call = {
+    const result = await test.service.resolve({
       chainId: 1,
       contractId: hook.id,
       address: deployment.address,
-      function: "deployPool(uint256,uint256)",
-      args: ["7", "0"],
-    };
-    const result = await test.service.prepare({
-      account: owner,
-      calls: [call],
     });
-    expect(result.calls[0]!.decoded).toMatchObject({
-      abiHash: deployment.abiHash,
-      function: "deployPool(uint256,uint256)",
-      args: ["7", "0"],
+    expect(result.abiHash).toBe(deployment.abiHash);
+    expect(result.address).toBe(deployment.address);
+    expect(result.provenance).toMatchObject({
+      kind: "published-deployment",
+      publication: { abiHash: deployment.abiHash },
     });
-    await expect(
-      test.service.prepare({
-        account: owner,
-        calls: [{ ...call, function: "deployPool(uint256)", args: ["7"] }],
-      }),
-    ).rejects.toMatchObject({ code: "FUNCTION_SIGNATURE_UNKNOWN" });
   });
   it("uses only authoritative immutable spans and rejects edits outside them", () => {
     const template = {
@@ -587,12 +467,10 @@ describe("REST protocol runtime and factory proofs", () => {
   }
   it("verifies token clone implementation and both directions of canonical project association", async () => {
     const test = tokenFixture();
-    const result = await test.service.read({
+    const result = await test.service.resolve({
       chainId: 1,
       contractId: test.record.id,
       address: other,
-      function: "balanceOf(address)",
-      args: [owner],
     });
     expect(result.provenance).toMatchObject({
       kind: "verified-factory-clone",
@@ -604,7 +482,6 @@ describe("REST protocol runtime and factory proofs", () => {
       },
       implementation: { address: destination },
     });
-    expect(result.outputs[0]?.value).toBe("12345678901234567890");
   });
   it("labels an official factory-selected implementation with missing masks as address provenance only", async () => {
     const test = tokenFixture(true, true);

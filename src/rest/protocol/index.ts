@@ -1,6 +1,5 @@
 import {
   decodeAbiParameters,
-  decodeFunctionData,
   encodeFunctionData,
   isAddressEqual,
   keccak256,
@@ -19,14 +18,10 @@ import type {
 import {
   RestError,
   type RestBlockEvidence,
-  type RestCall,
-  type RestPlanDraft,
   type RestRpc,
 } from "../core.js";
 import {
-  abiJson,
   address,
-  argumentsFor,
   exactObject,
   integer,
   signature,
@@ -44,19 +39,6 @@ export interface ResolveInput {
   address?: string;
   projectId?: string;
   blockNumber?: string;
-}
-export interface ReadInput extends ResolveInput {
-  function: string;
-  args: unknown[];
-}
-export interface PrepareCallInput extends Omit<ReadInput, "blockNumber"> {
-  value?: string;
-  dependsOn?: number[];
-}
-export interface PrepareInput {
-  account: string;
-  calls: PrepareCallInput[];
-  label?: string;
 }
 type Snapshot = {
   evidence: RestBlockEvidence;
@@ -83,15 +65,6 @@ type Verified = {
 };
 
 const same = isAddressEqual;
-const operationKeys = [
-  "chainId",
-  "contractId",
-  "address",
-  "projectId",
-  "blockNumber",
-  "function",
-  "args",
-];
 const expectedQuantity = (value: unknown, label: string): bigint => {
   if (
     typeof value !== "string" ||
@@ -119,7 +92,7 @@ const objectValue = (value: unknown, field: string): unknown =>
     ? (value as Record<string, unknown>)[field]
     : undefined;
 
-/** Generic access to cataloged V6 ABIs. It constructs unsigned transactions and never signs or sends them. */
+/** Local provenance proof for Signa session targets against pinned deployment evidence. */
 export function createProtocolReadService({
   rpc,
   catalog,
@@ -272,7 +245,6 @@ export function createProtocolReadService({
   function method(
     abi: Abi,
     name: unknown,
-    mode: "read" | "write",
   ): AbiFunction {
     if (typeof name !== "string" || name.length > 4096)
       throw new RestError(
@@ -292,13 +264,11 @@ export function createProtocolReadService({
       );
     const fn = candidates[0]!;
     const read = fn.stateMutability === "view" || fn.stateMutability === "pure";
-    if ((mode === "read") !== read)
+    if (!read)
       throw new RestError(
         405,
         "FUNCTION_MUTABILITY_MISMATCH",
-        read
-          ? "Read functions belong in the read endpoint."
-          : "Mutating functions require an unsigned preparation request.",
+        "Provenance verification requires read-only contract functions.",
       );
     return fn;
   }
@@ -308,7 +278,7 @@ export function createProtocolReadService({
     fullSignature: string,
     args: readonly unknown[],
   ): Promise<readonly unknown[]> {
-    const fn = method(target.abi, fullSignature, "read");
+    const fn = method(target.abi, fullSignature);
     const data = encodeFunctionData({ abi: [fn], functionName: fn.name, args });
     const result = rpcHex(
       await rpc.request(
@@ -1075,156 +1045,5 @@ export function createProtocolReadService({
       evidence: [snap.evidence],
     };
   }
-  async function read(input: ReadInput, signal?: AbortSignal) {
-    exactObject(input, operationKeys, "read");
-    validateBase(input);
-    const snap = await snapshot(input.chainId, input.blockNumber, signal);
-    const verified = await target(snap, input);
-    const fn = method(verified.abi, input.function, "read");
-    const args = argumentsFor(fn, input.args);
-    const outputs = await call(snap, verified, signature(fn), args);
-    return {
-      chainId: input.chainId,
-      contractId: input.contractId,
-      address: verified.address,
-      function: signature(fn),
-      args: abiJson(args),
-      outputs: fn.outputs.map((parameter, index) => ({
-        name: parameter.name || null,
-        type: parameter.type,
-        value: abiJson(outputs[index]),
-      })),
-      provenance: verified.provenance,
-      evidence: [snap.evidence],
-    };
-  }
-  async function prepare(
-    input: PrepareInput,
-    signal?: AbortSignal,
-  ): Promise<RestPlanDraft> {
-    exactObject(input, ["account", "calls", "label"], "prepare");
-    const account = address(input.account, "account", true);
-    if (
-      !Array.isArray(input.calls) ||
-      input.calls.length < 1 ||
-      input.calls.length > 32
-    )
-      throw new RestError(
-        400,
-        "CALL_COUNT_INVALID",
-        "Prepare between 1 and 32 calls.",
-      );
-    if (
-      input.label !== undefined &&
-      (typeof input.label !== "string" || input.label.length > 160)
-    )
-      throw new RestError(
-        400,
-        "LABEL_INVALID",
-        "Plan label must be a string of at most 160 characters.",
-      );
-    const snapshots = new Map<number, Snapshot>();
-    const calls: RestCall[] = [];
-    const provenance: unknown[] = [];
-    for (const [index, item] of input.calls.entries()) {
-      exactObject(
-        item,
-        [
-          "chainId",
-          "contractId",
-          "address",
-          "projectId",
-          "function",
-          "args",
-          "value",
-          "dependsOn",
-        ],
-        `calls[${index}]`,
-      );
-      validateBase(item);
-      const dependsOn = item.dependsOn ?? [];
-      if (
-        !Array.isArray(dependsOn) ||
-        dependsOn.some(
-          (dependency) =>
-            !Number.isSafeInteger(dependency) ||
-            dependency < 0 ||
-            dependency >= index,
-        ) ||
-        new Set(dependsOn).size !== dependsOn.length
-      )
-        throw new RestError(
-          400,
-          "DEPENDENCY_INVALID",
-          "Dependencies must be unique indices of earlier calls; future references and cycles are forbidden.",
-        );
-      let snap = snapshots.get(item.chainId);
-      if (!snap) {
-        snap = await snapshot(item.chainId, undefined, signal);
-        snapshots.set(item.chainId, snap);
-      }
-      const verified = await target(snap, item);
-      const fn = method(verified.abi, item.function, "write");
-      const args = argumentsFor(fn, item.args);
-      const value =
-        item.value === undefined
-          ? 0n
-          : integer(item.value, `calls[${index}].value`);
-      if (fn.stateMutability !== "payable" && value !== 0n)
-        throw new RestError(
-          400,
-          "NONPAYABLE_VALUE",
-          "Native value cannot be attached to a nonpayable function.",
-        );
-      const data = encodeFunctionData({
-        abi: [fn],
-        functionName: fn.name,
-        args,
-      });
-      if (data.length > 262146)
-        throw new RestError(
-          400,
-          "CALLDATA_TOO_LARGE",
-          "Encoded calldata exceeds 128 KiB.",
-        );
-      const decoded = decodeFunctionData({ abi: [fn], data });
-      calls.push({
-        chainId: item.chainId,
-        to: verified.address,
-        data,
-        value: String(value),
-        dependsOn: [...dependsOn],
-        label: `${verified.contract.name}.${fn.name}`,
-        decoded: {
-          contractId: item.contractId,
-          abiHash: verified.abiHash,
-          function: signature(fn),
-          args: abiJson(decoded.args ?? []),
-        },
-      });
-      provenance.push({ callIndex: index, ...verified.provenance });
-    }
-    return {
-      operation: "protocol-contract-calls",
-      account,
-      calls,
-      evidence: [...snapshots.values()].map((snap) => snap.evidence),
-      summary: {
-        label: input.label ?? "V6 contract transaction preparation",
-        provenance,
-        authorization:
-          "The account is the intended sender. Preparing calldata does not establish permissions or signing authority.",
-        simulation: "not-run",
-        dependentDestinations:
-          "Every target must already exist and verify at preparation time. A preceding deployment cannot establish an unverified future destination.",
-      },
-      warnings: [
-        "This plan contains unsigned transactions. No signing or broadcast occurred.",
-        "State and permissions may change after the observed block. Simulate the exact calls in dependency order before signing.",
-        "Native value is exact wei. ABI integer arguments preserve their contract-defined units; no token decimals or currency conversion is inferred.",
-        "Verified code and factory association establish provenance, not a safety audit or endorsement of arguments, hooks, recipients, or economic outcomes.",
-      ],
-    };
-  }
-  return { read, prepare, resolve, provenance: resolve };
+  return { resolve, provenance: resolve };
 }

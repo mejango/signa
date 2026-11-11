@@ -160,7 +160,7 @@ export const v6PaymentSourcePreflight = ["--import", "tsx", "--input-type=module
 export function validateRuntime(version, databaseUrl) {
   const [major, minor] = version.split(".").map(Number);
   if (!Number.isInteger(major) || !Number.isInteger(minor) || major < 22 || (major === 22 && minor < 16)) {
-    throw new Error("Release checks require Node.js 22.16.0 or newer, matching the MCP package.");
+    throw new Error("Release checks require Node.js 22.16.0 or newer, matching the Signa package.");
   }
   if (!databaseUrl?.trim()) throw new Error("Release checks require TEST_DATABASE_URL pointing to a disposable PostgreSQL 16 database; focused npm test remains available without it.");
 }
@@ -420,13 +420,6 @@ async function main() {
         env: { ...checkEnv, CENTER_PASSKEY_REPORT: passkeyReport } });
       observation.suites.push(...verifyExecutionReport(JSON.parse(await readFile(passkeyReport, "utf8"))));
       temporary = await mkdtemp(resolve(tmpdir(), "center-check-report-"));
-      const mcpReport = resolve(temporary, "mcp.json");
-      let mcpError;
-      try { await runStep("mcp", npm, ["--prefix", "mcp", "run", "check"], { ...options,
-        env: { ...checkEnv, CENTER_MCP_REPORT: mcpReport } }); }
-      catch (error) { mcpError = error; }
-      observation.suites.push(...summarizeVitest(JSON.parse(await readFile(mcpReport, "utf8")), root, []));
-      if (mcpError) throw mcpError;
       await runStep("typecheck", npm, ["run", "typecheck"], options);
       await runStep("connect", npm, ["run", "test:connect"], options);
       const report = resolve(temporary, "service.json");

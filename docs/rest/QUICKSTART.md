@@ -1,24 +1,25 @@
 # Your first request
 
-Read Juicebox projects, prepare wallet-approved transactions, and check their
-results through one API. Use Node 22 or newer for the examples below.
+Manage a Signa account, prepare wallet-approved transactions, and check their
+results. Juicebox protocol reads and catalogs are available separately from Center.
+Use Node 22 or newer for the examples below.
 
 ## Try a public request
 
 No account or key is needed to discover supported chains and execution options:
 
 ```sh
-curl https://juicebox.center/api/v1/capabilities
+curl https://api.signa.center/api/v1/capabilities
 ```
 
 A successful response is JSON. Look at `protocolVersion` and the configured
-chains. You can also explore the [contract catalog](/api/v1/catalog/contracts)
+chains. You can also explore the [Center contract catalog](https://juicebox.center/api/v1/catalog/contracts)
 and [endpoint reference](/api#reference).
 
 ## Create your connection
 
 1. Open [Accounts](/accounts) and select **Sign in**. Connect an existing wallet.
-   Your wallet signs a request that creates or loads your Center account.
+   Your wallet signs a request that creates or loads your Signa account.
    Signing in sends no transaction.
 2. Under **02 / API access**, choose a label, expiry and permissions. Start with **Read**
    for data access, **Read + plan** to prepare actions, or **Read + plan + relay**
@@ -27,11 +28,11 @@ and [endpoint reference](/api#reference).
    wallet. Save `juicebox-connection.json` in your application’s private folder.
 
 The file contains the local bot key and all account settings. You do not need to
-copy addresses or grant IDs. Center receives only the public address and signed
+copy addresses or grant IDs. Signa receives only the public address and signed
 proof. The page retains the key in memory until you sign out or close it;
 **Download connection again** lets you retry a blocked download in that tab.
 
-If setup is interrupted, select **Resume connection setup**. Center checks the
+If setup is interrupted, select **Resume connection setup**. Signa checks the
 existing registration before trying again with the same key and permissions.
 Keep that tab open until your file is saved.
 
@@ -45,7 +46,7 @@ Safe7579 wallets with one or more owners. See [when to add one](./SMART_ACCOUNTS
 Run these commands in the folder containing your connection file:
 
 ```sh
-npm install https://juicebox.center/api/client/juicebox-center-client-0.1.0.tgz
+npm install https://api.signa.center/api/client/juicebox-center-client-0.1.0.tgz
 chmod 600 juicebox-connection.json
 npx center account --connection juicebox-connection.json
 ```
@@ -80,7 +81,7 @@ or connected browser wallet instead of a file; see [client workflows](./CLIENT.m
 
 For actions, create a connection with **Read + plan** or **Read + plan + relay**.
 Use `center.prepare({ operation, input }, idempotencyKey)`. Choose an operation
-and its input fields from the [operations catalog](/api/v1/catalog/operations).
+and its input fields from the [Center operations catalog](https://juicebox.center/api/v1/catalog/operations).
 The response contains the exact calls, amounts, dependencies and expiry to review.
 
 Next, [prepare, approve and submit an action](./CLIENT.md#prepare-review-approve-submit).

@@ -1,20 +1,20 @@
 # Prepaid transactions
 
-Center lets you or a sponsor prepay the network cost of wallet-approved calls. Center prepares the exact calls, the owner signs them, and Center publishes them using wallet-approved forwarding. A wallet separately pays for the group of calls (**bundle**). Center never holds a signing key, pays for a bundle, or gives a bot permission to spend from a wallet. See the [glossary](https://juicebox.center/api#glossary).
+Signa lets you or a sponsor prepay the network cost of wallet-approved calls. Signa prepares the exact calls, the owner signs them, and Signa publishes them using wallet-approved forwarding. A wallet separately pays for the group of calls (**bundle**). Signa never holds a signing key, pays for a bundle, or gives a bot permission to spend from a wallet. See the [glossary](https://api.signa.center/api#glossary).
 
 Check `capabilities.sponsorship` for availability. Prepaid execution supports Ethereum (`1`), Optimism (`10`), Base (`8453`), and Arbitrum (`42161`) mainnets when the host enables them and verifies their deployed contracts. Testnets, ERC-4337 paymasters, Safe module execution, and reusable session keys are not supported by this adapter. Capability configuration is not a claim that a provider is currently healthy or a particular target is eligible.
 
 ## User journey
 
 1. Prepare an immutable V6 transaction plan through the protocol or contract API. Read its calls, amounts, dependencies, warnings, and onchain evidence.
-2. Create a sponsorship preparation with that plan ID and the indexes of an independently executable wave. Each selected target must trust the catalog's verified V6 forwarder. Multiple calls on the same chain execute in plan order. Center’s existing 32-step plan capacity and request-size bounds apply; these are not provider transaction limits. Complete prerequisite steps first.
+2. Create a sponsorship preparation with that plan ID and the indexes of an independently executable wave. Each selected target must trust the catalog's verified V6 forwarder. Multiple calls on the same chain execute in plan order. Signa’s existing 32-step plan capacity and request-size bounds apply; these are not provider transaction limits. Complete prerequisite steps first.
 3. Review and sign each returned EIP-712 `ForwardRequest` using the owner wallet. Each signature binds the chain, canonical forwarder, exact sender, target, calldata, native value, forwarding gas, live forwarding nonce, and explicit execution deadline. A registered bot key cannot replace this signature.
-4. Approve publication through Center's fresh owner approval and submit the exact ordered signatures with an idempotency key. Center rechecks the signature, runtime, target trust, current nonce, simulation, API grant, and fresh approval before reserving publication.
+4. Approve publication through Signa's fresh owner approval and submit the exact ordered signatures with an idempotency key. Signa rechecks the signature, runtime, target trust, current nonce, simulation, API grant, and fresh approval before reserving publication.
 5. Inspect the stored quote and request a funding plan for one payment chain. Review its exact bundle identifier, payment contract, calldata, native value, and deadline. Sign and submit that funding transaction through the ordinary transaction API.
-6. Refresh both sponsorship and source plan. Execution status is a transaction-discovery hint. Center independently verifies the canonical destination transaction, receipt, forwarding execution, confirmations, and operation-specific outcome before reporting completion or unlocking dependencies.
+6. Refresh both sponsorship and source plan. Execution status is a transaction-discovery hint. Signa independently verifies the canonical destination transaction, receipt, forwarding execution, confirmations, and operation-specific outcome before reporting completion or unlocking dependencies.
 7. Prepare the next dependent wave only after the original journey records the required confirmed outcome. A bundle is not atomic across chains; one destination can succeed while another remains pending or fails.
 
-An ERC-20 approval usually targets a token that does not trust the V6 forwarder. Such a step needs a separate direct wallet transaction and confirmation before the sponsored wave. A prerequisite cannot be smuggled into the same wave and assumed successful because Center accepted the bundle.
+An ERC-20 approval usually targets a token that does not trust the V6 forwarder. Such a step needs a separate direct wallet transaction and confirmation before the sponsored wave. A prerequisite cannot be smuggled into the same wave and assumed successful because Signa accepted the bundle.
 
 ## HTTP interface
 
@@ -30,19 +30,19 @@ All paths below are relative to the configured REST API root. The normal signed-
 
 The HTTP adapter restricts `payer` to its authenticated account owner. The transport-independent `prepareFunding` method can also return an unsigned draft addressed to a different payer. That draft must be transferred to the sponsor for independent review and admitted under the sponsor's own account; the original user's bot credentials never authorize the sponsor's wallet. The pinned payment runtime does not inspect payer identity. Its exact call is nevertheless simulated from the named payer before a draft is returned.
 
-Creating the prepaid quote requires a provider `POST`; it discloses usable signed requests. Reading an existing quote uses `GET`. Center therefore does not disguise new quote creation as a read-only action.
+Creating the prepaid quote requires a provider `POST`; it discloses usable signed requests. Reading an existing quote uses `GET`. Signa therefore does not disguise new quote creation as a read-only action.
 
 ## Three different deadlines
 
 | Deadline                              | Effect                                                                                                                                                                                                 |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Source plan `publicationExpiresAt`    | Limits when a new authorization may be published. Uses Unix milliseconds.                                                                                                                              |
-| Fresh Center owner approval           | Binds the account, principal, sponsorship ID, commitment, submission hash, nonce, audience, and a validity window of at most five minutes. Uses Unix seconds and is rechecked under the dispatch lock. |
+| Fresh Signa owner approval           | Binds the account, principal, sponsorship ID, commitment, submission hash, nonce, audience, and a validity window of at most five minutes. Uses Unix seconds and is rechecked under the dispatch lock. |
 | Each signed `ForwardRequest.deadline` | Controls the exact onchain call's validity. Uses Unix seconds and is explicitly reviewed by the owner. The default is 47 hours; the host can shorten it.                                               |
 
-The 47-hour window is a new execution commitment, matching the established Juicebox Money client policy. It does not silently inherit a short source plan lifetime. Once a signature is published, expiry or revocation in Center cannot retract it. The onchain forwarder nonce and signed deadline determine whether the request remains executable.
+The 47-hour window is a new execution commitment, matching the established Juicebox Money client policy. It does not silently inherit a short source plan lifetime. Once a signature is published, expiry or revocation in Signa cannot retract it. The onchain forwarder nonce and signed deadline determine whether the request remains executable.
 
-The quote has its own exact funding deadline. Funding must expire before the earliest forwarding deadline, with a minimum remaining-time margin. Center checks quote affordability and timing before exposing eligible payment data, and repeats runtime, nonce, target trust, timing, and exact-payer simulation checks while preparing funding. It checks the clock again after the final RPC work so a slow observation cannot produce an already expired funding draft.
+The quote has its own exact funding deadline. Funding must expire before the earliest forwarding deadline, with a minimum remaining-time margin. Signa checks quote affordability and timing before exposing eligible payment data, and repeats runtime, nonce, target trust, timing, and exact-payer simulation checks while preparing funding. It checks the clock again after the final RPC work so a slow observation cannot produce an already expired funding draft.
 
 A long-lived exact-call signature does not establish when it was signed. The separate fresh publication approval is required in production. Idempotent reads of a previously admitted publication do not request a new approval and never trigger a second provider submission.
 
@@ -50,7 +50,7 @@ A long-lived exact-call signature does not establish when it was signed. The sep
 
 The adapter uses the local V6 deployment catalog to find exactly one executable `ERC2771Forwarder` for the destination chain. It verifies the deployed runtime against compiler-backed catalog evidence, reads the live EIP-712 domain and nonce, and requires `isTrustedForwarder` on the exact planned target. Missing or insufficient runtime provenance fails closed. Address-only catalog entries are not sufficient.
 
-The expected domain is `Juicebox`, version `1`, with the exact chain ID and forwarder address. Preparation records the forwarder and target code hashes at a canonical block. Before publication, Center checks those bindings again, recovers the owner from the exact typed signature, invokes the forwarder's real `verify` function, and simulates the encoded outer `execute` call with its exact value. It never rewrites a signed call to make a quote fit.
+The expected domain is `Juicebox`, version `1`, with the exact chain ID and forwarder address. Preparation records the forwarder and target code hashes at a canonical block. Before publication, Signa checks those bindings again, recovers the owner from the exact typed signature, invokes the forwarder's real `verify` function, and simulates the encoded outer `execute` call with its exact value. It never rewrites a signed call to make a quote fit.
 
 The payment contract is independently pinned from the existing local webclient implementation and runtime fixture:
 
@@ -62,9 +62,9 @@ The payment contract is independently pinned from the existing local webclient i
 | Payment runtime Keccak-256 | `0x6006b5acadb4cd60aa5c00cb844c34563e182dff83d4f4ff4fde226f7df16fa6`      |
 | Quote currency             | Native token, represented by `0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee` |
 
-Payment calldata must be exactly the selector followed by the ABI-encoded `bytes16` bundle UUID and `uint40` deadline, with canonical padding. The declared deadline must match those bytes. Center rejects unsupported chains, tokens, targets, duplicate payment options, invalid amounts, conflicting IDs, and changes to the exact outer call. Zero-value quotes are valid if all other checks pass. The default maximum quoted native funding amount is one native unit (`10^18` base units); the host can set a stricter limit.
+Payment calldata must be exactly the selector followed by the ABI-encoded `bytes16` bundle UUID and `uint40` deadline, with canonical padding. The declared deadline must match those bytes. Signa rejects unsupported chains, tokens, targets, duplicate payment options, invalid amounts, conflicting IDs, and changes to the exact outer call. Zero-value quotes are valid if all other checks pass. The default maximum quoted native funding amount is one native unit (`10^18` base units); the host can set a stricter limit.
 
-Internally, provider bundle entries retain exact chain, forwarder target, execute calldata, native value, consecutive per-chain `virtual_nonce` values, and unique transaction UUIDs. The provider's creation response supplies a UUID set without establishing its order. Center authenticates each UUID against the exact call echoed by a status read, including its forwarding nonce. Status responses must reproduce that verified binding thereafter. Neither a provider URL nor request headers, credentials, arbitrary redirects, or user-selected RPC endpoints can be supplied through this interface.
+Internally, provider bundle entries retain exact chain, forwarder target, execute calldata, native value, consecutive per-chain `virtual_nonce` values, and unique transaction UUIDs. The provider's creation response supplies a UUID set without establishing its order. Signa authenticates each UUID against the exact call echoed by a status read, including its forwarding nonce. Status responses must reproduce that verified binding thereafter. Neither a provider URL nor request headers, credentials, arbitrary redirects, or user-selected RPC endpoints can be supplied through this interface.
 
 The payer simulation uses the pinned payment contract, exact quote calldata and value, and a bounded 150,000 gas allowance. Destination simulation uses the owner's real balance and current state without synthetic balance overrides. Consequently, a destination call that fails this conservative simulation is unavailable even if another account might ultimately supply its native value through the execution service. This adapter does not promise that every wallet with no native balance can prepare every value-bearing call.
 
@@ -93,7 +93,7 @@ Without a validated provider UUID, the adapter cannot independently recover a lo
 
 ## Execution and economic completion
 
-Provider success is never completion evidence. Center obtains the destination transaction and receipt from its configured RPC, verifies the exact stored outer calldata, value, chain, target, transaction position, canonical block, forwarder runtime, and bounded receipt logs. A successful outer receipt must contain exactly one successful `ExecutedForwardRequest` event for the reviewed owner and forwarding nonce.
+Provider success is never completion evidence. Signa obtains the destination transaction and receipt from its configured RPC, verifies the exact stored outer calldata, value, chain, target, transaction position, canonical block, forwarder runtime, and bounded receipt logs. A successful outer receipt must contain exactly one successful `ExecutedForwardRequest` event for the reviewed owner and forwarding nonce.
 
 The source transaction service independently refetches the canonical receipt before persisting the external observation. It runs the same operation-specific semantic verifier used by direct execution, using the original plan account and project identity. Logs are consumed transiently for verification and omitted from durable sponsorship records. Reconciliation rechecks known receipts; a later provider retry hash cannot hide an already canonical successful execution. Reorged evidence cannot unlock dependent calls.
 
@@ -130,14 +130,14 @@ Week/month sessions and repeated payments from an explicitly isolated prepaid ba
 
 ## Hosting and provider implementation
 
-Center uses an internal relay adapter; API clients use the sponsorship routes and
+Signa uses an internal relay adapter; API clients use the sponsorship routes and
 returned signing documents without integrating with that provider. The historical
 transport identifier `relayr-prepaid-erc2771` remains stable for compatibility.
 [Bundle ordering](https://relayr-docs-staging.up.railway.app/docs/concepts/bundle/)
 is implemented with `MultiChain` virtual nonces (the exact wire enum in
 [Relayr's OpenAPI](https://api.relayr.ba5ed.com/openapi.json)): consecutive values starting at
 zero per chain, with equal values on different chains eligible to run together.
-Center assigns consecutive wallet forwarding nonces, verifies signed prefixes
+Signa assigns consecutive wallet forwarding nonces, verifies signed prefixes
 with sequential `eth_simulateV1` calls against the deployed forwarder, and publishes
 individual calls for independent receipt reconciliation. Failed calls stop later
 nonce levels; this does not make cross-chain execution atomic. Explicit plan
@@ -145,6 +145,6 @@ prerequisites still require canonical confirmation before preparation.
 
 Same-chain sequences require the configured RPC to support
 [`eth_simulateV1`](https://geth.ethereum.org/docs/interacting-with-geth/rpc/ns-eth#eth-simulatev1).
-Center checks every individual execution result and rechecks the canonical parent
+Signa checks every individual execution result and rechecks the canonical parent
 block. Unsupported RPC methods, missing results and any failed call prevent
 publication. No account balance, code or nonce overrides are used.

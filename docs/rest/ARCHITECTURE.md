@@ -3,39 +3,40 @@
 Implementation architecture. The generated OpenAPI specification describes the mounted routes;
 capability discovery reports which execution transports and deployment adapters are configured.
 
-The account and wallet product is intended to move to Signa. The
-[Signa preparation contract](SIGNA_MIGRATION.md) defines ownership, portable hosting
-seams and the credential and execution guarantees that must survive that move.
-The architecture below describes the current combined deployment.
+Signa owns accounts and wallet execution. [The ownership contract](SIGNA_MIGRATION.md)
+defines the split: Center supplies hosted protocol services, and the Juicebox SDK
+supplies reusable local protocol code. There is no Center account migration or
+compatibility runtime.
 
 ## Confirmed scope
 
-- Operate within the existing jbcenter service at juicebox.center.
-- Include the official repositories in Bananapus/version-6, including the 721 and buyback hooks,
-  router terminal, revnets, suckers, and other official packages. Exclude experimental extensions
-  such as Sticky, JBChat, JBProcessor, and Plugin.
-- GET requests read the protocol or Bendystraw. Where both can supply the requested information,
-  clients can select the source. Responses identify the source and its actual freshness guarantees.
-- POST requests prepare transactions or journeys and relay transaction bytes signed by an external
-  wallet. Center never receives or stores a wallet or bot private key.
-- Wallet owners manage accounts, profiles, and revocable bot grants. Bot keys are generated locally
-  in the browser or CLI. Every protected request is signed; there are no static API keys or bearer
-  tokens in this access model.
+- Serve credential ceremonies at `https://signa.center` and account/API operations at
+  `https://api.signa.center`, with separate host boundaries.
+- Owners manage accounts, profiles, passkeys and revocable app/bot grants. Client keys
+  stay with the client; account API requests use exact signed requests.
+- Prepare and store reviewed wallet plans, collect owner approval or enforce an
+  explicitly installed session, submit exact signed bytes, and reconcile execution.
+- Protocol reads, catalogs, indexed project history, intents, publication, IPFS and
+  MCP belong to [Center](https://juicebox.center/api), not this server.
 
 ## Boundaries
 
-The HTTP adapter owns parsing, request authentication, authorization, response envelopes, and
-OpenAPI descriptions. Shared application operations own protocol semantics and validated inputs.
-Contract catalogs are generated from pinned official artifacts; indexer catalogs are generated
-from the pinned Bendystraw schema. Network adapters accept configured upstreams only.
+The Signa HTTP adapter owns parsing, authentication, authorization and wallet API
+schemas. Its account database owns grants, approvals, nonce reservations and durable
+execution state. Authorization and dispatch stay under the same transactional checks;
+Center cannot authorize spending on Signa's behalf.
 
-REST does not invoke MCP tools by name. The two transports share application services and retain
-their own principal, audience, quotas, and response contracts. Existing public RPC/IPFS endpoints,
-MCP access, and internal metrics authorization keep their documented behavior.
+Signa requests unsigned drafts from `POST https://juicebox.center/api/v1/plans`.
+The bounded adapter checks returned operation, account, calls and evidence before the
+existing transaction service validates ownership and canonical observations. Protocol
+operation descriptors are reviewed data, not runtime code or authority. The SDK owns
+portable encoding, decoding and protocol outcome checks. Signa uses its configured
+RPC for simulation, exact execution proofs and recovery. Neither recovery nor an
+existing submission needs a new Center preparation.
 
-Account grants authorize access to Center. They do not grant Juicebox permissions, move funds,
-or allow a bot to sign from its owner's wallet. The actual transaction signer is committed in each
-plan and recovered independently from submitted transaction bytes.
+Account grants authorize access to Signa. They do not grant Juicebox permissions,
+move funds or let a bot sign from its owner's wallet. The actual transaction signer
+is committed in each plan and recovered independently from submitted bytes.
 
 ## Request authentication
 
@@ -52,18 +53,17 @@ Retries use a fresh request signature and nonce with the same idempotency identi
 body for an existing identifier is rejected. A lost response must not create another journey or
 broadcast a different transaction.
 
-## Reads and provenance
+## Protocol data and provenance
 
-Onchain reads are tied to a canonical block hash. Supported addresses come from pinned official
-deployment manifests or explicit proofs for project/factory instances; a caller-provided ABI or
-URL is not a provenance check. The catalog distinguishes address provenance from an exact
-compiler-to-runtime match and identifies missing runtime proof. ABI overloads use full signatures.
-Exact integers cross JSON boundaries as decimal strings, including nested tuples and arrays.
+Fetch protocol catalogs and project information from Center. Onchain observations
+carry a canonical block hash; indexed Bendystraw data has its separate freshness
+and pagination guarantees. Indexed balances do not establish executable balances.
 
-Bendystraw is an indexed observation, not a canonical-block simulation source. V6, chain, project,
-and entity identity are checked in filters and returned data. Global aggregates that cannot be
-scoped to V6 are reported as unsupported. Historical accounting balances are not labeled as live
-spendable balances. No silent source substitution is permitted.
+A Center draft is input to Signa's own review, not permission to execute. Signa
+retains exact decimal integers, chain/account/project identity, destinations,
+calldata, values and dependencies, and verifies canonical evidence with its own RPC.
+Unknown or mismatched evidence fails closed. No caller-provided upstream URL or ABI
+can replace the reviewed execution and account manifests.
 
 ## Transactions and journeys
 
@@ -118,7 +118,7 @@ source semantics, pagination, limits, idempotency, error codes, timeouts, finali
 Unknown reads and unavailable deployments remain explicit errors or unavailable capabilities.
 
 Tests cover request tampering/replay/revocation, account isolation, concurrent idempotency,
-schema/deployment coverage, V6-only indexer boundaries, exact transaction matching, interrupted
+schema/deployment coverage, Center response boundaries, exact transaction matching, interrupted
 journeys, upstream ambiguity, and restart/reorg recovery. Changes affecting signing, authority,
 or financial outcomes receive an independent review before release.
 

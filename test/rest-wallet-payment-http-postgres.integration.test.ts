@@ -16,8 +16,6 @@ import { createRestApp, type RestDependencies } from "../src/rest/app.js";
 import { createRestAuth } from "../src/rest/auth/service.js";
 import { PostgresAccountStore } from "../src/rest/auth/postgres.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { createProtocolReadService } from "../src/rest/protocol/index.js";
-import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { TransactionService } from "../src/rest/transactions/service.js";
 import { PostgresTransactionStore } from "../src/rest/transactions/postgres.js";
 import { createCenterWalletClient } from "../src/rest/client/index.js";
@@ -137,10 +135,10 @@ async function start() {
   const central = await listen(site), contracts = await getContractCatalog();
   const rpc = { async request(): Promise<never> { throw new Error("No chain/provider calls are permitted in this HTTP fixture"); } };
   const unavailable = (): never => { throw new Error("Unrelated protocol operation is not part of this fixture"); };
-  const operations: RestDependencies["operations"] = { list: () => [], get: unavailable, execute: async () => unavailable(), prepare: async () => unavailable() };
+  const operations: RestDependencies["operations"] = { list: () => [], prepare: async () => unavailable() };
   const api = await listen(new Hono().route("/api/v1", createRestApp({
     auth: createRestAuth({ store: new PostgresAccountStore(pool), audience }), quota: new PostgresStore(pool), contracts,
-    protocol: createProtocolReadService({ catalog: contracts, rpc }), indexer: createIndexerReadService(), operations,
+    operations,
     transactions: new TransactionService({ store: new PostgresTransactionStore(pool), rpc }), walletPayments: payments,
   })));
   const post = (path: string, body: unknown, jar?: CookieJar, headers: Record<string, string> = {}, dropBody = false) => httpFetch(central + path, {

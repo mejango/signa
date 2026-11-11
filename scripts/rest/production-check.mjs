@@ -10,7 +10,7 @@ const HELP = `Prepare a zero-value V6 execution check without keys or transactio
   node scripts/rest/production-check.mjs CHAIN_ID SMART_WALLET_ADDRESS > check.json
 
 Chains: Ethereum 1, Optimism 10, Base 8453, Arbitrum 42161.
-Use a wallet already verified and bound at https://juicebox.center/accounts.
+Use a wallet already verified and bound at https://api.signa.center/accounts.
 Paste check.json as the contract_calls operation input, then review in your wallet.
 The command verifies that the wallet's self-permission bitmap is already zero.
 It grants no permissions and moves no funds. Sponsorship still consumes policy quota.

@@ -19,10 +19,9 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
   try {
     // Share read-only inputs; every compiler, bundler and package output stays in this fixture.
     for (const name of ["src", "docs", "client", "wallet-client", "node_modules"]) await symlink(join(root, name), join(directory, name));
-    for (const name of ["mcp", "scripts/rest", "test", "dist/src/db/migrations", ".generated/rest", ".generated/checks"])
+    for (const name of ["scripts/rest", "test", "dist/src/db/migrations", ".generated/rest", ".generated/checks"])
       await mkdir(join(directory, name), { recursive: true });
-    for (const name of ["src", "node_modules"]) await symlink(join(root, "mcp", name), join(directory, "mcp", name));
-    for (const name of ["package.json", "tsconfig.json", "tsconfig.build.json", "mcp/package.json", "mcp/tsconfig.json", "mcp/tsconfig.build.json",
+    for (const name of ["package.json", "tsconfig.json", "tsconfig.build.json",
       "scripts/rest/clean-build.mjs", "scripts/rest/build-web.mjs", "scripts/rest/build-client.mjs", "scripts/rest/copy-assets.mjs", "scripts/rest/center.mjs"])
       await copyFile(join(root, name), join(directory, name));
     await writeFile(join(directory, "test/build-only.test.ts"), "export const testOnly = true;\n");
@@ -39,7 +38,8 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
     expect(await readFile(join(directory, ".generated/checks/retained.json"), "utf8")).toBe("{}");
     expect((await readdir(join(directory, "dist/src/db/migrations"))).sort())
       .toEqual((await readdir(join(root, "src/db/migrations"))).sort());
-    expect((await stat(join(directory, "mcp/dist/host.js"))).isFile()).toBe(true);
+    await expect(stat(join(directory, "mcp"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await stat(join(directory, "dist/src/rest/protocol/operations.json"))).isFile()).toBe(true);
     const manifest = JSON.parse(await readFile(join(directory, "package.json"), "utf8")) as { scripts: { dev: string } };
     expect(manifest.scripts.dev).toMatch(/^npm run build && /);
 

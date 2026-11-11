@@ -93,3 +93,37 @@ jango, 2026-10-20: fix the PR #20 follow-up now ("bad UX is bad security"). Code
 - Codex pass 1 FIX: release took no sender lock (cross-key claim race); migration settled old rows by wall clock. Pass 2 FIX: one failed candidate refresh blocked settlement. Pass 3 FIX: settlement missed an already-settled executed operation at the nonce; migration bypassed the claim's sender lock. Pass 4 SHIP.
 - Ceiling (kept from PR #20): a nonce consumed with no Signa execution to prove it fails closed; a session operation with an unreadable sponsor window holds its wallet to its nonce until settlement evidence exists.
 - Verification: new tests fail on main (memory service: revert release and fresh send, reorg and late inclusion, sponsor-window session expiry with plan step, session revert, failed-candidate settlement, re-reverted replacement; PostgreSQL: release, sender-lock race, sentAt, reorg, expiry, inner revert, migration backfill; payment review on PG 16 checked locally on a PG 14 copy). typecheck, build, full vitest (3944 passed); PostgreSQL user operation, transactions, sessions, sponsorship, smart account and core suites on local PG 14.
+# Signa ownership cleanup
+
+Required shared resources: `/Users/jango/Documents/jb/v6/evm/AGENTS.md`, `/Users/jango/Documents/jb/v6/evm/workflow/ponytail/SKILL.md`, `/Users/jango/Documents/jb/v6/evm/workflow/ponytail/README.md`, `/Users/jango/Documents/jb/v6/evm/docs/PLAN_REFINEMENT.md`, and root `tasks/lessons.md`; local `AGENTS.md` and `mcp/AGENTS.md` apply.
+
+## Plan refinement
+- **Objective:** Make Signa own only accounts/wallet execution and obtain protocol primitives from the SDK and hosted protocol preparation from Center; delete unused inherited Center server functionality without changing Signa authority, reviewed bytes or recovery.
+- **System fit:** Apps already use Signa apart from separately planned jbm/revnet/juicescan transitions. Center supplies protocol preparation and reference data; SDK owns portable verification and encoding; Signa validates, approves, executes and recovers locally. No Center account-history migration is required.
+- **Reuse and simplicity:** Replace copied MCP service construction with a bounded Center protocol adapter and SDK outcome verification; retain Signa's existing auth/transaction services and pinned execution evidence. Delete unused top-level Center routes/assets/tests and MCP transport instead of retaining compatibility layers.
+- **Evidence and unknowns:** Fresh origin/main 5c4762a imports @juicebox/mcp/host at eight source modules. Runtime needs prepare operation metadata, exact-head optional preparation and semantic outcome checks. Center API and SDK export seams are being coordinated before replacement; live behavior is not inferred from source.
+- **Verification:** Run the complete typecheck/build and affected protocol, execution, wallet, route and client tests; run required release checks where dependencies are available. Test malformed/mismatched/failed Center responses fail closed and exact call evidence survives. No deployment or database mutation.
+- **Resource budget:** Delegate disjoint unused Center pruning while root coordinates cross-repo SDK/API seams; use bounded compiler-driven dependency deletion. Preserve authority and transaction modules unchanged unless integration demands a narrow adapter.
+
+- [x] Inspect active dependencies and report API/SDK requirements to root.
+- [x] Remove unused inherited Center server surface and build assets.
+- [x] Replace copied MCP services with Center adapter and SDK protocol verification (cross-repository SDK candidate pending packed verification).
+- [ ] Verify routes, execution, build and client compatibility; document results.
+
+### Cleanup implementation review, verification in progress
+
+- Committed behavior-preserving wallet canonical JSON extraction as `744dae0`, keeping enrolled commitment bytes unchanged.
+- Deleted inherited Center HTTP/directory/publication/pinning/sponsor and MCP implementation, plus unused protocol read/indexer/omnichain code and intent storage; retained internal RPC transport and local contract proof resolver because Signa execution uses them.
+- Account/credential/approval/nonce/recovery implementation stays local. Applied SQL history remains intact; no live database changes.
+- Focused evidence so far: wallet HTTP/docs 45 pass, actual catalog docs 18 pass and browser 3 pass; local resolver 15 pass; transaction-store 28 pass; RPC transport 73 pass; real local SDK-built P256/Safe/EntryPoint/V6 payment execution 5 pass.
+- Full typecheck/build/release suite awaits the SDK candidate's new portable evidence export and disposable PostgreSQL16 fixture. The current committed registry pin does not yet contain that export; release coordination is required before deployable lockfile verification.
+
+### Implementation review and release verification status
+- Removed inherited Center HTTP, directory, intent/publication/IPFS, sponsor and MCP runtime, copied read/indexer/omnichain services, unused storage/interfaces/dependencies and build/CI packaging. Applied SQL migrations remain intact.
+- Signa retains identity, passkeys, grants, approvals/nonces, reviewed call bytes, direct RPC, simulation, exact execution and recovery. Local contract catalog and runtime provenance remain because session-target authorization consumes them. The SDK owns portable outcome verification; fixed Center public preparation supplies unsigned plans. Static reviewed operation descriptors preserve offline startup/recovery. Center remains trusted for protocol routing, quotes and constructed metadata; explicit request fields and actual calldata are bound/reviewed locally.
+- Independent adapter and backend reviews found no outstanding actionable issues. Focused route/docs/RPC/store/resolver checks pass, real P256/Safe/EntryPoint/V6 execution passes; actual Signa entrypoint2/2 and SDK semantic boundary5/5 pass.
+- Reviewed local SDK candidate6.3.1 SHA1 bab8f2fb99b4b1a64a43cd27d082eb1a1c99e965 is the only dependency differing from the committed lock. Node22.23.4 typecheck, execution53Foundry tests, passkey34stack tests plus256fuzz, and connect41tests passed in the required gate. Gate2026-11-11T17-53-56.076Z-3528ae09 timed out at the service10minute deadline after83files/2497tests under hostload around49; source fingerprint stayed unchanged. Five auth timing failures all pass unchanged when isolated; full79test auth rerun is pending.
+- Remaining: coordinated complete release gate at reduced file concurrency, final artifact build, published SDK dependency and registry lock before deployable clean-lock verification. The local tarball contains a new export absent from registry6.3.1; the current3.5.2 manifest pin is not a deployable final dependency. No deployment, publication, merge or live database change performed.
+- Runtime assessment is separate from compatibility evidence: Node26.13.1 is current Active LTS with November security fixes; existing22.23.4 is superseded by22.23.5. Official new-patch Docker tags were unavailable at18:00UTC. Verify and test the chosen patched container before any deployment.
+
+- Complete unchanged login/handoff PostgreSQL suites now pass79/79 in123.05s at one worker, /tmp/signa-cleanup-auth-full.log. No per-test clock or harness deadline changes were needed. Other heavy consumer/service stages are held for the next complete Signa gate.

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
-import { createProtocolOperations, createServices, loadConfig } from "@juicebox/mcp/host";
+import { protocolOperations as operations } from "./fixtures/protocol-operations.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { Hono } from "hono";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -8,18 +8,13 @@ import type { JbcenterEnv } from "../src/types.js";
 import { operationDescriptors } from "../src/rest/app.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
 import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, apiTermsPath, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
-import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { mountRestSite, type RestSite } from "../src/rest/site.js";
 
 const origin = "https://api.signa.center";
-const indexer = createIndexerReadService({});
-const operations = createProtocolOperations(createServices(loadConfig({ NODE_ENV: "test", PUBLIC_ORIGIN: origin,
-  PLAN_SECRET: "signa-surface-docs-only-32-byte-secret" })));
-let full: OpenApiDocument, wallet: OpenApiDocument;
+let wallet: OpenApiDocument;
 beforeAll(async () => {
-  const input = { contracts: await getContractCatalog(), indexer, operations, publicOrigin: origin };
-  full = buildRestOpenApi(input);
-  wallet = buildRestOpenApi({ ...input, surface: "wallet" });
+  const input = { contracts: await getContractCatalog(), operations, publicOrigin: origin };
+  wallet = buildRestOpenApi(input);
 });
 
 function walk(value: unknown, visit: (value: Record<string, unknown>) => void): void {
@@ -35,12 +30,10 @@ function resolve(reference: string): unknown {
 describe("Signa wallet API documentation", () => {
   it("retains account and execution endpoints while excluding protocol read surfaces", () => {
     const families = new Set(["accounts", "smart-accounts", "wallet", "plans", "sponsorships", "user-operations", "capabilities", "openapi.json"]);
-    for (const [path, methods] of Object.entries(full.paths)) {
+    for (const [path, methods] of Object.entries(wallet.paths)) {
       const family = path.split("/")[3];
-      for (const method of Object.keys(methods)) {
-        const retained = !family || families.has(family) || family === "operations" && method === "post";
-        expect(Boolean(wallet.paths[path]?.[method]), `${method} ${path}`).toBe(retained);
-      }
+      for (const method of Object.keys(methods))
+        expect(!family || families.has(family) || family === "operations" && method === "post", `${method} ${path}`).toBe(true);
     }
     for (const descriptor of operationDescriptors(operations)) {
       const schema = `#/components/schemas/OperationInput_${descriptor.id}`;
@@ -52,7 +45,7 @@ describe("Signa wallet API documentation", () => {
         expect(resolve(schema)).toBeUndefined();
       }
     }
-    expect(wallet["x-auth"]).toEqual(full["x-auth"]);
+    expect(wallet["x-auth"]).toMatchObject({ audience: origin, primaryType: "CenterRequest" });
     expect(wallet.servers).toEqual([{ url: origin }]);
     expect(wallet.info.title).toBe("Signa Wallet API");
     for (const tag of ["Contracts", "Indexer", "Projects"]) expect(wallet.tags.map(item => item.name)).not.toContain(tag);
@@ -68,8 +61,7 @@ describe("Signa wallet API documentation", () => {
         expect(schema.required).not.toContain(field);
       }
     }
-    expect(full.paths["/api/v1/catalog/contracts"]?.get).toBeDefined();
-    expect(full.info.title).toBe("Juicebox Center REST API");
+    expect(wallet.paths["/api/v1/catalog/contracts"]).toBeUndefined();
   });
 
   it("publishes a valid offline OpenAPI document with resolvable schemas", async () => {
@@ -89,26 +81,26 @@ describe("Signa wallet API documentation", () => {
   it("renders local wallet endpoints and examples with safe shared rendering", () => {
     const unsafe = structuredClone(wallet);
     unsafe.paths["/api/v1"]!.get!.summary = '<img src=x onerror="alert(1)">';
-    const html = apiDocsPage(unsafe, "wallet");
+    const html = apiDocsPage(unsafe);
     expect(html).toContain("Wallet API | Signa");
     expect(html).toContain(`curl ${origin}/api/v1/capabilities`);
     expect(html).toContain(`npm install ${origin}/api/client/juicebox-center-client-0.1.0.tgz`);
     expect(html).toContain('href="https://juicebox.center/api"');
-    expect(html).toContain('href="https://juicebox.center/api/docs/client"');
+    expect(html).toContain('href="/api/docs/client"');
     expect(html).toContain('rel="icon" type="image/svg+xml" href="/assets/accounts-icon.svg?v=signa"');
     for (const text of ["/api/v1/accounts/me", "/api/v1/user-operations", "&lt;img"])
       expect(html).toContain(text);
     // Each endpoint's tables are a small Signa-branded page the reference loads when it is opened.
-    const pages = [...apiReferencePages(unsafe, "wallet").values()].join("");
+    const pages = [...apiReferencePages(unsafe).values()].join("");
     for (const text of ["Request body", "Response 201", "| Signa</title>", 'href="/assets/accounts-icon.svg?v=signa"']) expect(pages).toContain(text);
     expect(pages).not.toContain("| Juicebox Center</title>");
     for (const text of ["<img", "Choose a data source", 'href="/api/v1/catalog/', 'class="route">/api/v1/projects/', 'href="/"', "·"])
       expect(html).not.toContain(text);
-    expect(apiDocsPage(full)).toContain("Choose a data source");
+
   });
 
   it("keeps field names out of the wallet /api page and in its on-demand term index", () => {
-    const html = apiDocsPage(wallet, "wallet");
+    const html = apiDocsPage(wallet);
     expect(html).toMatch(/data-terms="\/api\/terms\.[0-9a-f]{12}\.json"/);
     expect(html).toContain(`data-terms="${apiTermsPath(wallet)}"`);
     // A deploy that changes any field name changes the URL, so a cached index from the last deploy is never reused.
@@ -116,7 +108,7 @@ describe("Signa wallet API documentation", () => {
     const response = changed.paths["/api/v1"]!.get!.responses["200"] as { content: { "application/json": { schema: { properties: Record<string, unknown> } } } };
     response.content["application/json"].schema.properties.addedField = { type: "string" };
     expect(apiTermsPath(changed)).not.toBe(apiTermsPath(wallet));
-    expect(apiDocsPage(changed, "wallet")).toContain(`data-terms="${apiTermsPath(changed)}"`);
+    expect(apiDocsPage(changed)).toContain(`data-terms="${apiTermsPath(changed)}"`);
     const terms = apiSearchTerms(wallet);
     expect(Object.keys(terms).sort()).toEqual(Object.values(wallet.paths).flatMap(methods => Object.values(methods).map(operation => operation.operationId)).sort());
     // Ceilings sit at the measured gzip size rounded up to the next 0.5 KiB.
@@ -124,16 +116,16 @@ describe("Signa wallet API documentation", () => {
     expect(gzipSync(JSON.stringify(terms)).length).toBeLessThanOrEqual(6_144);
   });
 
-  it("serves the wallet reference locally and redirects inherited guides to Center", async () => {
-    const mount = (surface?: "wallet") => {
+  it("serves wallet guides locally and redirects protocol guides to Center", async () => {
+    const mount = () => {
       const app = new Hono<JbcenterEnv>();
-      mountRestSite(app, { app: new Hono() as unknown as RestSite["app"], ...(surface ? { surface } : {}), audience: origin,
-        accountsScript: "", docsHtml: apiDocsPage(surface ? wallet : full, surface), docsCss: apiDocsCss,
-        apiReference: apiReferencePages(surface ? wallet : full, surface), apiTerms: JSON.stringify(apiSearchTerms(surface ? wallet : full)),
+      mountRestSite(app, { app: new Hono() as unknown as RestSite["app"], audience: origin,
+        accountsScript: "", docsHtml: apiDocsPage(wallet), docsCss: apiDocsCss,
+        apiReference: apiReferencePages(wallet), apiTerms: JSON.stringify(apiSearchTerms(wallet)),
         documents: new Map([["quickstart", "# Center quickstart"], ["client", "# Client workflows"], ["contracts", "# Contracts"]]) });
       return app;
     };
-    const app = mount("wallet");
+    const app = mount();
     expect(await (await app.request("/api")).text()).toContain("Wallet API | Signa");
     // The page's hashed name, another deploy's hash and the plain name all get the current index.
     const current = JSON.stringify(apiSearchTerms(wallet));
@@ -152,19 +144,19 @@ describe("Signa wallet API documentation", () => {
     }
     const icon = await app.request("/assets/accounts-icon.svg");
     expect(icon.status).toBe(200); expect(icon.headers.get("content-type")).toContain("image/svg+xml");
-    for (const name of ["quickstart", "client", "contracts", "CLIENT.md"]) {
+    for (const name of ["contracts", "CONTRACTS.md"]) {
       const response = await app.request(`/api/docs/${name}`);
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe(`https://juicebox.center/api/docs/${name.toLowerCase()}`);
       expect(await response.text()).not.toContain("<article>");
     }
     expect((await app.request("/api/docs/missing")).status).toBe(404);
-    const center = mount();
-    expect(await (await center.request("/api/docs/client")).text()).toContain("<article>");
-    expect(await (await center.request("/api/docs/client.md")).text()).toBe("# Client workflows");
+    const signa = mount();
+    expect(await (await signa.request("/api/docs/client")).text()).toContain("<article>");
+    expect(await (await signa.request("/api/docs/client.md")).text()).toBe("# Client workflows");
     // One guide URL serves HTML or Markdown by Accept, so a cache must key on it.
     for (const [path, accept] of [["/api/docs/client", "text/html"], ["/api/docs/client", "text/markdown"], ["/api/docs/client.md", "*/*"]]) {
-      const response = await center.request(path!, { headers: { Accept: accept! } });
+      const response = await signa.request(path!, { headers: { Accept: accept! } });
       expect(response.headers.get("cache-control"), `${path} ${accept}`).toBe("public, max-age=300");
       expect(response.headers.get("vary"), `${path} ${accept}`).toBe("Accept");
     }

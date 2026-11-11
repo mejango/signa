@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Address, Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type { ProtocolOperations } from "@juicebox/mcp/host";
-import { createApp } from "../src/app.js";
+import type { ProtocolOperations } from "../src/signaProtocol.js";
+import { Hono } from "hono";
+import { createSignaApp } from "../src/signaApp.js";
+import { mountRestSite } from "../src/rest/site.js";
+import type { JbcenterEnv } from "../src/types.js";
 import type { Store } from "../src/store.js";
 import { createRestApp } from "../src/rest/app.js";
 import {
@@ -23,8 +26,6 @@ import {
 import { restRequest } from "../src/rest/context.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
 import type { RestActor, RestPlanDraft, RestRpc } from "../src/rest/core.js";
-import { createIndexerReadService } from "../src/rest/indexer/index.js";
-import { createProtocolReadService } from "../src/rest/protocol/index.js";
 import type { RelayrSponsorshipService } from "../src/rest/sponsorship/index.js";
 import { MemoryTransactionStore } from "../src/rest/transactions/memory.js";
 import { TransactionService } from "../src/rest/transactions/service.js";
@@ -33,7 +34,7 @@ import { TransactionService } from "../src/rest/transactions/service.js";
 const owner = privateKeyToAccount(`0x${"19".repeat(32)}`);
 const bot = privateKeyToAccount(`0x${"29".repeat(32)}`);
 const outsider = privateKeyToAccount(`0x${"39".repeat(32)}`);
-const audience = "https://juicebox.center";
+const audience = "https://api.signa.center";
 const now = 1_900_000_000;
 const accountId = accountIdFor(owner.address, 1);
 const ownerActor: RestActor = { accountId, principalId: `owner:${accountId}` };
@@ -139,12 +140,6 @@ async function fixture() {
   } as unknown as RelayrSponsorshipService;
   const operations: ProtocolOperations = {
     list: () => [],
-    get: () => {
-      throw new Error("Unexpected operation catalog lookup");
-    },
-    execute: async () => {
-      throw new Error("Unexpected operation execution");
-    },
     prepare: async () => {
       throw new Error("Unexpected operation preparation");
     },
@@ -158,61 +153,30 @@ async function fixture() {
       return { allowed: count <= limit, remaining: Math.max(0, limit - count) };
     },
     cleanupRateLimits: async () => 0,
-    createIntent: async () => {
-      throw new Error("Unexpected intent write");
-    },
-    getIntent: async () => null,
-    search: async () => ({ items: [], totalCount: 0, nextCursor: null }),
-    recordDeployment: async () => {
-      throw new Error("Unexpected deployment write");
-    },
-    queueDeploys: async () => {
-      throw new Error("Unexpected deploy queueing");
-    },
-    listDeploys: async () => {
-      throw new Error("Unexpected deploy listing");
-    },
-    claimQueuedDeploys: async () => {
-      throw new Error("Unexpected deploy claim");
-    },
-    updateDeploy: async () => {
-      throw new Error("Unexpected deploy update");
-    },
-    releaseClaim: async () => {
-      throw new Error("Unexpected deploy claim release");
-    },
-    sponsoredWeiSince: async () => {
-      throw new Error("Unexpected sponsored wei query");
-    },
+
   };
   const contracts = await getContractCatalog();
   const rest = createRestApp({
     auth,
     quota: store,
     contracts,
-    protocol: createProtocolReadService({ rpc, catalog: contracts }),
-    indexer: createIndexerReadService(),
     operations,
     transactions,
     sponsorship,
   });
-  const legacyRpc = vi.fn(
-    async (_chain: number, request: { id: string | number | null }) => ({
-      jsonrpc: "2.0" as const,
-      id: request.id,
-      result: "0x1",
-    }),
-  );
-  const app = createApp(store, {
-    rest: {
-      app: rest,
-      audience,
-      accountsScript: "",
-      docsHtml: "",
-      docsCss: "",
-      documents: new Map(),
-    },
-    rpc: { request: legacyRpc, supports: (chainId) => chainId === 1 },
+  const api = new Hono<JbcenterEnv>();
+  mountRestSite(api, {
+    app: rest,
+    audience,
+    accountsScript: "",
+    docsHtml: "",
+    docsCss: "",
+    documents: new Map(),
+  });
+  const app = createSignaApp({
+    apiAudience: audience,
+    walletOrigin: "https://signa.center",
+    currentRuntime: () => ({ api, wallet: new Hono(), ready: store.health }),
   });
   const ownerConfig: ClientOptions = {
     audience,
@@ -291,12 +255,11 @@ async function fixture() {
     transactionStore,
     draft,
     rpcRequest,
-    legacyRpc,
     quotas,
   };
 }
 
-describe("Center sponsorship REST integration", () => {
+describe("Signa sponsorship REST integration", () => {
   it("serves discovery at the documented mount without a shadowed redirect", async () => {
     const f = await fixture();
     const response = await f.app.request(`${audience}/api/v1`);
@@ -681,46 +644,18 @@ describe("Center sponsorship REST integration", () => {
     },
   );
 
-  it("preserves legacy Origin and read-only RPC boundaries alongside signed REST sponsorship routes", async () => {
+  it("does not serve Center intent, pinning or public RPC routes", async () => {
     const f = await fixture();
     expect(
       (await f.send({ requestTarget: "/api/v1/sponsorships/one" })).status,
     ).toBe(200);
-    expect((await f.app.request(`${audience}/v1/intents/one`)).status).toBe(
-      403,
-    );
-    expect(
-      (
-        await f.app.request(`${audience}/v1/pins/json`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-        })
-      ).status,
-    ).toBe(403);
-    const read = await f.app.request(`${audience}/v1/rpc/1`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_chainId",
-        params: [],
-      }),
-    });
-    expect(read.status).toBe(200);
-    const write = await f.app.request(`${audience}/v1/rpc/1`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "eth_sendRawTransaction",
-        params: ["0x11"],
-      }),
-    });
-    expect(write.status).toBe(400);
-    expect(f.legacyRpc).toHaveBeenCalledOnce();
+    for (const [path, method] of [
+      ["/v1/intents/one", "GET"],
+      ["/v1/pins/json", "POST"],
+      ["/v1/rpc/1", "POST"],
+    ] as const) {
+      expect((await f.app.request(`${audience}${path}`, { method })).status).toBe(404);
+    }
     expect(f.rpcRequest).not.toHaveBeenCalled();
   });
 });

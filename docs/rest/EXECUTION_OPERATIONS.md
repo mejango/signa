@@ -22,7 +22,7 @@ The same required check recompiles the bundled V6 controller/terminal source clo
 
 The guard's gas-estimation storage proof is also compared with the complete fresh compiler storage layout, bound to the same source, runtime and compiler version. An invented or stale field offset cannot pass the release check.
 
-`npm run check` starts with that execution check and then runs the application/MCP checks, including the Anvil suites. CI installs Forge and Anvil before running it and supplies a disposable PostgreSQL service. Missing binaries fail before Vitest can conditionally skip an Anvil suite. `npm test` alone is not the release gate. Configure the repository's branch protection to require the `CI / test` job; the workflow cannot configure branch protection itself.
+`npm run check` starts with that execution check and then runs the Signa application and wallet-client checks, including the Anvil suites. CI installs Forge and Anvil before running it and supplies a disposable PostgreSQL service. Missing binaries fail before Vitest can conditionally skip an Anvil suite. `npm test` alone is not the release gate. Configure the repository's branch protection to require the `CI / test` job; the workflow cannot configure branch protection itself.
 
 `npm run verify:execution-artifacts` is the smaller read-only legacy provenance check. The current package has independent `current-pimlico/verify-paymaster.mjs` and `current-pimlico/verify-guard.mjs` checks, included in `check:execution`. Verification does not regenerate reviewed artifacts or update a manifest. A deliberate guard source change requires a new reviewed build, source/runtime pins, tests and deployment; do not use `--write-manifest` to make a verification failure disappear.
 
@@ -147,7 +147,7 @@ For a shared four-chain policy capped at **$100 USD and 1,000 lifetime operation
 
 Enable the key's Bundler and Paymaster methods for the hosted RPC calls. Account APIs permission is needed only when managing policies through Pimlico's account API, including creating, retrieving, listing or updating policies; it is not required just to use an existing policy through RPC. See [API key permissions](https://docs.pimlico.io/guides/how-to/security/protect-api-keys) and [policy management endpoints](https://docs.pimlico.io/references/platform/api/sponsorship-policies).
 
-Sponsorship webhooks are optional provider configuration. `webhook_enabled` and `webhook_endpoint` are separate policy fields. A webhook signing secret alone neither enables a webhook nor supplies a receiver URL. Center's hosted RPC configuration does not install a webhook handler or consume that secret. Leave the webhook disabled unless a separately deployed receiver is configured and verifies incoming signatures. See [Pimlico webhook configuration and verification](https://docs.pimlico.io/guides/how-to/sponsorship-policies/webhook).
+Sponsorship webhooks are optional provider configuration. `webhook_enabled` and `webhook_endpoint` are separate policy fields. A webhook signing secret alone neither enables a webhook nor supplies a receiver URL. Signa's hosted RPC configuration does not install a webhook handler or consume that secret. Leave the webhook disabled unless a separately deployed receiver is configured and verifies incoming signatures. See [Pimlico webhook configuration and verification](https://docs.pimlico.io/guides/how-to/sponsorship-policies/webhook).
 
 The provider response must match the selected source-bound profile:
 

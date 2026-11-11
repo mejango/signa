@@ -3,7 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
 import type { Store } from '../src/store.js';
-import { createCenterMcp } from '../src/mcp.js';
+import { createSignaProtocol } from "../src/signaProtocol.js";
 import { createRestRuntime, type RestWalletConfiguration } from '../src/rest/runtime.js';
 import { PostgresWalletPaymentReviewStore } from '../src/rest/wallet/paymentReviewsPostgres.js';
 import * as operationService from '../src/rest/userOperations/service.js';
@@ -46,10 +46,8 @@ async function fixture(wallet?: RestWalletConfiguration, startMaintenance = fals
   const query = vi.spyOn(pool, 'query').mockImplementation(() => { throw new Error('Unexpected database request during startup'); });
   const request = vi.fn(async (): Promise<never> => { throw new Error('Unexpected upstream request during startup'); });
   const store = { consumeRequest: async () => ({ allowed: true, remaining: 100 }), cleanupRateLimits: async () => 0 } as unknown as Store;
-  const mcp = createCenterMcp(store, { rpc: { request, supports: () => true }, env: {
-    MCP_PLAN_SECRET: 'PUBLIC_WALLET_RUNTIME_FIXTURE_SECRET_ONLY', MCP_PUBLIC_ORIGIN: audience,
-  } });
-  const runtime = await createRestRuntime({ pool, store, services: mcp.services, config: mcp.config,
+  const operations = createSignaProtocol();
+  const runtime = await createRestRuntime({ pool, store, operations, audience,
     upstreams, rpc: { request }, executionConfiguration: await readRestExecutionConfiguration({}),
     startMaintenance, ...(wallet ? { wallet } : {}), ...(smartAccountManifests ? { smartAccountManifests } : {}), ...(walletSignup ? { walletSignup } : {}), ...(walletRecovery ? { walletRecovery } : {}), ...(walletNetworksPayer ? { walletNetworksPayer } : {}) });
   cleanup.unshift(() => runtime.stop());

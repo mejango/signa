@@ -1,12 +1,7 @@
 import type { Pool } from "pg";
 import type { createPool } from "../db/postgres.js";
 import type { SmartAccountState } from "./smartAccounts/types.js";
-import {
-  createProtocolOperations,
-  type Config,
-  type ProjectRef,
-  type Services,
-} from "@juicebox/mcp/host";
+import type { ProtocolOperations } from "../signaProtocol.js";
 import type { Store } from "../store.js";
 import type { RpcUpstreams } from "../rpc.js";
 import { Metrics } from "../observability.js";
@@ -23,8 +18,6 @@ import {
   createSessionPlanAuthorizer,
   createUserOperationRequestAuthorizer,
 } from "./dispatchAuthority.js";
-import { createIndexerReadService } from "./indexer/index.js";
-import { createOmnichainService } from "./omnichain/index.js";
 import { createProtocolReadService } from "./protocol/index.js";
 import { createProtocolSemanticVerifier } from "./protocol/semantics.js";
 import { createRestRpc } from "./rpc.js";
@@ -125,11 +118,9 @@ export interface RestWalletRuntime {
 }
 
 export async function createRestRuntime(options: {
-  surface?: "wallet";
   pool: Pool;
   store: Store;
-  services: Services;
-  config: Config;
+  operations: ProtocolOperations;
   upstreams: RpcUpstreams;
   audience?: string;
   wallet?: RestWalletConfiguration;
@@ -223,7 +214,7 @@ export async function createRestRuntime(options: {
     const policy = new PostgresWalletPolicyStore(options.pool);
     const appGrants = new PostgresWalletAppGrantStore(options.pool);
     const handoff = new PostgresWalletHandoffStore(options.pool, {
-      grantStore: appGrants, issuer: origin, audience: options.audience ?? options.config.publicOrigin,
+      grantStore: appGrants, issuer: origin, audience: options.audience ?? "https://api.signa.center",
       ...(options.wallet?.frameableAppOrigins ? { frameableAppOrigins: options.wallet.frameableAppOrigins } : {}),
     });
     const authority = new PostgresWalletAuthorityStore(options.pool);
@@ -247,24 +238,13 @@ export async function createRestRuntime(options: {
   );
   const auth = createRestAuth({
     store: accountStore,
-    audience: options.audience ?? options.config.publicOrigin,
+    audience: options.audience ?? "https://api.signa.center",
     verifyContractOwner,
   });
-  const operations = createProtocolOperations(options.services);
+  const operations = options.operations;
   const protocol = createProtocolReadService({ rpc, catalog: contracts });
-  const indexer = createIndexerReadService({
-    ...(options.config.bendystrawMainnetUrl
-      ? { mainnetUrl: options.config.bendystrawMainnetUrl }
-      : {}),
-    ...(options.config.bendystrawTestnetUrl
-      ? { testnetUrl: options.config.bendystrawTestnetUrl }
-      : {}),
-  });
-  const omnichain = createOmnichainService({ operations, indexer });
   const transactionStore = new PostgresTransactionStore(options.pool);
-  const semanticVerifier = createProtocolSemanticVerifier({
-    plans: options.services.plans,
-  });
+  const semanticVerifier = createProtocolSemanticVerifier();
   const authority = { audience: auth.audience, verifyContractOwner };
   const sponsorship = new RelayrSponsorshipService({
     rpc,
@@ -546,19 +526,14 @@ export async function createRestRuntime(options: {
   walletPayments?.attachSubmission((submission) => userOperations!.submitApproved(submission));
   walletPayments?.attachSpeculation((actor, operationId) => userOperations!.speculate(actor, operationId));
   const openapi = buildRestOpenApi({
-    ...(options.surface ? { surface: options.surface } : {}),
     contracts,
-    indexer,
     operations,
     publicOrigin: auth.audience,
   });
   const app = createRestApp({
-    ...(options.surface ? { surface: options.surface } : {}),
     auth,
     quota: options.store,
     contracts,
-    protocol,
-    indexer,
     operations,
     transactions,
     sponsorship,
@@ -567,7 +542,6 @@ export async function createRestRuntime(options: {
     sessions,
     userOperations,
     ...(walletPayments ? { walletPayments } : {}),
-    omnichain,
     openapi,
   });
   const assets = await readRestAssets();
@@ -600,24 +574,6 @@ export async function createRestRuntime(options: {
   if (options.startMaintenance !== false) metrics.startRestRecovery();
   let stopped = false;
   let maintenance: Promise<void> | undefined;
-  // Every pay route of the last day's plans is read ahead of its next quote, at boot and then every
-  // ten minutes once past half its life, so a project paid daily never waits on a cold read.
-  let routesWarmedAt = 0;
-  const warmRoutes = async () => {
-    routesWarmedAt = Date.now();
-    let warmed = 0, failed = 0;
-    try {
-      for (const target of await transactions.recentPayTargets(Date.now() - 86_400_000, 64)) {
-        if (stopped) break;
-        try { if (await options.services.payments.warm(target.project as ProjectRef, target.token)) warmed++; } catch { failed++; }
-      }
-    } catch {
-      // A warm-up that cannot list its targets is not a fault of the request path; the next tick tries again.
-      console.info(JSON.stringify({ service: "payments", action: "routes_warm", outcome: "unavailable" }));
-      return;
-    }
-    if (warmed || failed) console.info(JSON.stringify({ service: "payments", action: "routes_warm", warmed, failed }));
-  };
   // A fresh process serves its first binding reads from nothing: the accounts the refresh queue
   // still tracks (the recently active ones) are inspected once at boot, two at a time, so a
   // customer arriving after a deploy is served from a kept state like everyone else.
@@ -645,7 +601,6 @@ export async function createRestRuntime(options: {
     if (stopped || maintenance) return;
     maintenance = (async () => {
       await keepUpstreamsWarm();
-      if (Date.now() - routesWarmedAt >= 600_000) await warmRoutes();
       await metrics.observeRestRecovery("nonce_cleanup", async () => {
         await accountStore.cleanupExpiredNonces(Math.floor(Date.now() / 1000), 1000);
         return { failures: 0 };
@@ -696,18 +651,16 @@ export async function createRestRuntime(options: {
   const timer =
     options.startMaintenance === false ? undefined : setInterval(run, 30_000);
   timer?.unref();
-  if (options.startMaintenance !== false) void warmRoutes();
   if (options.startMaintenance !== false) void warmAccounts();
   if (options.startMaintenance !== false) wallet?.refresh.start();
   const docsAssets = docsAssetNames(assets.docsScript ?? "");
   return {
     site: {
-      ...(options.surface ? { surface: options.surface } : {}),
       ...(walletSite ? { wallet: walletSite, walletOrigins: [wallet!.origin, ...(options.wallet?.legacyOrigins ?? [])] } : {}),
       app,
       audience: auth.audience,
-      docsHtml: apiDocsPage(openapi, options.surface, docsAssets),
-      apiReference: apiReferencePages(openapi, options.surface, docsAssets),
+      docsHtml: apiDocsPage(openapi, docsAssets),
+      apiReference: apiReferencePages(openapi, docsAssets),
       apiTerms: JSON.stringify(apiSearchTerms(openapi)),
       docsCss: apiDocsCss,
       ...assets,

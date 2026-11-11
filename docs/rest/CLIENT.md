@@ -1,6 +1,6 @@
 # Client workflows
 
-Install the [Center client](./QUICKSTART.md#install-and-connect) once. It handles
+Install the [Signa client](./QUICKSTART.md#install-and-connect) once. It handles
 request signatures, nonces and request expiry. You explicitly choose API access,
 review wallet actions and control when they are submitted.
 
@@ -13,7 +13,7 @@ const { account } = await center.account();
 ```
 
 The file is read locally with ownership and permission checks. Its key is never
-sent to Center. To use a managed signer, construct `CenterClient` with your
+sent to Signa. To use a managed signer, construct `CenterClient` with your
 `audience`, `accountId`, `grantId` and `signer` instead.
 
 ## Connect a browser app
@@ -24,7 +24,7 @@ an existing wallet connection. The returned client can read and plan without
 more owner prompts.
 
 The example below uses a browser wallet, the installed package and `viem`.
-For Center's hosted setup, use **Sign in** and **02 / API access** on
+For Signa's hosted setup, use **Sign in** and **02 / API access** on
 [Accounts](/accounts), then follow the [quickstart](./QUICKSTART.md).
 
 ```ts
@@ -46,7 +46,7 @@ const owner = {
   }),
 };
 const ownerApi = CenterClient.forOwner({
-  audience: 'https://juicebox.center', chainId, signer: owner,
+  audience: 'https://api.signa.center', chainId, signer: owner,
 });
 await ownerApi.enroll();
 
@@ -84,7 +84,7 @@ const plan = await center.prepare({
 await center.simulate(plan.id, 0);
 ```
 
-`reviewedContractCalls` follows the [contract-call schema](./CONTRACTS.md).
+`reviewedContractCalls` follows the [contract-call schema](https://juicebox.center/api/docs/contracts).
 Review `plan.draft.calls`, native amounts, dependencies, commitment and expiry
 with the user. Have the transaction wallet sign those exact transaction bytes
 including the reviewed gas and fees. The client never invents fee approval.
@@ -133,7 +133,7 @@ const current = await center.prepaid(published.id, { refresh: true });
 Once the verified quote provides a funding option, use
 `center.prepareFunding(id, chainId, payer, idempotencyKey)`. Review and sign the
 returned ordinary funding plan separately. Check existing payment and execution
-before paying again. Provider details are handled by Center.
+before paying again. Provider details are handled by Signa.
 
 ## Run payments without another owner prompt
 

@@ -1,23 +1,20 @@
-import { createProtocolOperations, createServices, loadConfig } from "@juicebox/mcp/host";
+import { protocolOperations as operations } from "./fixtures/protocol-operations.js";
 import { build } from "esbuild";
 import { Hono } from "hono";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
 import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, apiTermsPath, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
-import { createIndexerReadService } from "../src/rest/indexer/index.js";
 import { mountRestSite, type RestSite } from "../src/rest/site.js";
 import type { JbcenterEnv } from "../src/types.js";
 
-const origin = "https://juicebox.center";
+const origin = "https://api.signa.center";
 let spec: OpenApiDocument, app: Hono<JbcenterEnv>, browser: Browser, page: Page;
 const fetched: string[] = [], errors: string[] = [];
 let failReference = false, failTerms = false;
 
 beforeAll(async () => {
-  const operations = createProtocolOperations(createServices(loadConfig({ NODE_ENV: "test", PUBLIC_ORIGIN: origin,
-    PLAN_SECRET: "openapi-offline-tests-only-32-byte-secret" })));
-  spec = buildRestOpenApi({ contracts: await getContractCatalog(), indexer: createIndexerReadService({}), operations, publicOrigin: origin });
+  spec = buildRestOpenApi({ contracts: await getContractCatalog(), operations, publicOrigin: origin });
   const bundle = await build({ entryPoints: [new URL("../src/rest/docs/main.ts", import.meta.url).pathname],
     bundle: true, format: "esm", write: false, platform: "browser" });
   app = new Hono<JbcenterEnv>();

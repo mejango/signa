@@ -4,7 +4,7 @@ Normal execution uses fresh wallet approval. Optional recurring bot permissions 
 
 ## Monitoring
 
-Signa has no production monitor today. CI (`.github/workflows/ci.yml`) runs the release checks and builds the image; it does not probe the live service. `scripts/check-production.mjs` is inherited from Center and is not scheduled for Signa. The README lists adding a Signa production monitor after activation, with reviewed live endpoints and readiness criteria, as open work.
+Signa has no production monitor today. CI (`.github/workflows/ci.yml`) runs the release checks and builds the image; it does not probe the live service. `scripts/check-production.mjs` is inherited from Signa and is not scheduled for Signa. The README lists adding a Signa production monitor after activation, with reviewed live endpoints and readiness criteria, as open work.
 
 What exists to inspect by hand:
 
@@ -20,7 +20,7 @@ The server drains for `SHUTDOWN_GRACE_MS` (25 seconds by default) on SIGTERM. `r
 
 ## Database backups
 
-No backup schedule, retention or recovery point has been recorded or verified for Signa's PostgreSQL database. Do not rely on Center's earlier snapshots or schedules; they cover Center's database.
+No backup schedule, retention or recovery point has been recorded or verified for Signa's PostgreSQL database. Do not rely on Signa's earlier snapshots or schedules; they cover Signa's database.
 
 During an actual recovery, pause application writes and execution workers, record the recovery point, preserve the current volume, and reconcile all potentially submitted transactions on Base, and on any additional network the account was deployed to, before resuming execution. An older database can contain stale request nonces, bot revocations and transaction states; never assume a restored row proves a transaction was not sent.
 

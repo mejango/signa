@@ -1,7 +1,0 @@
-node_modules
-dist
-coverage
-data
-tests/adapters/fixtures
-docs/TOOLS.md
-package-lock.json

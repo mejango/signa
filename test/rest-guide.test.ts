@@ -18,7 +18,7 @@ describe("readable developer guides", () => {
   });
   it("keeps Markdown available while serving readable pages and the actual client archive", async () => {
     const app = new Hono<JbcenterEnv>();
-    mountRestSite(app, { app: new Hono(), audience: "https://juicebox.center", accountsScript: "", docsScript: "", docsHtml: "", docsCss: "", clientPackage: new Uint8Array([1, 2, 3]), documents: new Map([["quickstart", "# Hello"]]) } as RestSite);
+    mountRestSite(app, { app: new Hono(), audience: "https://api.signa.center", accountsScript: "", docsScript: "", docsHtml: "", docsCss: "", clientPackage: new Uint8Array([1, 2, 3]), documents: new Map([["quickstart", "# Hello"]]) } as RestSite);
     const html = await app.request('/api/docs/quickstart');
     expect(html.headers.get('content-type')).toContain('text/html');
     expect(await html.text()).toContain('<h1 id="hello">Hello</h1>');
@@ -28,53 +28,27 @@ describe("readable developer guides", () => {
     expect(archive.headers.get('content-type')).toBe('application/gzip');
     expect(new Uint8Array(await archive.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
   });
-  it("lists the project intents guide and keeps every listed document on disk", async () => {
-    expect(REST_DOCUMENTS).toContain("PROJECT_INTENTS");
+  it("keeps only Signa-owned guides on disk", async () => {
+    expect(REST_DOCUMENTS).not.toContain("PROJECT_INTENTS");
+    expect(REST_DOCUMENTS).toContain("AUTHENTICATION");
     for (const name of REST_DOCUMENTS) {
       const text = await readFile(new URL(`../docs/rest/${name}.md`, import.meta.url), "utf8");
       expect(text.startsWith("# ")).toBe(true);
     }
   });
 
-  it("serves the project intents guide as a page and as Markdown", async () => {
-    const markdown = await readFile(new URL("../docs/rest/PROJECT_INTENTS.md", import.meta.url), "utf8");
+  it("redirects protocol guides to Center without loading inherited copies", async () => {
     const app = new Hono<JbcenterEnv>();
     mountRestSite(app, {
-      app: new Hono(), audience: "https://juicebox.center", accountsScript: "", docsScript: "",
-      docsHtml: "", docsCss: "", clientPackage: new Uint8Array([1]),
-      documents: new Map([["project-intents", markdown]]),
+      app: new Hono(), audience: "https://api.signa.center", accountsScript: "", docsScript: "",
+      docsHtml: "", docsCss: "", documents: new Map(),
     } as RestSite);
-    const page = await app.request("/api/docs/project-intents");
-    expect(page.status).toBe(200);
-    const html = await page.text();
-    expect(html).toContain("Project intents");
-    expect(html).toContain("/v1/intents/:id/deploy");
-    expect(html).not.toContain("<script>alert");
-    const raw = await app.request("/api/docs/project-intents.md");
-    expect(raw.headers.get("content-type")).toContain("text/markdown");
-    expect(await raw.text()).toBe(markdown);
-  });
-
-  it("documents the setup-call rule with the canonical Safe addresses", async () => {
-    const markdown = await readFile(new URL("../docs/rest/PROJECT_INTENTS.md", import.meta.url), "utf8");
-    expect(markdown).toContain("## Setup calls");
-    expect(markdown).toContain("0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67");
-    expect(markdown).toContain("0x41675C099F32341bf84BFc5382aF534df5C7461a");
-    expect(markdown).toContain("0xfd0732Dc9E303f09fCEf3a7388Ad10A83459Ec99");
-    expect(markdown).toContain("jb.safes");
-    expect(markdown).toContain("1 to 4 calls");
-    expect(markdown).not.toMatch(/exactly one .*call per/i);
-  });
-
-  it("documents the relay route and the per-chain deploy", async () => {
-    const markdown = await readFile(new URL("../docs/rest/PROJECT_INTENTS.md", import.meta.url), "utf8");
-    expect(markdown).toContain("## Relay a chain the payer sends");
-    expect(markdown).toContain("POST /v1/intents/:id/relay");
-    expect(markdown).toContain("sponsored_chain");
-    expect(markdown).toContain("relay_limit");
-    expect(markdown).toContain("mixed_sender");
-    expect(markdown).toContain('"chainIds": [8453]');
-    expect(markdown).toContain("the same forwarder nonce");
-    expect(markdown).not.toContain("is refused for an\nintent that already has a recorded deployment");
+    for (const name of ["project-intents", "contracts", "indexer", "omnichain"]) {
+      for (const extension of ["", ".md"]) {
+        const response = await app.request(`/api/docs/${name}${extension}`);
+        expect(response.status).toBe(302);
+        expect(response.headers.get("location")).toBe(`https://juicebox.center/api/docs/${name}${extension}`);
+      }
+    }
   });
 });

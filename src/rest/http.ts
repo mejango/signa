@@ -1,10 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Context } from "hono";
-import { DomainError } from "@juicebox/mcp/host";
 import { RestAuthError, type SignedRequestInput } from "./auth/index.js";
 import { ContractCatalogError } from "./contracts/catalog.js";
 import { RestError } from "./core.js";
-import { IndexerError } from "./indexer/index.js";
 
 export const REST_PREFIX = "/api/v1";
 export const REST_LIMITS = Object.freeze({
@@ -228,34 +226,17 @@ export function problem(error: Error, context: Context): Response {
   let payFailure: unknown;
   if (
     error instanceof RestError ||
-    error instanceof RestAuthError ||
-    error instanceof IndexerError
+    error instanceof RestAuthError
   ) {
     ({ status, code } = error);
     detail = error.message;
     // A payment's failure reason is built only from decoded revert data (userOperations/payFailure.ts).
     if (error instanceof RestError) payFailure = (error.details as { payFailure?: unknown } | undefined)?.payFailure;
-    retryable =
-      error instanceof IndexerError
-        ? error.retryable
-        : status === 429 || status >= 502;
+    retryable = status === 429 || status >= 502;
   } else if (error instanceof ContractCatalogError) {
     code = error.code;
     status = /NOT_FOUND/.test(code) ? 404 : /CATALOG_/.test(code) ? 500 : 400;
     detail = status === 500 ? detail : error.message;
-  } else if (error instanceof DomainError) {
-    code = error.code;
-    status = /NOT_FOUND/.test(code)
-      ? 404
-      : code === "RATE_LIMITED"
-        ? 429
-        : /UPSTREAM|RPC|INDEXER/.test(code)
-          ? 502
-          : /UNSUPPORTED|NOT_SUPPORTED|UNVERIFIED|UNAVAILABLE/.test(code)
-            ? 422
-            : 400;
-    detail = error.message;
-    retryable = error.retryable;
   } else if (error.name === "ZodError") {
     status = 400;
     code = "INVALID_INPUT";
