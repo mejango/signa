@@ -148,3 +148,11 @@ The exclusive run at6e22a26 completed all4,065 collected service tests successfu
 - [ ] Repair the CLI owner wiring and add the real-adapter/built-entrypoint regression.
 - [ ] Correct RPC ownership, exact signing-domain literal and supported-operation documentation.
 - [ ] Pass the complete exclusive release check and hand the actual result to the SDK release owner.
+
+### Candidate release gate review, completed
+- [x] Repaired the retained unsigned execution-check CLI using the local provenance resolver, SDK ABI and validated Center preparation adapter. Its real built entrypoint passes with fetch-only simulation; the existing disposable fresh-build regression passes under unchanged limits. Independent review found no actionable issues.
+- [x] Corrected Center public-RPC ownership, Signa supported-operation selection and the unchanged EIP-712 signing-domain literal. Bounded review of all26tracked mjs files found no other removed-interface callers.
+- [x] Full required gate passes at clean078b75a21192970e0d0ff7c0efc01d30463d7e61: all201service files and4,066tests, connect41, execution53Foundry tests plus5target-evidence checks, passkey34stack tests plus256fuzz runs, typecheck, required V6 sources and final production build. No skipped required evidence. Source fingerprint5f09859b00a289842f41f489487f851c121b2e19676dd56bea7334fac9bfd97d remained unchanged throughout.
+- Observation: .generated/checks/2026-11-11T20-26-46.789Z-1c20042b/summary.json; log /tmp/signa-cleanup-check-cli-final.log. Earlier interrupted/failed observations remain preserved and are not relabeled as passes.
+- The user explicitly authorized SDK implementation PR302 merge and the generated version PR merge/publication when ready. Root released that hold after verifying this terminal result. Actual published SDK dependency/registry lock and clean-install service verification remain pending. Signa merge/deployment is not authorized by that SDK release instruction.
+- Runtime follow-up remains separate: official node:26.13.1-bookworm-slim is now available with OCI index digest sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1. This gate used22.23.4; no patched-runtime compatibility/deployment claim is made.
