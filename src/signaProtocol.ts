@@ -32,7 +32,8 @@ export const CENTER_DRAFT_OPERATIONS: Readonly<Record<string, string>> = Object.
   prepare_auto_issue: "revnet_auto_issue", contract_calls: "protocol-contract-calls", "protocol-contract-calls": "protocol-contract-calls",
 });
 const chains = z.union([z.literal(1), z.literal(10), z.literal(8453), z.literal(42161), z.literal(11155111), z.literal(11155420), z.literal(84532), z.literal(421614)]);
-const uint = z.string().regex(/^(0|[1-9][0-9]*)$/).max(78).refine(value => BigInt(value) < 1n << 256n);
+const uintPattern = /^(0|[1-9][0-9]{0,77})$/;
+const uint = z.string().refine(value => uintPattern.test(value) && BigInt(value) < 1n << 256n);
 const address = z.string().refine(value => isAddress(value)).transform(value => value as Address);
 const hex = z.string().regex(/^0x(?:[a-fA-F0-9]{2})*$/).max(262146).transform(value => value as Hex);
 const hash = z.string().regex(/^0x[a-fA-F0-9]{64}$/).transform(value => value as Hex);

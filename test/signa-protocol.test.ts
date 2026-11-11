@@ -83,6 +83,7 @@ describe("Signa protocol dependency boundary", () => {
     ["block", (draft: RestPlanDraft) => { draft.evidence[0]!.blockHash = `0x${"66".repeat(32)}`; }],
     ["extra evidence", (draft: RestPlanDraft) => { draft.evidence.push({ ...at, chainId: 1 }); }],
     ["forward dependency", (draft: RestPlanDraft) => { draft.calls[0]!.dependsOn = [0]; }],
+    ["invalid integer", (draft: RestPlanDraft) => { draft.calls[0]!.value = "not-an-integer"; }],
   ])("rejects a substituted %s", async (_label, mutate) => {
     const draft = payment(); mutate(draft);
     await expect(createSignaProtocol({ fetch: fetchResponse({ data: draft }) }).prepare("prepare_pay", input(), { at }))
