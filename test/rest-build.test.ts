@@ -19,9 +19,10 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
   try {
     // Share read-only inputs; every compiler, bundler and package output stays in this fixture.
     for (const name of ["src", "docs", "client", "wallet-client", "node_modules"]) await symlink(join(root, name), join(directory, name));
-    for (const name of ["scripts/rest", "test", "dist/src/db/migrations", ".generated/rest", ".generated/checks"])
+    for (const name of ["scripts/rest", "test/fixtures", "dist/src/db/migrations", ".generated/rest", ".generated/checks"])
       await mkdir(join(directory, name), { recursive: true });
     for (const name of ["package.json", "tsconfig.json", "tsconfig.build.json",
+      "scripts/rest/production-check.mjs", "test/fixtures/production-check-fetch.mjs",
       "scripts/rest/clean-build.mjs", "scripts/rest/build-web.mjs", "scripts/rest/build-client.mjs", "scripts/rest/copy-assets.mjs", "scripts/rest/center.mjs"])
       await copyFile(join(root, name), join(directory, name));
     await writeFile(join(directory, "test/build-only.test.ts"), "export const testOnly = true;\n");
@@ -77,6 +78,12 @@ it("rebuilds only current runtime files and all assets needed by a fresh dev sta
     expect(smoke.stdout.trim()).toBe("assets and client ready");
     const cli = await execute(process.execPath, [".generated/rest/client/cli.mjs", "--help"], { cwd: directory, timeout: 15_000 });
     expect(cli.stdout).toContain("Install the Center client package");
+    const productionCheck = await execute(process.execPath, ["--import", "./test/fixtures/production-check-fetch.mjs",
+      "scripts/rest/production-check.mjs", "8453", "0x1111111111111111111111111111111111111111"], { cwd: directory, timeout: 15_000 });
+    expect(JSON.parse(productionCheck.stdout)).toMatchObject({ account: "0x1111111111111111111111111111111111111111",
+      calls: [{ chainId: 8453, value: "0", args: ["0x1111111111111111111111111111111111111111",
+        { operator: "0x1111111111111111111111111111111111111111", projectId: "0", permissionIds: [] }] }] });
+    expect(productionCheck.stderr).toContain("No transaction was signed or sent.");
   } finally { await rm(directory, { recursive: true, force: true }); }
 }, 200_000);
 

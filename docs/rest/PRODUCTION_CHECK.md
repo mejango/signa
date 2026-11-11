@@ -17,7 +17,7 @@ npm run build
 node scripts/rest/production-check.mjs 8453 YOUR_SMART_WALLET_ADDRESS > /tmp/center-check.json
 ```
 
-The command uses Signa's public read RPC and the existing pinned V6 catalog/runtime verifier. It requires a deployed wallet and a canonical read showing that `JBPermissions.permissionsOf(wallet,wallet,0)` is already zero. It then prepares `setPermissionsFor(wallet,{operator:wallet,projectId:0,permissionIds:[]})` with zero native value. The call keeps that empty bitmap empty and emits `OperatorPermissionsSet`. It grants no authority, transfers no tokens and needs no project to be invented. Project scope `0` is the protocol's wildcard scope; the empty permission list grants nothing in that scope.
+The command uses Center's public read RPC and Signa's pinned V6 catalog/runtime verifier. Center prepares the unsigned draft, and Signa's adapter checks its calls against the requested input. It requires a deployed wallet and a canonical read showing that `JBPermissions.permissionsOf(wallet,wallet,0)` is already zero. It then prepares `setPermissionsFor(wallet,{operator:wallet,projectId:0,permissionIds:[]})` with zero native value. The call keeps that empty bitmap empty and emits `OperatorPermissionsSet`. It grants no authority, transfers no tokens and needs no project to be invented. Project scope `0` is the protocol's wildcard scope; the empty permission list grants nothing in that scope.
 
 A nonzero bitmap or unavailable canonical read stops preparation. Run the command shortly before review, and do not change these permissions concurrently. If you already have an intended V6 action to validate, prepare that action instead and review its actual effects and spending.
 

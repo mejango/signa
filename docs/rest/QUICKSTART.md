@@ -81,7 +81,10 @@ or connected browser wallet instead of a file; see [client workflows](./CLIENT.m
 
 For actions, create a connection with **Read + plan** or **Read + plan + relay**.
 Use `center.prepare({ operation, input }, idempotencyKey)`. Choose an operation
-and its input fields from the [Center operations catalog](https://juicebox.center/api/v1/catalog/operations).
+and its input fields from [Signa’s API reference](https://api.signa.center/api#reference)
+or [OpenAPI document](https://api.signa.center/api/v1/openapi.json). Signa supports its
+reviewed operation set; the [Center operations catalog](https://juicebox.center/api/v1/catalog/operations)
+is the broader protocol reference.
 The response contains the exact calls, amounts, dependencies and expiry to review.
 
 Next, [prepare, approve and submit an action](./CLIENT.md#prepare-review-approve-submit).

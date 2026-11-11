@@ -108,7 +108,7 @@ transactions; they give the browser no owner signing authority.
    characters. This bounded public read neither enrolls an account nor consumes
    the nonce.
 2. Review and sign the returned `SetupAccount` EIP-712 document with the current
-   sole owner. Its domain is `Juicebox Signa Account Setup`, version `1`, chain
+   sole owner. Its domain is `Juicebox Center Account Setup`, version `1`, chain
    `8453`, the wallet as `verifyingContract`, and
    `keccak256(UTF8(service audience))` as salt. It binds the API account, owner,
    manifest ID/revision, initializer hash, current state hash, nonce, times and
