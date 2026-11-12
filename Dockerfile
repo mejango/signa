@@ -20,7 +20,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean -
 FROM production-dependencies AS runtime
 # Reviewed account execution artifacts remain packaged; src/index.ts owns the Signa runtime.
 ENV NODE_ENV=production
-# The source commit /healthz reports; unset leaves it null (scripts/rest/verify-served-build.mjs checks the assets).
+# Optional explicit build commit; Railway's native deployment commit is the runtime fallback.
 ARG SIGNA_BUILD_COMMIT
 ENV SIGNA_BUILD_COMMIT=$SIGNA_BUILD_COMMIT
 WORKDIR /app
