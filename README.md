@@ -19,7 +19,7 @@ Center account history is not migrated; Signa is the sole account service.
 
 ## Build and run
 
-Use Node 22 and the committed dependency locks:
+Use Node 26.13.1 from `.nvmrc`, its bundled npm 11.20.0 and the committed dependency lock:
 
 ```sh
 npm ci --ignore-scripts

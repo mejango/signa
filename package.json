@@ -29,7 +29,7 @@
     "build:client": "node scripts/rest/build-client.mjs"
   },
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=26.13.1"
   },
   "dependencies": {
     "@bananapus/nana-sdk-core": "6.4.0",

@@ -9,6 +9,10 @@ import { Client } from "pg";
 import { finished } from "node:stream/promises";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const { engines: { node: nodeEngine } } = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+const minimumNodeVersion = nodeEngine.match(/^>=(\d+)\.(\d+)\.(\d+)$/)?.slice(1).map(Number);
+if (!minimumNodeVersion) throw new Error("Signa's Node engine must declare an explicit minimum version.");
+
 export const requiredVitestSuites = [
   "test/postgres.integration.test.ts",
   "test/rest-smart-accounts-postgres.integration.test.ts",
@@ -158,9 +162,10 @@ export const v6PaymentSourcePreflight = ["--import", "tsx", "--input-type=module
 `];
 
 export function validateRuntime(version, databaseUrl) {
-  const [major, minor] = version.split(".").map(Number);
-  if (!Number.isInteger(major) || !Number.isInteger(minor) || major < 22 || (major === 22 && minor < 16)) {
-    throw new Error("Release checks require Node.js 22.16.0 or newer, matching the Signa package.");
+  const current = version.match(/^(\d+)\.(\d+)\.(\d+)$/)?.slice(1).map(Number);
+  const firstDifference = current?.findIndex((part, index) => part !== minimumNodeVersion[index]);
+  if (!current || (firstDifference !== -1 && current[firstDifference] < minimumNodeVersion[firstDifference])) {
+    throw new Error(`Release checks require Node.js ${minimumNodeVersion.join(".")} or newer, matching the Signa package.`);
   }
   if (!databaseUrl?.trim()) throw new Error("Release checks require TEST_DATABASE_URL pointing to a disposable PostgreSQL 16 database; focused npm test remains available without it.");
 }

@@ -4,7 +4,7 @@ Normal execution uses fresh wallet approval. Optional recurring bot permissions 
 
 ## Monitoring
 
-Signa has no production monitor today. CI (`.github/workflows/ci.yml`) runs the release checks and builds the image; it does not probe the live service. The unused inherited Center monitor was removed with its server code. The README lists adding a Signa production monitor after activation, with reviewed live endpoints and readiness criteria, as open work.
+Railway production settings observed on 2026-11-12 use `/readyz` as the deployment health check with a 120-second timeout; the API readiness endpoint returned 200. No independent periodic production monitor has been verified. CI (`.github/workflows/ci.yml`) runs the release checks and builds the image; it does not probe the live service. The unused inherited Center monitor was removed with its server code. Adding a Signa production monitor with reviewed live endpoints and readiness criteria remains open work.
 
 What exists to inspect by hand:
 
@@ -16,17 +16,17 @@ For a failure, check the endpoints above and the deployment status, then the str
 
 ## Shutdown
 
-The server drains for `SHUTDOWN_GRACE_MS` (25 seconds by default) on SIGTERM. `railway.json` sets restart on failure with at most 10 retries and no health check; set the health check per stage as the README describes. No platform drain setting has been verified for Signa.
+The server drains for `SHUTDOWN_GRACE_MS` (25 seconds by default) on SIGTERM. `railway.json` sets restart on failure with at most 10 retries; health checks are configured per stage as the README describes. Railway production settings observed on 2026-11-12 specify a 30-second drain and zero deployment overlap.
 
 ## Database backups
 
-No backup schedule, retention or recovery point has been recorded or verified for Signa's PostgreSQL database. Do not rely on Center's earlier snapshots or schedules; they cover Center's database.
+Signa's PostgreSQL backup schedule observed in Railway on 2026-11-12 runs daily at 04:53 UTC with six-day retention. Six backup entries were present; the latest was created on 2026-11-12 at 04:53:02.929 UTC and expires on 2026-11-18 at 04:53 UTC. Backup availability does not establish successful restoration. Center's earlier snapshots and schedules cover its separate database.
 
 During an actual recovery, pause application writes and execution workers, record the recovery point, preserve the current volume, and reconcile all potentially submitted transactions on Base, and on any additional network the account was deployed to, before resuming execution. An older database can contain stale request nonces, bot revocations and transaction states; never assume a restored row proves a transaction was not sent.
 
 ## Restore verification
 
-No restore drill, schema-only or full, has been run against Signa's database. Recovery time and recoverability of user data are unknown. Before relying on backups, run a drill into an isolated destination and record its date and result here.
+No restore drill, schema-only or full, was verified as of 2026-11-12. Recovery time and recoverability of user data remain unverified. Run a drill into an isolated destination and record its date and result here.
 
 ## Planned change
 
