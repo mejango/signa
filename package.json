@@ -32,7 +32,7 @@
     "node": ">=22.16.0"
   },
   "dependencies": {
-    "@bananapus/nana-sdk-core": "3.5.2",
+    "@bananapus/nana-sdk-core": "6.4.0",
     "@hono/node-server": "^1.19.9",
     "@scure/bip39": "1.6.0",
     "cbor2": "2.3.0",

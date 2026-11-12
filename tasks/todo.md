@@ -156,3 +156,20 @@ The exclusive run at6e22a26 completed all4,065 collected service tests successfu
 - Observation: .generated/checks/2026-11-11T20-26-46.789Z-1c20042b/summary.json; log /tmp/signa-cleanup-check-cli-final.log. Earlier interrupted/failed observations remain preserved and are not relabeled as passes.
 - The user explicitly authorized SDK implementation PR302 merge and the generated version PR merge/publication when ready. Root released that hold after verifying this terminal result. Actual published SDK dependency/registry lock and clean-install service verification remain pending. Signa merge/deployment is not authorized by that SDK release instruction.
 - Runtime follow-up remains separate: official node:26.13.1-bookworm-slim is now available with OCI index digest sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1. This gate used22.23.4; no patched-runtime compatibility/deployment claim is made.
+
+### Independent patched-runtime assessment
+Official checksum-verified Node26.13.1/npm11.20.0 passed the V6 fixture, execution, passkey, typecheck and connect41 stages at cleanf209f79. Optional service assessment was deliberately stopped under measured hostload57.53 on10cores with unrelated work; observation2026-11-11T21-14-54.275Z-8e942601 records unchanged source, interrupted service without its final JSON and no final build. No complete Node26 compatibility or Linux-container claim is made, and no runtime pins/defaults changed. This does not alter the passed Node22 candidate release gate or the user's SDK publication authorization. Actual registry dependency/clean verification remains pending publication.
+
+
+## Complete cleanup with the published SDK (2026-11-12)
+## Plan refinement
+- **Objective:** Finish Signa cleanup with the verified published core SDK and reproducible registry lock, leaving the concrete service change in draft PR52 without service merge or deployment.
+- **System fit:** The published portable verifier supplies Signa's existing semantic validation. Center preparation, Signa account authority/execution/recovery and the reviewed18-operation boundary stay unchanged. Verified registry artifact, generated lock, clean installation and full service evidence complete the candidate-to-release chain.
+- **Reuse and simplicity:** Update only the existing exact core pin and npm-generated lock, preserving every unrelated locked dependency and the pending journal assessment. No new runtime, source, tooling, account migration or release mechanism.
+- **Evidence and unknowns:** Candidate full gate at078b75a passed all seven stages. Current manifest/lock core3.5.2 lacks the required export, while installed6.3.1 is the reviewed overlay, not the public registry release. SDK Version Packages PR303 merged as7fce09a6 and normal publication43149479673 succeeded; root's registry integrity/parity/provenance handoff is required before installing core6.4.0.
+- **Verification:** Inspect minimal generated manifest/lock diff, actual registry integrity and new export. Clean npm ci --ignore-scripts, full npm run check using declared Node22.23.4/npm10.9.9, disposable PG16 and Foundry1.7.0, and production audit. Freeze source during checks and record stable source fingerprint; inspect fresh main and draft PR checks before push. Root remains sole journal writer.
+- **Resource budget:** One clean install/full check in the exclusive slot after Center. Preserve per-test/domain deadlines and original timing evidence. Reuse complete consumer evidence if published runtime parity is verified. Replan on material artifact/dependency/source drift; no optional runtime upgrade or broad app rerun.
+- [ ] Receive root's verified release identity and exclusive slot.
+- [ ] Generate and review actual registry manifest/lock changes.
+- [ ] Clean install and pass full required service gate and production audit.
+- [ ] Update the existing draft PR with final evidence, preserving deployment authority boundaries.
