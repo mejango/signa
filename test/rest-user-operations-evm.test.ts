@@ -75,6 +75,11 @@ async function rpc<T>(method: string, params: unknown[]): Promise<T> {
   if (result.error) throw new Error(result.error.message);
   return result.result;
 }
+async function sendAndConfirm(transaction: { from: Address; to: Address; data: Hex }) {
+  const hash = await rpc<Hex>("eth_sendTransaction", [transaction]);
+  await expect.poll(async () =>
+    (await rpc<{ status: Hex } | null>("eth_getTransactionReceipt", [hash]))?.status).toBe("0x1");
+}
 describe.skipIf(!available)(
   "actual pinned EntryPoint0.7 runtime in disposable local EVM",
   () => {
@@ -96,6 +101,9 @@ describe.skipIf(!available)(
           String(port),
           "--chain-id",
           "31337",
+          // A transaction hash must not stand in for inclusion in the fixture.
+          "--block-time",
+          "1",
           "--silent",
         ],
       );
@@ -209,11 +217,7 @@ describe.skipIf(!available)(
         args: [key],
       });
       // This transaction exists only on the isolated loopback Anvil process.
-      const hash = await rpc<Hex>("eth_sendTransaction", [
-        { from: sender, to: artifact.address, data },
-      ]);
-      await expect.poll(async () =>
-        (await rpc<{ status: Hex } | null>("eth_getTransactionReceipt", [hash]))?.status).toBe("0x1");
+      await sendAndConfirm({ from: sender!, to: artifact.address, data });
       expect(await read(key)).toBe((key << 64n) + 1n);
       expect(await read(key + 1n)).toBe((key + 1n) << 64n);
     });
@@ -359,17 +363,15 @@ describe.skipIf(!available)(
         compiled.smartSessions.address,
         toHex(10n ** 18n),
       ]);
-      await rpc("eth_sendTransaction", [
-        {
-          from: compiled.smartSessions.address,
-          to: guard.policy.address,
-          data: encodeFunctionData({
-            abi: guardArtifact.abi,
-            functionName: "initializeWithMultiplexer",
-            args: [compiled.wallet, guard.configId, guard.initData],
-          }),
-        },
-      ]);
+      await sendAndConfirm({
+        from: compiled.smartSessions.address,
+        to: guard.policy.address,
+        data: encodeFunctionData({
+          abi: guardArtifact.abi,
+          functionName: "initializeWithMultiplexer",
+          args: [compiled.wallet, guard.configId, guard.initData],
+        }),
+      });
       const op: UserOperationV07 = {
         sender: compiled.wallet,
         nonce: "0x0",
@@ -393,13 +395,11 @@ describe.skipIf(!available)(
           functionName: "checkUserOpPolicy",
           args: [guard.configId, packUserOperation(operation)],
         });
-      await rpc("eth_sendTransaction", [
-        {
-          from: compiled.smartSessions.address,
-          to: guard.policy.address,
-          data: checkData(op),
-        },
-      ]);
+      await sendAndConfirm({
+        from: compiled.smartSessions.address,
+        to: guard.policy.address,
+        data: checkData(op),
+      });
       const readConfig = async (override?: unknown) =>
         decodeFunctionResult({
           abi: guardArtifact.abi,
