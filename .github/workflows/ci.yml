@@ -40,14 +40,12 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package-lock.json
-            mcp/package-lock.json
       - name: Install pinned Forge and Anvil
         uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
           version: v1.7.0
           cache: false
       - run: npm ci --ignore-scripts
-      - run: npm --prefix mcp ci --ignore-scripts
       - name: Install pinned Chromium for WebAuthn producer checks
         run: npx playwright install --with-deps --only-shell chromium
       - name: Prepare verified local V6 payment fixture
@@ -58,5 +56,4 @@ jobs:
       - name: Verify artifacts, run Foundry and Anvil tests, and check application
         run: npm run check
       - run: npm audit --omit=dev --audit-level=high
-      - run: npm --prefix mcp audit --omit=dev --audit-level=high
       - run: docker build --build-arg SIGNA_BUILD_COMMIT=${{ github.sha }} -t signa:${{ github.sha }} .

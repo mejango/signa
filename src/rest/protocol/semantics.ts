@@ -1,18 +1,24 @@
 import { createHash } from "node:crypto";
+import { JB_CHAINS } from "@bananapus/nana-sdk-core";
 import {
-  canonicalJson,
-  jsonSafe,
-  normalizePlanDraft,
-  type PlanDraft,
-  type PlanService,
-  type OperationReceipt,
-} from "@juicebox/mcp/host";
+  verifyV6OperationEvidence,
+  type V6OperationReceipt as OperationReceipt,
+  type V6OperationDraft,
+} from "@bananapus/nana-sdk-core/v6/operation-evidence";
+import { canonicalJson } from "../wallet/json.js";
+import type { Json } from "../../types.js";
+import type { RestPlanDraft } from "../core.js";
 import { getAddress, isAddress, type Hex } from "viem";
 import type {
   SemanticResult,
   SemanticVerifier,
   StoredReceipt,
 } from "../transactions/types.js";
+
+const jsonSafe = (value: unknown): Json =>
+  JSON.parse(JSON.stringify(value, (_key, item: unknown) =>
+    typeof item === "bigint" ? item.toString() : item,
+  ));
 
 const unknown = (reason: string): SemanticResult => ({
   status: "unknown",
@@ -97,12 +103,17 @@ function receiptFor(receipt: StoredReceipt): OperationReceipt {
   };
 }
 
-/** Reuses modeled MCP outcome checks after the host has independently proved exact execution. */
-export function createProtocolSemanticVerifier({
-  plans,
-}: {
-  plans: Pick<PlanService, "verifyOperationEvidence">;
-}): SemanticVerifier {
+function assertSupportedDraft(
+  draft: RestPlanDraft,
+): asserts draft is RestPlanDraft & V6OperationDraft {
+  const chains = draft.calls.map((call) => call.chainId);
+  if (draft.project) chains.push(draft.project.chainId);
+  if (!chains.every((chainId) => Object.hasOwn(JB_CHAINS, chainId)))
+    throw new Error("Unsupported protocol evidence chain");
+}
+
+/** SDK protocol outcome checks run only after Signa independently proves exact execution. */
+export function createProtocolSemanticVerifier(): SemanticVerifier {
   return {
     async verify(plan, stepIndex, receipt) {
       if (!Number.isSafeInteger(stepIndex) || !plan.draft.calls[stepIndex])
@@ -127,15 +138,9 @@ export function createProtocolSemanticVerifier({
           },
         };
       try {
-        const draft = normalizePlanDraft({
-          ...plan.draft,
-          evidence: plan.draft.evidence.map((item) => ({
-            ...item,
-            source: "rpc",
-          })),
-        } as PlanDraft);
-        const proof = plans.verifyOperationEvidence(
-          draft,
+        assertSupportedDraft(plan.draft);
+        const proof = verifyV6OperationEvidence(
+          plan.draft,
           stepIndex,
           receiptFor(receipt),
         );

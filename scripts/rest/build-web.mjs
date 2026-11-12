@@ -10,7 +10,7 @@ import { walletRecoveryCss, walletRecoveryPage } from "../../src/rest/web/wallet
 import { walletSignupCss, walletSignupPage } from "../../src/rest/web/walletSignupPage.ts";
 import { walletDeviceCss, walletDevicePage } from "../../src/rest/web/walletDevicePage.ts";
 
-/** The browser bundles Center serves; test/rest-web-bundle-budget.test.ts holds their size budgets. */
+/** The browser bundles Signa serves; test/rest-web-bundle-budget.test.ts holds their size budgets. */
 export const webBuildOptions = {
   absWorkingDir: fileURLToPath(new URL("../../", import.meta.url)),
   entryPoints: {

@@ -1,0 +1,4495 @@
+{
+  "source": {
+    "url": "https://juicebox.center/api/v1/catalog/operations",
+    "sha256": "beaf54da96e04ea9573e81d4ce4cea21b2472419e8ee2ec07fa04f9626cf862c"
+  },
+  "operations": [
+    {
+      "id": "prepare_pay",
+      "description": "Prepare an authenticated unsigned payment plan from a fresh quote, including exact approvals and protected outputs. Simulates the first executable step; nothing is signed or broadcast.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "memo": {
+            "type": "string"
+          },
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "token": {
+            "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Input asset amount in its smallest units, as an exact integer string."
+          },
+          "beneficiary": {
+            "type": "string"
+          },
+          "slippageBps": {
+            "default": 100,
+            "description": "Slippage in basis points, 0–4950. Default 100. Raise it only within what the payer accepts, such as a payFailure's retrySlippageBps.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4950
+          },
+          "minReturnedTokens": {
+            "description": "Explicit minimum project tokens for the beneficiary, in 18-decimal base units, replacing beneficiaryTokenCount less slippageBps. To accept 2% below the fill, take the quote's simulatedBeneficiaryTokenCount less 2%. A warning names a figure above the simulated fill. jb_prepare_pay requires it when the default would protect nothing (PAY_MINIMUM_PROTECTS_NOTHING) or sits above the simulated fill (PAY_DEFAULT_MINIMUM_ABOVE_FILL). \"0\" accepts receiving no project tokens.",
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "metadata": {
+            "type": "string",
+            "maxLength": 262146,
+            "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
+          },
+          "skipSplits": {
+            "description": "Buyback 1.4 only. Unset means on wherever the project's buyback hook is 1.4 and no metadata is given, as the apps pay: the hook buys from the pool when that beats the payer's share of a mint, and the tokens it buys go to the beneficiary without the reserved split (they already exist, so nothing is issued for them and the split gets none). Minting still pays the split. The default minimum is then the SDK's (prepareUserPay): with a pool quote, the beneficiary's part of the floored quote, which the hook also enforces. Pass false when the payment should honor the project's splits, such as routing fees or revenue into a project. Where it cannot apply (no buyback hook, hook 1.0 or 1.1.1, the caller's own metadata) unset means off, and an explicit true is refused. The quote's skipSplits says which applied and why.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "token",
+          "amount",
+          "beneficiary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_cash_out",
+      "description": "Prepare an authenticated unsigned cash-out plan, preserving the quoted terminal minimum and hook metadata as one execution commitment.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "holder": {
+            "type": "string"
+          },
+          "cashOutCount": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Project token count in 18-decimal base units."
+          },
+          "tokenToReclaim": {
+            "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+            "type": "string"
+          },
+          "beneficiary": {
+            "type": "string"
+          },
+          "account": {
+            "type": "string"
+          },
+          "slippageBps": {
+            "default": 100,
+            "description": "Slippage in basis points, 0–1000. Default 100 (1%).",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "terminal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "holder",
+          "cashOutCount",
+          "tokenToReclaim",
+          "beneficiary",
+          "account"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_payout",
+      "description": "Prepare a payout with a nonzero protected minimum derived from the live payable amount, exact sender, terminal, currency, and project.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "token": {
+            "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Payout amount in accounting token decimals, denominated in currency."
+          },
+          "currency": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4294967295,
+            "description": "Currency that amount is in; it must match a payout limit currency. JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD."
+          },
+          "slippageBps": {
+            "default": 100,
+            "description": "Slippage in basis points, 0–1000. Default 100 (1%).",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          },
+          "terminal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "token",
+          "amount",
+          "currency"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_ruleset_change",
+      "description": "Prepare exact reviewed V6 ruleset calldata after a live diff and permission check. Projects whose rulesets run through JBOmnichainDeployer queue through it, keeping their NFT hook; route says which. Does not silently overwrite omitted configuration or promise approval timing.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "rulesetConfigurations": {
+            "minItems": 1,
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mustStartAtOrAfter": {
+                  "description": "Unix seconds. A lower bound, not a promised start; 0 asks the contract to resolve timing.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "duration": {
+                  "description": "Seconds per cycle. Zero has no automatic cycles.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "weight": {
+                  "description": "Tokens issued per one unit of baseCurrency, with 18 decimals: 1000000000000000000000 = 1,000 tokens. 0 means zero issuance; 1 inherits decayed weight when a prior ruleset exists.",
+                  "type": "string",
+                  "maxLength": 78,
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "weightCutPercent": {
+                  "description": "Issuance cut applied each cycle, out of 1,000,000,000. 100,000,000 = 10%.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "approvalHook": {
+                  "description": "Gates the next ruleset, not this ruleset.",
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "properties": {
+                    "reservedPercent": {
+                      "description": "Share of new tokens reserved for splits, out of 10,000. 2500 = 25%.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "cashOutTaxRate": {
+                      "description": "Cash-out tax out of 10,000. 0 = no tax; 10,000 = cash outs return nothing.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "baseCurrency": {
+                      "description": "Currency that issuance is priced in: 1 = ETH, 2 = USD. Use 1 for ETH, not 61166 (native ETH's accounting currency). A token's own currency, uint32(uint160(token)), applies only when payments come in that token or JBPrices has a feed for it.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "pausePay": {
+                      "type": "boolean"
+                    },
+                    "pauseCreditTransfers": {
+                      "type": "boolean"
+                    },
+                    "allowOwnerMinting": {
+                      "type": "boolean"
+                    },
+                    "allowSetCustomToken": {
+                      "type": "boolean"
+                    },
+                    "allowTerminalMigration": {
+                      "type": "boolean"
+                    },
+                    "allowSetTerminals": {
+                      "type": "boolean"
+                    },
+                    "allowSetController": {
+                      "type": "boolean"
+                    },
+                    "allowAddAccountingContext": {
+                      "type": "boolean"
+                    },
+                    "allowAddPriceFeed": {
+                      "type": "boolean"
+                    },
+                    "ownerMustSendPayouts": {
+                      "type": "boolean"
+                    },
+                    "holdFees": {
+                      "type": "boolean"
+                    },
+                    "scopeCashOutsToLocalBalances": {
+                      "type": "boolean",
+                      "description": "false: cash outs count every chain's supply and surplus (through the suckers). true: only this chain's. Recommended: false, which is what revnet.money sends."
+                    },
+                    "useDataHookForPay": {
+                      "type": "boolean"
+                    },
+                    "useDataHookForCashOut": {
+                      "type": "boolean"
+                    },
+                    "dataHook": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reservedPercent",
+                    "cashOutTaxRate",
+                    "baseCurrency",
+                    "pausePay",
+                    "pauseCreditTransfers",
+                    "allowOwnerMinting",
+                    "allowSetCustomToken",
+                    "allowTerminalMigration",
+                    "allowSetTerminals",
+                    "allowSetController",
+                    "allowAddAccountingContext",
+                    "allowAddPriceFeed",
+                    "ownerMustSendPayouts",
+                    "holdFees",
+                    "scopeCashOutsToLocalBalances",
+                    "useDataHookForPay",
+                    "useDataHookForCashOut",
+                    "dataHook",
+                    "metadata"
+                  ],
+                  "additionalProperties": false
+                },
+                "splitGroups": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "groupId": {
+                        "type": "string",
+                        "maxLength": 78,
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "description": "Payout splits: uint256(uint160(token)) as a decimal string (native ETH is 0x000000000000000000000000000000000000EEEe, group 61166). Reserved token splits: 1."
+                      },
+                      "splits": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "percent": {
+                              "description": "Share of the split group, out of 1,000,000,000. 500,000,000 = 50%.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "projectId": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "beneficiary": {
+                              "type": "string"
+                            },
+                            "preferAddToBalance": {
+                              "type": "boolean"
+                            },
+                            "lockedUntil": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "hook": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "percent",
+                            "projectId",
+                            "beneficiary",
+                            "preferAddToBalance",
+                            "lockedUntil",
+                            "hook"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "groupId",
+                      "splits"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "fundAccessLimitGroups": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "terminal": {
+                        "type": "string"
+                      },
+                      "token": {
+                        "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+                        "type": "string"
+                      },
+                      "payoutLimits": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "currency": {
+                              "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "amount",
+                            "currency"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "surplusAllowances": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "currency": {
+                              "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "amount",
+                            "currency"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "terminal",
+                      "token",
+                      "payoutLimits",
+                      "surplusAllowances"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "mustStartAtOrAfter",
+                "duration",
+                "weight",
+                "weightCutPercent",
+                "approvalHook",
+                "metadata",
+                "splitGroups",
+                "fundAccessLimitGroups"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "rulesetConfigurations"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_launch",
+      "description": "Prepare a standard core V6 project launch on one chain using complete typed configuration and a chain-specific live creation fee. Explicit core composition does not attach NFT/revnet/omnichain extensions. To link chains as one project, use jb_prepare_omnichain_launch.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 10
+              },
+              {
+                "type": "number",
+                "const": 8453
+              },
+              {
+                "type": "number",
+                "const": 42161
+              },
+              {
+                "type": "number",
+                "const": 11155111
+              },
+              {
+                "type": "number",
+                "const": 11155420
+              },
+              {
+                "type": "number",
+                "const": 84532
+              },
+              {
+                "type": "number",
+                "const": 421614
+              }
+            ]
+          },
+          "account": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "composition": {
+            "type": "string",
+            "const": "core",
+            "description": "Explicit standard core launch. This does not deploy a 721 hook, revnet, or omnichain identity."
+          },
+          "projectUri": {
+            "type": "string",
+            "maxLength": 4096,
+            "description": "Metadata URI; content is not fetched or treated as instructions."
+          },
+          "rulesetConfigurations": {
+            "minItems": 1,
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mustStartAtOrAfter": {
+                  "description": "Unix seconds. A lower bound, not a promised start; 0 asks the contract to resolve timing.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "duration": {
+                  "description": "Seconds per cycle. Zero has no automatic cycles.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "weight": {
+                  "description": "Tokens issued per one unit of baseCurrency, with 18 decimals: 1000000000000000000000 = 1,000 tokens. 0 means zero issuance; 1 inherits decayed weight when a prior ruleset exists.",
+                  "type": "string",
+                  "maxLength": 78,
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "weightCutPercent": {
+                  "description": "Issuance cut applied each cycle, out of 1,000,000,000. 100,000,000 = 10%.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "approvalHook": {
+                  "description": "Gates the next ruleset, not this ruleset.",
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "properties": {
+                    "reservedPercent": {
+                      "description": "Share of new tokens reserved for splits, out of 10,000. 2500 = 25%.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "cashOutTaxRate": {
+                      "description": "Cash-out tax out of 10,000. 0 = no tax; 10,000 = cash outs return nothing.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "baseCurrency": {
+                      "description": "Currency that issuance is priced in: 1 = ETH, 2 = USD. Use 1 for ETH, not 61166 (native ETH's accounting currency). A token's own currency, uint32(uint160(token)), applies only when payments come in that token or JBPrices has a feed for it.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "pausePay": {
+                      "type": "boolean"
+                    },
+                    "pauseCreditTransfers": {
+                      "type": "boolean"
+                    },
+                    "allowOwnerMinting": {
+                      "type": "boolean"
+                    },
+                    "allowSetCustomToken": {
+                      "type": "boolean"
+                    },
+                    "allowTerminalMigration": {
+                      "type": "boolean"
+                    },
+                    "allowSetTerminals": {
+                      "type": "boolean"
+                    },
+                    "allowSetController": {
+                      "type": "boolean"
+                    },
+                    "allowAddAccountingContext": {
+                      "type": "boolean"
+                    },
+                    "allowAddPriceFeed": {
+                      "type": "boolean"
+                    },
+                    "ownerMustSendPayouts": {
+                      "type": "boolean"
+                    },
+                    "holdFees": {
+                      "type": "boolean"
+                    },
+                    "scopeCashOutsToLocalBalances": {
+                      "type": "boolean",
+                      "description": "false: cash outs count every chain's supply and surplus (through the suckers). true: only this chain's. Recommended: false, which is what revnet.money sends."
+                    },
+                    "useDataHookForPay": {
+                      "type": "boolean"
+                    },
+                    "useDataHookForCashOut": {
+                      "type": "boolean"
+                    },
+                    "dataHook": {
+                      "type": "string"
+                    },
+                    "metadata": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reservedPercent",
+                    "cashOutTaxRate",
+                    "baseCurrency",
+                    "pausePay",
+                    "pauseCreditTransfers",
+                    "allowOwnerMinting",
+                    "allowSetCustomToken",
+                    "allowTerminalMigration",
+                    "allowSetTerminals",
+                    "allowSetController",
+                    "allowAddAccountingContext",
+                    "allowAddPriceFeed",
+                    "ownerMustSendPayouts",
+                    "holdFees",
+                    "scopeCashOutsToLocalBalances",
+                    "useDataHookForPay",
+                    "useDataHookForCashOut",
+                    "dataHook",
+                    "metadata"
+                  ],
+                  "additionalProperties": false
+                },
+                "splitGroups": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "groupId": {
+                        "type": "string",
+                        "maxLength": 78,
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "description": "Payout splits: uint256(uint160(token)) as a decimal string (native ETH is 0x000000000000000000000000000000000000EEEe, group 61166). Reserved token splits: 1."
+                      },
+                      "splits": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "percent": {
+                              "description": "Share of the split group, out of 1,000,000,000. 500,000,000 = 50%.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "projectId": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "beneficiary": {
+                              "type": "string"
+                            },
+                            "preferAddToBalance": {
+                              "type": "boolean"
+                            },
+                            "lockedUntil": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "hook": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "percent",
+                            "projectId",
+                            "beneficiary",
+                            "preferAddToBalance",
+                            "lockedUntil",
+                            "hook"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "groupId",
+                      "splits"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "fundAccessLimitGroups": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "terminal": {
+                        "type": "string"
+                      },
+                      "token": {
+                        "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+                        "type": "string"
+                      },
+                      "payoutLimits": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "currency": {
+                              "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "amount",
+                            "currency"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "surplusAllowances": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "currency": {
+                              "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "amount",
+                            "currency"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "terminal",
+                      "token",
+                      "payoutLimits",
+                      "surplusAllowances"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "mustStartAtOrAfter",
+                "duration",
+                "weight",
+                "weightCutPercent",
+                "approvalHook",
+                "metadata",
+                "splitGroups",
+                "fundAccessLimitGroups"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "terminalConfigurations": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "terminal": {
+                  "type": "string"
+                },
+                "accountingContextsToAccept": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+                        "type": "string"
+                      },
+                      "decimals": {
+                        "description": "Token decimals. Native ETH uses 18.",
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      },
+                      "currency": {
+                        "description": "Usually uint32(uint160(token)); native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166.",
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "token",
+                      "decimals",
+                      "currency"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "terminal",
+                "accountingContextsToAccept"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "memo": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "chainId",
+          "account",
+          "owner",
+          "composition",
+          "projectUri",
+          "rulesetConfigurations",
+          "terminalConfigurations"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_borrow",
+      "description": "Prepare a revnet borrow with a protected gross-debt minimum and any explicitly reviewed BURN_TOKENS permission prerequisite, preserving existing permissions. Liquid proceeds remain conditional on fees.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "holder": {
+            "type": "string"
+          },
+          "token": {
+            "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+            "type": "string"
+          },
+          "collateralCount": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Project tokens to lock as collateral, with 18 decimals: 1000000000000000000 = 1 token. The holder must hold them; the loan burns them and mints them back on repay."
+          },
+          "prepaidFeePercent": {
+            "type": "integer",
+            "minimum": 25,
+            "maximum": 500,
+            "description": "Fee prepaid at borrow time, out of 1,000. Allowed 25 (2.5%) to 500 (50%)."
+          },
+          "beneficiary": {
+            "type": "string"
+          },
+          "account": {
+            "type": "string"
+          },
+          "slippageBps": {
+            "default": 100,
+            "description": "Slippage in basis points, 0–1000. Default 100 (1%).",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "project",
+          "holder",
+          "token",
+          "collateralCount",
+          "prepaidFeePercent",
+          "beneficiary",
+          "account"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_repay",
+      "description": "Prepare a loan repayment with bounded spend, correct native/ERC-20 funding and explicit approval prerequisites.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 10
+              },
+              {
+                "type": "number",
+                "const": 8453
+              },
+              {
+                "type": "number",
+                "const": 42161
+              },
+              {
+                "type": "number",
+                "const": 11155111
+              },
+              {
+                "type": "number",
+                "const": 11155420
+              },
+              {
+                "type": "number",
+                "const": 84532
+              },
+              {
+                "type": "number",
+                "const": 421614
+              }
+            ]
+          },
+          "loanId": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "account": {
+            "type": "string"
+          },
+          "maxRepayBorrowAmount": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "collateralCountToReturn": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "beneficiary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "chainId",
+          "loanId",
+          "account",
+          "maxRepayBorrowAmount",
+          "collateralCountToReturn",
+          "beneficiary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_bridge_claim",
+      "description": "Prepare a claim only through a sucker verified for the project. Exact claim proof and beneficiary are preserved and simulation validates current claimability.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "sucker": {
+            "type": "string"
+          },
+          "claim": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+                "type": "string"
+              },
+              "leaf": {
+                "type": "object",
+                "properties": {
+                  "index": {
+                    "type": "string",
+                    "maxLength": 78,
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  },
+                  "beneficiary": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  "projectTokenCount": {
+                    "type": "string",
+                    "maxLength": 78,
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  },
+                  "terminalTokenAmount": {
+                    "type": "string",
+                    "maxLength": 78,
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  },
+                  "metadata": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  }
+                },
+                "required": [
+                  "index",
+                  "beneficiary",
+                  "projectTokenCount",
+                  "terminalTokenAmount",
+                  "metadata"
+                ],
+                "additionalProperties": false
+              },
+              "proof": {
+                "type": "array",
+                "items": [
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  }
+                ],
+                "additionalItems": false,
+                "minItems": 32,
+                "maxItems": 32
+              }
+            },
+            "required": [
+              "token",
+              "leaf",
+              "proof"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "sucker",
+          "claim"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_accounting_sync",
+      "description": "Prepare permissionless sucker accounting synchronization with an explicitly bounded, verified transport budget. This synchronizes accounting; it does not transfer or claim holder tokens.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "sucker": {
+            "type": "string"
+          },
+          "maxTransportValue": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Maximum native wei attached to the accounting message; gas is additional."
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "sucker",
+          "maxTransportValue"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_buyback_pool",
+      "description": "Prepare registration of an existing Uniswap V4 buyback pool for a verified project hook. Validates pool identity, token pair, permissions and TWAP window.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "terminalToken": {
+            "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+            "type": "string"
+          },
+          "fee": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "Static Uniswap V4 pool fee in hundredths of a basis point; 3000 = 0.3%."
+          },
+          "tickSpacing": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 32767
+          },
+          "twapWindowSeconds": {
+            "type": "integer",
+            "minimum": 300,
+            "maximum": 172800,
+            "description": "The current hook maps registration at 172800 to its 1800-second default; retired 1.1.1 and v1 hooks store 172800 unchanged. Use the TWAP update tool afterward for an explicit 172800-second window on the current hook."
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "terminalToken",
+          "fee",
+          "tickSpacing",
+          "twapWindowSeconds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_buyback_twap",
+      "description": "Prepare an authorized buyback TWAP-window change with exact contract bounds and current project hook resolution.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "terminalToken": {
+            "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+            "type": "string"
+          },
+          "twapWindowSeconds": {
+            "type": "integer",
+            "minimum": 300,
+            "maximum": 172800
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "terminalToken",
+          "twapWindowSeconds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_buyback_hook",
+      "description": "Prepare a reviewed project buyback-registry override, with explicit target and authority checks.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "hook": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "hook"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_router_terminal",
+      "description": "Prepare an authorized router-terminal registry project override. The exact implementation address and resulting routing authority are reviewed.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "terminal": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "terminal"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_721_pay",
+      "description": "Prepare a verified NFT-tier payment with exact metadata, protected outputs and explicit funding prerequisites. Does not assume a successful fungible payment proves NFT delivery.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "token": {
+            "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "description": "Fresh payment amount in the token’s smallest units. Use 0 for free tiers or eligible NFT-credit purchases."
+          },
+          "beneficiary": {
+            "type": "string"
+          },
+          "tierIds": {
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "maxLength": 78
+                }
+              ]
+            }
+          },
+          "slippageBps": {
+            "default": 100,
+            "description": "Slippage in basis points, 0–4950. Default 100. Raise it only within what the payer accepts, such as a payFailure's retrySlippageBps.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4950
+          },
+          "minReturnedTokens": {
+            "description": "Explicit minimum fungible project tokens for the beneficiary, in 18-decimal base units, replacing the quoted count less slippageBps. Needed when the quote warns that the default minimum sits above the simulated fill (a buyback hook beside the NFT hook). NFT delivery is checked either way.",
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "allowOverspending": {
+            "default": false,
+            "type": "boolean"
+          },
+          "skipSplits": {
+            "description": "Buyback 1.4 only. Unset means on wherever the project's buyback hook is 1.4 and no metadata is given, as the apps pay: the hook buys from the pool when that beats the payer's share of a mint, and the tokens it buys go to the beneficiary without the reserved split (they already exist, so nothing is issued for them and the split gets none). Minting still pays the split. The default minimum is then the SDK's (prepareUserPay): with a pool quote, the beneficiary's part of the floored quote, which the hook also enforces. Pass false when the payment should honor the project's splits, such as routing fees or revenue into a project. Where it cannot apply (no buyback hook, hook 1.0 or 1.1.1, the caller's own metadata) unset means off, and an explicit true is refused. The quote's skipSplits says which applied and why.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "token",
+          "amount",
+          "beneficiary",
+          "tierIds"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_adjust_tiers",
+      "description": "Prepare additions/removals of NFT tiers with typed price, supply, category, voting, reserve, discount and split configuration. Validates canonical hook identity and caller permissions.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "tiersToAdd": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "price": {
+                  "description": "Tier price in the tiers currency, with the tiers decimals.",
+                  "type": "string",
+                  "maxLength": 78,
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "initialSupply": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "votingUnits": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "reserveFrequency": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "reserveBeneficiary": {
+                  "type": "string"
+                },
+                "encodedIpfsUri": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{64}$"
+                },
+                "category": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "discountPercent": {
+                  "description": "Tier price discount, out of 200. 200 = free.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "flags": {
+                  "type": "object",
+                  "properties": {
+                    "allowOwnerMint": {
+                      "type": "boolean"
+                    },
+                    "useReserveBeneficiaryAsDefault": {
+                      "type": "boolean"
+                    },
+                    "transfersPausable": {
+                      "type": "boolean"
+                    },
+                    "useVotingUnits": {
+                      "type": "boolean"
+                    },
+                    "cantBeRemoved": {
+                      "type": "boolean"
+                    },
+                    "cantIncreaseDiscountPercent": {
+                      "type": "boolean"
+                    },
+                    "cantBuyWithCredits": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "allowOwnerMint",
+                    "useReserveBeneficiaryAsDefault",
+                    "transfersPausable",
+                    "useVotingUnits",
+                    "cantBeRemoved",
+                    "cantIncreaseDiscountPercent",
+                    "cantBuyWithCredits"
+                  ],
+                  "additionalProperties": false
+                },
+                "splitPercent": {
+                  "description": "Share of the tier price sent to the tier's splits, out of 1,000,000,000.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "splits": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "percent": {
+                        "description": "Share of the split group, out of 1,000,000,000. 500,000,000 = 50%.",
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      },
+                      "projectId": {
+                        "type": "string",
+                        "maxLength": 78,
+                        "pattern": "^(0|[1-9][0-9]*)$"
+                      },
+                      "beneficiary": {
+                        "type": "string"
+                      },
+                      "preferAddToBalance": {
+                        "type": "boolean"
+                      },
+                      "lockedUntil": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      },
+                      "hook": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "percent",
+                      "projectId",
+                      "beneficiary",
+                      "preferAddToBalance",
+                      "lockedUntil",
+                      "hook"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "price",
+                "initialSupply",
+                "votingUnits",
+                "reserveFrequency",
+                "reserveBeneficiary",
+                "encodedIpfsUri",
+                "category",
+                "discountPercent",
+                "flags",
+                "splitPercent",
+                "splits"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tierIdsToRemove": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$",
+                  "maxLength": 78
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "tiersToAdd",
+          "tierIdsToRemove"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_721_launch",
+      "description": "Prepare a standard project with a canonical tiered 721 hook attached at launch, complete typed rulesets/tiers/terminals and a verified per-chain creation fee. The factory owns hook metadata wiring.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 10
+              },
+              {
+                "type": "number",
+                "const": 8453
+              },
+              {
+                "type": "number",
+                "const": 42161
+              },
+              {
+                "type": "number",
+                "const": 11155111
+              },
+              {
+                "type": "number",
+                "const": 11155420
+              },
+              {
+                "type": "number",
+                "const": 84532
+              },
+              {
+                "type": "number",
+                "const": 421614
+              }
+            ]
+          },
+          "account": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "deployTiersHookConfig": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "symbol": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32
+              },
+              "baseUri": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "tokenUriResolver": {
+                "type": "string"
+              },
+              "contractUri": {
+                "type": "string",
+                "maxLength": 4096
+              },
+              "tiersConfig": {
+                "type": "object",
+                "properties": {
+                  "tiers": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "price": {
+                          "description": "Tier price in the tiers currency, with the tiers decimals.",
+                          "type": "string",
+                          "maxLength": 78,
+                          "pattern": "^(0|[1-9][0-9]*)$"
+                        },
+                        "initialSupply": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "maxLength": 78
+                            }
+                          ]
+                        },
+                        "votingUnits": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "maxLength": 78
+                            }
+                          ]
+                        },
+                        "reserveFrequency": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "maxLength": 78
+                            }
+                          ]
+                        },
+                        "reserveBeneficiary": {
+                          "type": "string"
+                        },
+                        "encodedIpfsUri": {
+                          "type": "string",
+                          "pattern": "^0x[a-fA-F0-9]{64}$"
+                        },
+                        "category": {
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "maxLength": 78
+                            }
+                          ]
+                        },
+                        "discountPercent": {
+                          "description": "Tier price discount, out of 200. 200 = free.",
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "maxLength": 78
+                            }
+                          ]
+                        },
+                        "flags": {
+                          "type": "object",
+                          "properties": {
+                            "allowOwnerMint": {
+                              "type": "boolean"
+                            },
+                            "useReserveBeneficiaryAsDefault": {
+                              "type": "boolean"
+                            },
+                            "transfersPausable": {
+                              "type": "boolean"
+                            },
+                            "useVotingUnits": {
+                              "type": "boolean"
+                            },
+                            "cantBeRemoved": {
+                              "type": "boolean"
+                            },
+                            "cantIncreaseDiscountPercent": {
+                              "type": "boolean"
+                            },
+                            "cantBuyWithCredits": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "allowOwnerMint",
+                            "useReserveBeneficiaryAsDefault",
+                            "transfersPausable",
+                            "useVotingUnits",
+                            "cantBeRemoved",
+                            "cantIncreaseDiscountPercent",
+                            "cantBuyWithCredits"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "splitPercent": {
+                          "description": "Share of the tier price sent to the tier's splits, out of 1,000,000,000.",
+                          "anyOf": [
+                            {
+                              "type": "number"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^(0|[1-9][0-9]*)$",
+                              "maxLength": 78
+                            }
+                          ]
+                        },
+                        "splits": {
+                          "maxItems": 32,
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "percent": {
+                                "description": "Share of the split group, out of 1,000,000,000. 500,000,000 = 50%.",
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$",
+                                    "maxLength": 78
+                                  }
+                                ]
+                              },
+                              "projectId": {
+                                "type": "string",
+                                "maxLength": 78,
+                                "pattern": "^(0|[1-9][0-9]*)$"
+                              },
+                              "beneficiary": {
+                                "type": "string"
+                              },
+                              "preferAddToBalance": {
+                                "type": "boolean"
+                              },
+                              "lockedUntil": {
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "string",
+                                    "pattern": "^(0|[1-9][0-9]*)$",
+                                    "maxLength": 78
+                                  }
+                                ]
+                              },
+                              "hook": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "percent",
+                              "projectId",
+                              "beneficiary",
+                              "preferAddToBalance",
+                              "lockedUntil",
+                              "hook"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "price",
+                        "initialSupply",
+                        "votingUnits",
+                        "reserveFrequency",
+                        "reserveBeneficiary",
+                        "encodedIpfsUri",
+                        "category",
+                        "discountPercent",
+                        "flags",
+                        "splitPercent",
+                        "splits"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "currency": {
+                    "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "maxLength": 78
+                      }
+                    ]
+                  },
+                  "decimals": {
+                    "description": "Decimals of tier prices.",
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "maxLength": 78
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "tiers",
+                  "currency",
+                  "decimals"
+                ],
+                "additionalProperties": false
+              },
+              "flags": {
+                "type": "object",
+                "properties": {
+                  "noNewTiersWithReserves": {
+                    "type": "boolean"
+                  },
+                  "noNewTiersWithVotes": {
+                    "type": "boolean"
+                  },
+                  "noNewTiersWithOwnerMinting": {
+                    "type": "boolean"
+                  },
+                  "preventOverspending": {
+                    "type": "boolean"
+                  },
+                  "issueTokensForSplits": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "noNewTiersWithReserves",
+                  "noNewTiersWithVotes",
+                  "noNewTiersWithOwnerMinting",
+                  "preventOverspending",
+                  "issueTokensForSplits"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "name",
+              "symbol",
+              "baseUri",
+              "tokenUriResolver",
+              "contractUri",
+              "tiersConfig",
+              "flags"
+            ],
+            "additionalProperties": false
+          },
+          "projectUri": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "rulesetConfigurations": {
+            "minItems": 1,
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "mustStartAtOrAfter": {
+                  "description": "Unix seconds. A lower bound, not a promised start; 0 asks the contract to resolve timing.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "duration": {
+                  "description": "Seconds per cycle. Zero has no automatic cycles.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "weight": {
+                  "description": "Tokens issued per one unit of baseCurrency, with 18 decimals: 1000000000000000000000 = 1,000 tokens. 0 means zero issuance; 1 inherits decayed weight when a prior ruleset exists.",
+                  "type": "string",
+                  "maxLength": 78,
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "weightCutPercent": {
+                  "description": "Issuance cut applied each cycle, out of 1,000,000,000. 100,000,000 = 10%.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "approvalHook": {
+                  "description": "Gates the next ruleset, not this ruleset.",
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "properties": {
+                    "reservedPercent": {
+                      "description": "Share of new tokens reserved for splits, out of 10,000. 2500 = 25%.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "cashOutTaxRate": {
+                      "description": "Cash-out tax out of 10,000. 0 = no tax; 10,000 = cash outs return nothing.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "baseCurrency": {
+                      "description": "Currency that issuance is priced in: 1 = ETH, 2 = USD. Use 1 for ETH, not 61166 (native ETH's accounting currency). A token's own currency, uint32(uint160(token)), applies only when payments come in that token or JBPrices has a feed for it.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "pausePay": {
+                      "type": "boolean"
+                    },
+                    "pauseCreditTransfers": {
+                      "type": "boolean"
+                    },
+                    "allowOwnerMinting": {
+                      "type": "boolean"
+                    },
+                    "allowSetCustomToken": {
+                      "type": "boolean"
+                    },
+                    "allowTerminalMigration": {
+                      "type": "boolean"
+                    },
+                    "allowSetTerminals": {
+                      "type": "boolean"
+                    },
+                    "allowSetController": {
+                      "type": "boolean"
+                    },
+                    "allowAddAccountingContext": {
+                      "type": "boolean"
+                    },
+                    "allowAddPriceFeed": {
+                      "type": "boolean"
+                    },
+                    "ownerMustSendPayouts": {
+                      "type": "boolean"
+                    },
+                    "holdFees": {
+                      "type": "boolean"
+                    },
+                    "scopeCashOutsToLocalBalances": {
+                      "type": "boolean",
+                      "description": "false: cash outs count every chain's supply and surplus (through the suckers). true: only this chain's. Recommended: false, which is what revnet.money sends."
+                    },
+                    "useDataHookForCashOut": {
+                      "type": "boolean"
+                    },
+                    "metadata": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reservedPercent",
+                    "cashOutTaxRate",
+                    "baseCurrency",
+                    "pausePay",
+                    "pauseCreditTransfers",
+                    "allowOwnerMinting",
+                    "allowSetCustomToken",
+                    "allowTerminalMigration",
+                    "allowSetTerminals",
+                    "allowSetController",
+                    "allowAddAccountingContext",
+                    "allowAddPriceFeed",
+                    "ownerMustSendPayouts",
+                    "holdFees",
+                    "scopeCashOutsToLocalBalances",
+                    "useDataHookForCashOut",
+                    "metadata"
+                  ],
+                  "additionalProperties": false
+                },
+                "splitGroups": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "groupId": {
+                        "type": "string",
+                        "maxLength": 78,
+                        "pattern": "^(0|[1-9][0-9]*)$",
+                        "description": "Payout splits: uint256(uint160(token)) as a decimal string (native ETH is 0x000000000000000000000000000000000000EEEe, group 61166). Reserved token splits: 1."
+                      },
+                      "splits": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "percent": {
+                              "description": "Share of the split group, out of 1,000,000,000. 500,000,000 = 50%.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "projectId": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "beneficiary": {
+                              "type": "string"
+                            },
+                            "preferAddToBalance": {
+                              "type": "boolean"
+                            },
+                            "lockedUntil": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "hook": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "percent",
+                            "projectId",
+                            "beneficiary",
+                            "preferAddToBalance",
+                            "lockedUntil",
+                            "hook"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "groupId",
+                      "splits"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "fundAccessLimitGroups": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "terminal": {
+                        "type": "string"
+                      },
+                      "token": {
+                        "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+                        "type": "string"
+                      },
+                      "payoutLimits": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "currency": {
+                              "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "amount",
+                            "currency"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "surplusAllowances": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "amount": {
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "currency": {
+                              "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "amount",
+                            "currency"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "terminal",
+                      "token",
+                      "payoutLimits",
+                      "surplusAllowances"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "mustStartAtOrAfter",
+                "duration",
+                "weight",
+                "weightCutPercent",
+                "approvalHook",
+                "metadata",
+                "splitGroups",
+                "fundAccessLimitGroups"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "terminalConfigurations": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "terminal": {
+                  "type": "string"
+                },
+                "accountingContextsToAccept": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "token": {
+                        "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+                        "type": "string"
+                      },
+                      "decimals": {
+                        "description": "Token decimals. Native ETH uses 18.",
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      },
+                      "currency": {
+                        "description": "Usually uint32(uint160(token)); native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166.",
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "token",
+                      "decimals",
+                      "currency"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "terminal",
+                "accountingContextsToAccept"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "memo": {
+            "default": "",
+            "type": "string",
+            "maxLength": 4096
+          },
+          "salt": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$"
+          }
+        },
+        "required": [
+          "chainId",
+          "account",
+          "owner",
+          "deployTiersHookConfig",
+          "projectUri",
+          "rulesetConfigurations",
+          "terminalConfigurations",
+          "salt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_revnet_deploy",
+      "description": "Prepare a complete typed revnet deployment: stages, issuance, splits, accounting contexts, bridges and optional 721/Croptop settings, with a live per-chain creation fee. For a multi-chain launch, pass chainIds and the sucker registry fills the bridges.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "anyOf": [
+              {
+                "type": "number",
+                "const": 1
+              },
+              {
+                "type": "number",
+                "const": 10
+              },
+              {
+                "type": "number",
+                "const": 8453
+              },
+              {
+                "type": "number",
+                "const": 42161
+              },
+              {
+                "type": "number",
+                "const": 11155111
+              },
+              {
+                "type": "number",
+                "const": 11155420
+              },
+              {
+                "type": "number",
+                "const": 84532
+              },
+              {
+                "type": "number",
+                "const": 421614
+              }
+            ]
+          },
+          "account": {
+            "type": "string"
+          },
+          "config": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "ticker": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "uri": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "salt": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{64}$"
+                  }
+                },
+                "required": [
+                  "name",
+                  "ticker",
+                  "uri",
+                  "salt"
+                ],
+                "additionalProperties": false
+              },
+              "baseCurrency": {
+                "description": "Currency that issuance is priced in: 1 = ETH, 2 = USD. Use 1 for ETH, not 61166 (native ETH's accounting currency). A token's own currency, uint32(uint160(token)), applies only when payments come in that token or JBPrices has a feed for it.",
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "maxLength": 78
+                  }
+                ]
+              },
+              "operator": {
+                "type": "string"
+              },
+              "scopeCashOutsToLocalBalances": {
+                "type": "boolean",
+                "description": "false: cash outs count every chain's supply and surplus (through the suckers). true: only this chain's. Recommended: false, which is what revnet.money sends."
+              },
+              "stageConfigurations": {
+                "minItems": 1,
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "startsAtOrAfter": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "autoIssuances": {
+                      "maxItems": 32,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "chainId": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "maxLength": 78
+                              }
+                            ]
+                          },
+                          "count": {
+                            "type": "string",
+                            "maxLength": 78,
+                            "pattern": "^(0|[1-9][0-9]*)$"
+                          },
+                          "beneficiary": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "chainId",
+                          "count",
+                          "beneficiary"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "splitPercent": {
+                      "description": "Share of new tokens sent to this stage's splits, out of 10,000. 2000 = 20%.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "splits": {
+                      "maxItems": 32,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "percent": {
+                            "description": "Share of the split group, out of 1,000,000,000. 500,000,000 = 50%.",
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "maxLength": 78
+                              }
+                            ]
+                          },
+                          "projectId": {
+                            "type": "string",
+                            "maxLength": 78,
+                            "pattern": "^(0|[1-9][0-9]*)$"
+                          },
+                          "beneficiary": {
+                            "type": "string"
+                          },
+                          "preferAddToBalance": {
+                            "type": "boolean"
+                          },
+                          "lockedUntil": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "maxLength": 78
+                              }
+                            ]
+                          },
+                          "hook": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "percent",
+                          "projectId",
+                          "beneficiary",
+                          "preferAddToBalance",
+                          "lockedUntil",
+                          "hook"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "initialIssuance": {
+                      "description": "Tokens issued per one unit of baseCurrency at stage start, with 18 decimals: 1000000000000000000000 = 1,000 tokens.",
+                      "type": "string",
+                      "maxLength": 78,
+                      "pattern": "^(0|[1-9][0-9]*)$"
+                    },
+                    "issuanceCutFrequency": {
+                      "description": "Seconds between issuance cuts.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "issuanceCutPercent": {
+                      "description": "Issuance cut applied every issuanceCutFrequency, out of 1,000,000,000. 0 = no cut.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "cashOutTaxRate": {
+                      "description": "Cash-out tax out of 10,000, at most 9,999. 0 = no tax.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    },
+                    "extraMetadata": {
+                      "description": "Ruleset metadata bits for hooks (uint16, lower 14 bits kept, at most 16,383). Bit 2 (value 4): while this stage is active the operator may add or retry suckers with REVDeployer.deploySuckersFor; the launch suckers deploy without it. A cross-chain revnet must set it on every stage, because the SDK refuses to encode one that does not. Bits 0 (1) and 1 (2): the NFT hook pauses transfers of pausable tiers, and pending reserve mints. Recommended: include 4 on every stage, even for one chain, so chains can be added later. revnet.money also sets bit 0, so pausable NFT tiers cannot be transferred, and sends 5.",
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(0|[1-9][0-9]*)$",
+                          "maxLength": 78
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "startsAtOrAfter",
+                    "autoIssuances",
+                    "splitPercent",
+                    "splits",
+                    "initialIssuance",
+                    "issuanceCutFrequency",
+                    "issuanceCutPercent",
+                    "cashOutTaxRate",
+                    "extraMetadata"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "description",
+              "baseCurrency",
+              "operator",
+              "scopeCashOutsToLocalBalances",
+              "stageConfigurations"
+            ],
+            "additionalProperties": false
+          },
+          "accountingContexts": {
+            "minItems": 1,
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "description": "Token address; native ETH is 0x000000000000000000000000000000000000EEEe.",
+                  "type": "string"
+                },
+                "decimals": {
+                  "description": "Token decimals. Native ETH uses 18.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "currency": {
+                  "description": "Usually uint32(uint160(token)); native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "token",
+                "decimals",
+                "currency"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "chainIds": {
+            "description": "Every chain the revnet launches on, including chainId. Instead of suckerConfig: the sucker registry fills the bridges to the other chains, salted with config.description.salt, mapping native ETH and USDC when accepted.",
+            "minItems": 1,
+            "maxItems": 8,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "const": 1
+                },
+                {
+                  "type": "number",
+                  "const": 10
+                },
+                {
+                  "type": "number",
+                  "const": 8453
+                },
+                {
+                  "type": "number",
+                  "const": 42161
+                },
+                {
+                  "type": "number",
+                  "const": 11155111
+                },
+                {
+                  "type": "number",
+                  "const": 11155420
+                },
+                {
+                  "type": "number",
+                  "const": 84532
+                },
+                {
+                  "type": "number",
+                  "const": 421614
+                }
+              ]
+            }
+          },
+          "bridge": {
+            "description": "With chainIds. Default ccip. ccip links any chain pair. native links Ethereum with one L2 and maps native ETH only. both adds a native sucker where one exists.",
+            "type": "string",
+            "enum": [
+              "ccip",
+              "native",
+              "both"
+            ]
+          },
+          "suckerConfig": {
+            "description": "Explicit bridges, instead of chainIds. Use { salt, deployerConfigurations: [] } for one chain.",
+            "type": "object",
+            "properties": {
+              "salt": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{64}$"
+              },
+              "deployerConfigurations": {
+                "maxItems": 16,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "deployer": {
+                      "type": "string"
+                    },
+                    "peer": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{64}$"
+                    },
+                    "mappings": {
+                      "minItems": 1,
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "localToken": {
+                            "type": "string"
+                          },
+                          "minGas": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "string",
+                                "pattern": "^(0|[1-9][0-9]*)$",
+                                "maxLength": 78
+                              }
+                            ]
+                          },
+                          "remoteToken": {
+                            "type": "string",
+                            "pattern": "^0x[a-fA-F0-9]{64}$"
+                          }
+                        },
+                        "required": [
+                          "localToken",
+                          "minGas",
+                          "remoteToken"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "deployer",
+                    "peer",
+                    "mappings"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "salt",
+              "deployerConfigurations"
+            ],
+            "additionalProperties": false
+          },
+          "tiered721Config": {
+            "type": "object",
+            "properties": {
+              "baseline721HookConfiguration": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "symbol": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "baseUri": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "tokenUriResolver": {
+                    "type": "string"
+                  },
+                  "contractUri": {
+                    "type": "string",
+                    "maxLength": 4096
+                  },
+                  "tiersConfig": {
+                    "type": "object",
+                    "properties": {
+                      "tiers": {
+                        "maxItems": 32,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "price": {
+                              "description": "Tier price in the tiers currency, with the tiers decimals.",
+                              "type": "string",
+                              "maxLength": 78,
+                              "pattern": "^(0|[1-9][0-9]*)$"
+                            },
+                            "initialSupply": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "votingUnits": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "reserveFrequency": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "reserveBeneficiary": {
+                              "type": "string"
+                            },
+                            "encodedIpfsUri": {
+                              "type": "string",
+                              "pattern": "^0x[a-fA-F0-9]{64}$"
+                            },
+                            "category": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "discountPercent": {
+                              "description": "Tier price discount, out of 200. 200 = free.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "flags": {
+                              "type": "object",
+                              "properties": {
+                                "allowOwnerMint": {
+                                  "type": "boolean"
+                                },
+                                "useReserveBeneficiaryAsDefault": {
+                                  "type": "boolean"
+                                },
+                                "transfersPausable": {
+                                  "type": "boolean"
+                                },
+                                "useVotingUnits": {
+                                  "type": "boolean"
+                                },
+                                "cantBeRemoved": {
+                                  "type": "boolean"
+                                },
+                                "cantIncreaseDiscountPercent": {
+                                  "type": "boolean"
+                                },
+                                "cantBuyWithCredits": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "allowOwnerMint",
+                                "useReserveBeneficiaryAsDefault",
+                                "transfersPausable",
+                                "useVotingUnits",
+                                "cantBeRemoved",
+                                "cantIncreaseDiscountPercent",
+                                "cantBuyWithCredits"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "splitPercent": {
+                              "description": "Share of the tier price sent to the tier's splits, out of 1,000,000,000.",
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(0|[1-9][0-9]*)$",
+                                  "maxLength": 78
+                                }
+                              ]
+                            },
+                            "splits": {
+                              "maxItems": 32,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "percent": {
+                                    "description": "Share of the split group, out of 1,000,000,000. 500,000,000 = 50%.",
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]*)$",
+                                        "maxLength": 78
+                                      }
+                                    ]
+                                  },
+                                  "projectId": {
+                                    "type": "string",
+                                    "maxLength": 78,
+                                    "pattern": "^(0|[1-9][0-9]*)$"
+                                  },
+                                  "beneficiary": {
+                                    "type": "string"
+                                  },
+                                  "preferAddToBalance": {
+                                    "type": "boolean"
+                                  },
+                                  "lockedUntil": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number"
+                                      },
+                                      {
+                                        "type": "string",
+                                        "pattern": "^(0|[1-9][0-9]*)$",
+                                        "maxLength": 78
+                                      }
+                                    ]
+                                  },
+                                  "hook": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "percent",
+                                  "projectId",
+                                  "beneficiary",
+                                  "preferAddToBalance",
+                                  "lockedUntil",
+                                  "hook"
+                                ],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": [
+                            "price",
+                            "initialSupply",
+                            "votingUnits",
+                            "reserveFrequency",
+                            "reserveBeneficiary",
+                            "encodedIpfsUri",
+                            "category",
+                            "discountPercent",
+                            "flags",
+                            "splitPercent",
+                            "splits"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "currency": {
+                        "description": "JB currency ID: uint32(uint160(token)) for a token (native ETH is 0x000000000000000000000000000000000000EEEe, currency 61166), or 1 = ETH and 2 = USD.",
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      },
+                      "decimals": {
+                        "description": "Decimals of tier prices.",
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^(0|[1-9][0-9]*)$",
+                            "maxLength": 78
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "tiers",
+                      "currency",
+                      "decimals"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "flags": {
+                    "type": "object",
+                    "properties": {
+                      "noNewTiersWithReserves": {
+                        "type": "boolean"
+                      },
+                      "noNewTiersWithVotes": {
+                        "type": "boolean"
+                      },
+                      "noNewTiersWithOwnerMinting": {
+                        "type": "boolean"
+                      },
+                      "preventOverspending": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "noNewTiersWithReserves",
+                      "noNewTiersWithVotes",
+                      "noNewTiersWithOwnerMinting",
+                      "preventOverspending"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "name",
+                  "symbol",
+                  "baseUri",
+                  "tokenUriResolver",
+                  "contractUri",
+                  "tiersConfig",
+                  "flags"
+                ],
+                "additionalProperties": false
+              },
+              "salt": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{64}$"
+              },
+              "preventOperatorAdjustingTiers": {
+                "type": "boolean"
+              },
+              "preventOperatorUpdatingMetadata": {
+                "type": "boolean"
+              },
+              "preventOperatorMinting": {
+                "type": "boolean"
+              },
+              "preventOperatorIncreasingDiscountPercent": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "baseline721HookConfiguration",
+              "salt",
+              "preventOperatorAdjustingTiers",
+              "preventOperatorUpdatingMetadata",
+              "preventOperatorMinting",
+              "preventOperatorIncreasingDiscountPercent"
+            ],
+            "additionalProperties": false
+          },
+          "allowedPosts": {
+            "maxItems": 16,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "minimumPrice": {
+                  "type": "string",
+                  "maxLength": 78,
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "minimumTotalSupply": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "maximumTotalSupply": {
+                  "description": "0 means unlimited; actual minted NFT tiers remain subject to the store supply cap.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "maximumSplitPercent": {
+                  "description": "Largest tier split a poster may set, out of 1,000,000,000.",
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(0|[1-9][0-9]*)$",
+                      "maxLength": 78
+                    }
+                  ]
+                },
+                "allowedAddresses": {
+                  "maxItems": 32,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "category",
+                "minimumPrice",
+                "minimumTotalSupply",
+                "maximumTotalSupply",
+                "maximumSplitPercent",
+                "allowedAddresses"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "chainId",
+          "account",
+          "config",
+          "accountingContexts"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "prepare_auto_issue",
+      "description": "Prepare an eligible revnet stage auto-issuance for a beneficiary after verifying live deployment and claim state.",
+      "kind": "prepare",
+      "sources": [
+        "onchain"
+      ],
+      "transaction": true,
+      "effects": {
+        "externalMutation": false,
+        "idempotent": true
+      },
+      "inputJsonSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "chainId": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "const": 1
+                  },
+                  {
+                    "type": "number",
+                    "const": 10
+                  },
+                  {
+                    "type": "number",
+                    "const": 8453
+                  },
+                  {
+                    "type": "number",
+                    "const": 42161
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155111
+                  },
+                  {
+                    "type": "number",
+                    "const": 11155420
+                  },
+                  {
+                    "type": "number",
+                    "const": 84532
+                  },
+                  {
+                    "type": "number",
+                    "const": 421614
+                  }
+                ]
+              },
+              "projectId": {
+                "type": "string",
+                "maxLength": 78,
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "version": {
+                "default": 6,
+                "type": "number",
+                "const": 6
+              }
+            },
+            "required": [
+              "chainId",
+              "projectId"
+            ],
+            "additionalProperties": false
+          },
+          "account": {
+            "type": "string"
+          },
+          "stageId": {
+            "type": "string",
+            "maxLength": 78,
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "beneficiary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "account",
+          "stageId",
+          "beneficiary"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

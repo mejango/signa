@@ -4,7 +4,7 @@ Normal execution uses fresh wallet approval. Optional recurring bot permissions 
 
 ## Monitoring
 
-Signa has no production monitor today. CI (`.github/workflows/ci.yml`) runs the release checks and builds the image; it does not probe the live service. `scripts/check-production.mjs` is inherited from Center and is not scheduled for Signa. The README lists adding a Signa production monitor after activation, with reviewed live endpoints and readiness criteria, as open work.
+Signa has no production monitor today. CI (`.github/workflows/ci.yml`) runs the release checks and builds the image; it does not probe the live service. The unused inherited Center monitor was removed with its server code. The README lists adding a Signa production monitor after activation, with reviewed live endpoints and readiness criteria, as open work.
 
 What exists to inspect by hand:
 

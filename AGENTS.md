@@ -1,4 +1,4 @@
-# Keep Center simple
+# Keep Signa simple
 
 Apply [Ponytail](https://github.com/DietrichGebert/ponytail/blob/974d940a1c5344210874150b98ff0d2c861fab6a/skills/ponytail/SKILL.md) when changing or reviewing this repository.
 

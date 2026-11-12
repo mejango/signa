@@ -18,11 +18,7 @@ export const REST_DOCUMENTS = [
   "AUTHENTICATION",
   "API",
   "AI_GUIDE",
-  "PROJECT_INTENTS",
-  "CONTRACTS",
-  "INDEXER",
   "TRANSACTIONS",
-  "OMNICHAIN",
   "SPONSORSHIP",
   "SMART_ACCOUNTS",
   "SESSIONS",
@@ -32,9 +28,10 @@ export const REST_DOCUMENTS = [
   "SIGNA_MIGRATION",
 ] as const;
 
+const protocolDocuments = new Set(["project-intents", "contracts", "indexer", "omnichain"]);
+
 export interface RestSite {
   app: ReturnType<typeof createRestApp>;
-  surface?: "wallet";
   wallet?: Hono;
   /** Origins served entirely by the wallet app (its own and retired ones). */
   walletOrigins?: readonly string[];
@@ -103,7 +100,9 @@ export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
     context.body(site.apiTerms ?? "{}", 200, { ...REST_DOCS_HEADERS, "Content-Type": "application/json; charset=utf-8" }),
   );
   app.get("/api/docs/:name", (context) => {
-    const name = context.req.param("name").replace(/\.md$/i, "").toLowerCase();
+    const name = context.req.param("name").replace(/\.md$/i, "").toLowerCase().replaceAll("_", "-");
+    if (protocolDocuments.has(name))
+      return context.redirect(`https://juicebox.center/api/docs/${name}${context.req.param("name").toLowerCase().endsWith(".md") ? ".md" : ""}`, 302);
     const document = site.documents.get(name);
     if (!document)
       return context.json(
@@ -115,9 +114,7 @@ export function mountRestSite(app: Hono<JbcenterEnv>, site: RestSite): void {
         },
         404,
       );
-    if (site.surface === "wallet")
-      return context.redirect(`https://juicebox.center/api/docs/${name.replaceAll("_", "-")}${context.req.param("name").toLowerCase().endsWith(".md") ? ".md" : ""}`, 302);
-    if (!context.req.param("name").endsWith(".md") && !context.req.header("Accept")?.includes("text/markdown"))
+    if (!context.req.param("name").toLowerCase().endsWith(".md") && !context.req.header("Accept")?.includes("text/markdown"))
       return context.html(guidePage(name, document, assets), 200, { ...REST_DOCS_HEADERS, Vary: "Accept" });
     return context.text(document, 200, {
       ...REST_DOCS_HEADERS, Vary: "Accept",

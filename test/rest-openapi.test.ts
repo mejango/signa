@@ -1,18 +1,14 @@
 import { readFile } from "node:fs/promises";
-import { createProtocolOperations, createServices, loadConfig } from "@juicebox/mcp/host";
+import { protocolOperations as operations } from "./fixtures/protocol-operations.js";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { beforeAll, describe, expect, it } from "vitest";
 import { operationDescriptors } from "../src/rest/app.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
 import { apiDocsCss, apiDocsPage, apiReferencePages, apiSearchTerms, buildRestOpenApi, type OpenApiDocument } from "../src/rest/docs/index.js";
-import { createIndexerReadService } from "../src/rest/indexer/index.js";
 
-const origin = "https://juicebox.center";
-const indexer = createIndexerReadService({});
-const operations = createProtocolOperations(createServices(loadConfig({ NODE_ENV: "test", PUBLIC_ORIGIN: origin,
-  PLAN_SECRET: "openapi-offline-tests-only-32-byte-secret" })));
+const origin = "https://api.signa.center";
 let spec: OpenApiDocument;
-beforeAll(async () => { spec = buildRestOpenApi({ contracts: await getContractCatalog(), indexer, operations, publicOrigin: origin }); });
+beforeAll(async () => { spec = buildRestOpenApi({ contracts: await getContractCatalog(), operations, publicOrigin: origin }); });
 
 function walk(value: unknown, visit: (value: Record<string, unknown>) => void): void {
   if (value && typeof value === "object") {
@@ -96,10 +92,7 @@ describe("REST OpenAPI contract", () => {
     for (const excluded of ["pin_project_metadata", "inspect_plan", "simulate_plan", "verify_plan"]) {
       expect(spec.paths[`/api/v1/operations/${excluded}`]).toBeUndefined();
     }
-    for (const entity of indexer.catalog().entities) {
-      expect(Boolean(spec.paths[`/api/v1/indexer/${entity.name}`])).toBe(entity.supported);
-      if (entity.supported) expect(spec.components.schemas[`IndexerRow_${entity.name}`]).toBeDefined();
-    }
+
   });
 
   it("models custom request signatures, public discovery, JSON query serialization and distinct transaction signatures", () => {
@@ -115,10 +108,6 @@ describe("REST OpenAPI contract", () => {
         expect(headers.find((header) => header.name === "Idempotency-Key")?.required).toBe(auth.idempotencyRequired);
       }
     }
-    const method = spec.paths["/api/v1/protocol/read"]!.get!;
-    const args = (method.parameters as Record<string, unknown>[]).find((parameter) => parameter.name === "args")!;
-    expect(args.content).toHaveProperty("application/json");
-    expect(args.schema).toBeUndefined();
     expect(spec.components.schemas.SignedTransactionSubmission!.required).toEqual(["rawSignedTransaction"]);
     expect(spec.paths["/api/v1/plans"]!.post!.responses).toHaveProperty("201");
     expect(spec.paths["/api/v1/plans/{id}/submissions"]!.post!.responses).toHaveProperty("202");
@@ -154,25 +143,7 @@ describe("REST OpenAPI contract", () => {
     for (const scopes of [[], ["relay"], ["plan"], ["read", "relay"], ["plan", "read"], ["read", "read"]]) expect(grant(scopes)).toBe(false);
   });
 
-  it("validates an actual normalized indexer response and its distinct list/read integer bounds", async () => {
-    const service = createIndexerReadService({ mainnetUrl: "https://indexer.example.invalid/graphql", fetchJson: async () => ({ data: {
-      projects: { items: [{ version: 6, chainId: 1, projectId: 1 }], totalCount: 1,
-        pageInfo: { hasNextPage: false, hasPreviousPage: false, startCursor: "first", endCursor: "first" } },
-    } }) });
-    const page = await service.list("project", { network: "mainnet", chainId: 1, projectId: "1", fields: ["version"] });
-    const ajv = new Ajv2020({ strict: false, validateFormats: false });
-    ajv.addSchema(JSON.parse(JSON.stringify({ $id: "urn:juicebox:indexer-response-schemas", $defs: spec.components.schemas }).replaceAll("#/components/schemas/", "#/$defs/")));
-    const validate = ajv.compile({ $ref: "urn:juicebox:indexer-response-schemas#/$defs/IndexerPage_project" });
-    expect(validate(page), JSON.stringify(validate.errors)).toBe(true);
-    expect(page.items[0]!.projectId).toBe("1");
-    const listProjectId = (spec.paths["/api/v1/indexer/project"]!.get!.parameters as Record<string, unknown>[]).find((parameter) => parameter.name === "projectId")!;
-    const listId = ajv.compile(listProjectId.schema as object);
-    expect(listId("2147483647")).toBe(true);
-    expect(listId("2147483648")).toBe(false);
-    const recordId = ajv.compile({ $ref: "urn:juicebox:indexer-response-schemas#/$defs/IndexerProjectId" });
-    expect(recordId("9007199254740991")).toBe(true);
-    for (const value of ["9007199254740992", "01", "-1", "1e3", 1]) expect(recordId(value)).toBe(false);
-  });
+
 });
 
 describe("static REST documentation", () => {
@@ -237,7 +208,7 @@ describe("static REST documentation", () => {
     }
     expect(html).toContain('name="viewport"');
     expect(html).toContain('href="/api/v1/openapi.json"');
-    expect(html).toContain('href="/api/docs/ai-guide"');
+    expect(html).toContain('href="/api/docs/client"');
     expect(html + apiDocsCss).not.toContain("·");
     expect(apiDocsCss).toContain("@media(max-width:620px)");
     expect(apiDocsCss).not.toMatch(/border-radius\s*:/);
@@ -246,7 +217,7 @@ describe("static REST documentation", () => {
   it("rejects credential-bearing or non-origin documentation hosts", async () => {
     const contracts = await getContractCatalog();
     for (const publicOrigin of ["https://secret@example.com", "https://example.com/path", "https://example.com?q=1", "http://example.com", "javascript:alert(1)"]) {
-      expect(() => buildRestOpenApi({ contracts, indexer, operations, publicOrigin })).toThrow();
+      expect(() => buildRestOpenApi({ contracts, operations, publicOrigin })).toThrow();
     }
   });
 });

@@ -3,7 +3,7 @@ import { canonical as canonicalValue } from "./sponsorship/validation.js";
 import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import type { Address, Hex } from "viem";
-import type { ProtocolOperations } from "@juicebox/mcp/host";
+import type { ProtocolOperations } from "../signaProtocol.js";
 import type { Store } from "../store.js";
 import {
   createRestAuthRouter,
@@ -14,12 +14,7 @@ import {
   type RestPrincipal,
   type SignedRequestInput,
 } from "./auth/index.js";
-import {
-  ContractCatalog,
-  functionInputJsonSchema,
-  functionOutputJsonSchema,
-  type ContractCategory,
-} from "./contracts/catalog.js";
+import type { ContractCatalog } from "./contracts/catalog.js";
 import { RestError, type RestActor, type RestBlockEvidence, type RestPlanDraft } from "./core.js";
 import {
   restRequest,
@@ -29,13 +24,6 @@ import {
   timedAuthPhase,
   withRestRequest,
 } from "./context.js";
-import type { IndexerReadInput, IndexerReadService } from "./indexer/index.js";
-import type {
-  createProtocolReadService,
-  PrepareInput,
-  ReadInput,
-  ResolveInput,
-} from "./protocol/index.js";
 import type { TransactionService } from "./transactions/service.js";
 import type { RelayrSponsorshipService } from "./sponsorship/index.js";
 import type { SessionService } from "./sessions/service.js";
@@ -54,7 +42,6 @@ import type {
 import {
   integer,
   jsonBody,
-  jsonValue,
   object,
   problem,
   query,
@@ -68,13 +55,9 @@ import {
 } from "./http.js";
 
 export interface RestDependencies {
-  /** Omit standalone protocol reference routes while retaining account execution. */
-  surface?: "wallet";
   auth: RestAuth;
   quota: Pick<Store, "consumeRequest">;
   contracts: ContractCatalog;
-  protocol: ReturnType<typeof createProtocolReadService>;
-  indexer: IndexerReadService;
   operations: ProtocolOperations;
   transactions: TransactionService;
   sponsorship?: RelayrSponsorshipService;
@@ -83,13 +66,6 @@ export interface RestDependencies {
   sessions?: SessionService;
   userOperations?: UserOperationService;
   walletPayments?: Pick<PostgresWalletPaymentReviewStore, 'prepare' | 'getForApp'>;
-  omnichain?: {
-    getProjectGroup(
-      project: { chainId: number; projectId: string; version: 6 },
-      options: { source: "onchain" | "bendystraw"; maxMembers?: number },
-      signal?: AbortSignal,
-    ): Promise<unknown>;
-  };
   openapi?: unknown;
   maxConcurrentRequests?: number;
 }
@@ -102,28 +78,10 @@ const actor = (principal: RestPrincipal): RestActor => ({
   accountId: principal.account.id,
   principalId: principal.principalId,
 });
-const page = (params: URLSearchParams) => ({
-  offset: integer(params.get("offset") ?? "0", "offset", 100_000),
-  limit: integer(params.get("limit") ?? "25", "limit", 100),
-});
-const nonTransactionPreparations = new Set([
-  "prepare_project_metadata",
-  "prepare_intent",
-]);
-const statelessPlanOperations = new Set([
-  "inspect_plan",
-  "simulate_plan",
-  "verify_plan",
-]);
-
 export function operationDescriptors(operations: ProtocolOperations) {
   return operations
     .list()
-    .filter(
-      (operation) =>
-        !operation.effects.externalMutation &&
-        !statelessPlanOperations.has(operation.id),
-    )
+    .filter((operation) => operation.transaction && !operation.effects.externalMutation)
     .map((operation) => ({
       id: operation.id,
       description: operation.description,
@@ -134,63 +92,9 @@ export function operationDescriptors(operations: ProtocolOperations) {
       transaction: operation.transaction,
       effects: operation.effects,
       inputJsonSchema: operation.inputJsonSchema,
-      method: operation.transaction ? "POST" : "GET",
-      path: operation.transaction
-        ? `${REST_PREFIX}/operations/${operation.id}/plans`
-        : `${REST_PREFIX}/operations/${operation.id}`,
+      method: "POST",
+      path: `${REST_PREFIX}/operations/${operation.id}/plans`,
     }));
-}
-
-function source(params: URLSearchParams): "onchain" | "bendystraw" {
-  const value = required(params, "source");
-  if (value !== "onchain" && value !== "bendystraw")
-    throw new RestError(
-      400,
-      "INVALID_SOURCE",
-      "Choose onchain or bendystraw explicitly",
-    );
-  return value;
-}
-
-function protocolInput(params: URLSearchParams, read: true): ReadInput;
-function protocolInput(params: URLSearchParams, read: false): ResolveInput;
-function protocolInput(
-  params: URLSearchParams,
-  read: boolean,
-): ReadInput | ResolveInput {
-  const common = {
-    chainId: integer(required(params, "chainId"), "chainId"),
-    contractId: required(params, "contractId"),
-    ...(params.has("address") ? { address: required(params, "address") } : {}),
-    ...(params.has("projectId")
-      ? { projectId: required(params, "projectId") }
-      : {}),
-    ...(params.has("blockNumber")
-      ? { blockNumber: required(params, "blockNumber") }
-      : {}),
-  };
-  if (!read) return common;
-  const args = jsonValue(required(params, "args"), "args");
-  if (!Array.isArray(args))
-    throw new RestError(
-      400,
-      "INVALID_ARGUMENTS",
-      "Function arguments must be a JSON array",
-    );
-  return { ...common, function: required(params, "function"), args };
-}
-
-function indexerInput(params: URLSearchParams): IndexerReadInput {
-  const value: Record<string, unknown> = {
-    network: required(params, "network"),
-  };
-  for (const key of ["chainId", "limit"])
-    if (params.has(key)) value[key] = integer(required(params, key), key);
-  for (const key of ["projectId", "cursor"])
-    if (params.has(key)) value[key] = required(params, key);
-  for (const key of ["id", "filters", "fields", "orderBy"])
-    if (params.has(key)) value[key] = jsonValue(required(params, key), key);
-  return value as unknown as IndexerReadInput;
 }
 
 /** An admission slower than this logs which phase waited. */
@@ -201,7 +105,6 @@ const SLOW_AUTH_MS = 300;
 
 export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
   const app = new Hono<RestEnv>();
-  const reference = deps.surface === "wallet" ? undefined : app;
   const descriptors = operationDescriptors(deps.operations);
   const byId = new Map(descriptors.map((entry) => [entry.id, entry]));
   let active = 0;
@@ -345,21 +248,17 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
     /** A head read moments ago: the draft's reads are pinned there instead of reading one. */
     at?: RestBlockEvidence,
   ): Promise<RestPlanDraft> => {
-    if (!byId.get(id)?.transaction)
+    if (id !== "contract_calls" && id !== "protocol-contract-calls" && !byId.get(id)?.transaction)
       throw new RestError(
         404,
         "TRANSACTION_OPERATION_NOT_FOUND",
-        deps.surface === "wallet" ? "Choose a transaction operation from the API reference" : "Choose a transaction operation from the catalog",
+        "Choose a transaction operation from the API reference",
       );
     const draft = await deps.operations.prepare(id, input, {
-      source: "onchain",
       signal,
-      ...(at ? { at: { chainId: at.chainId as 8453, blockNumber: at.blockNumber, blockHash: at.blockHash, timestamp: at.timestamp, source: "rpc" } } : {}),
+      ...(at ? { at } : {}),
     });
-    return {
-      ...draft,
-      evidence: draft.evidence.map((item) => ({ ...item, source: "onchain" })),
-    };
+    return draft;
   };
 
   app.get("/", (context) => {
@@ -371,7 +270,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       openapi: `${REST_PREFIX}/openapi.json`,
       accounts: "/accounts",
       capabilities: `${REST_PREFIX}/capabilities`,
-      ...(deps.surface === "wallet" ? { protocolReference: "https://juicebox.center/api" } : {}),
+      protocolReference: "https://juicebox.center/api",
     });
   });
   app.get("/openapi.json", (context) => {
@@ -408,137 +307,9 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       smartAccounts: deps.smartAccounts
         ? await deps.smartAccounts.capabilities()
         : { state: "unavailable" },
-      ...(deps.surface === "wallet" ? { protocolReference: "https://juicebox.center/api" } : {
-        omnichain: {
-          available: Boolean(deps.omnichain),
-          atomicAcrossChains: false,
-          receiptConfirmsBridgeSettlement: false,
-        },
-        sources: {
-          onchain: { canonicalBlockHash: true },
-          bendystraw: {
-            canonicalBlockHash: false,
-            pagination: "cursor",
-            protocolVersion: 6,
-          },
-        },
-        catalogs: {
-          contracts: `${REST_PREFIX}/catalog/contracts`,
-          indexer: `${REST_PREFIX}/catalog/indexer`,
-          operations: `${REST_PREFIX}/catalog/operations`,
-        },
-      }),
+      protocolReference: "https://juicebox.center/api",
     });
   });
-  reference?.get("/catalog/contracts", (context) => {
-    const params = query(context, [
-      "packageId",
-      "category",
-      "chainId",
-      "deployedOnly",
-      "executableOnly",
-      "offset",
-      "limit",
-    ]);
-    for (const key of ["deployedOnly", "executableOnly"])
-      if (params.has(key) && !["true", "false"].includes(params.get(key)!))
-        throw new RestError(
-          400,
-          "INVALID_BOOLEAN",
-          `${key} must be true or false`,
-        );
-    const category = params.get("category");
-    if (
-      category &&
-      !["contract", "abstract", "interface", "library", "script"].includes(
-        category,
-      )
-    )
-      throw new RestError(
-        400,
-        "INVALID_CATEGORY",
-        "Choose a catalog contract category",
-      );
-    const all = deps.contracts.list({
-      ...(params.has("packageId")
-        ? { packageId: required(params, "packageId") }
-        : {}),
-      ...(category ? { category: category as ContractCategory } : {}),
-      ...(params.has("chainId")
-        ? { chainId: integer(required(params, "chainId"), "chainId") }
-        : {}),
-      deployedOnly: params.get("deployedOnly") === "true",
-      executableOnly: params.get("executableOnly") === "true",
-    });
-    const { offset, limit } = page(params);
-    if (limit < 1)
-      throw new RestError(400, "INVALID_LIMIT", "Page limit must be positive");
-    return response(context, {
-      protocolVersion: 6,
-      provenance: deps.contracts.data.deploymentManifest,
-      packages: deps.contracts.data.packages,
-      exclusions: deps.contracts.data.exclusions,
-      items: all.slice(offset, offset + limit).map((item) => ({
-        id: item.id,
-        name: item.name,
-        packageId: item.packageId,
-        category: item.category,
-        executable: item.executable,
-        methodCounts: {
-          read: item.methods.filter((method) => method.kind === "read").length,
-          write: item.methods.filter((method) => method.kind === "write")
-            .length,
-        },
-        chains: item.deployments.map((deployment) => ({
-          chainId: deployment.chainId,
-          status: deployment.status,
-          addresses: deployment.instances.map((instance) => instance.address),
-          instances: deployment.instances.map(({ address, retired, generation }) => ({
-            address, retired, ...(generation ? { generation } : {}),
-          })),
-        })),
-      })),
-      total: all.length,
-      nextOffset: offset + limit < all.length ? offset + limit : null,
-    });
-  });
-  reference?.get("/catalog/contract", (context) => {
-    const params = query(context, ["id"]);
-    return response(context, deps.contracts.get(required(params, "id")));
-  });
-  reference?.get("/catalog/method", (context) => {
-    const params = query(context, ["contractId", "signature", "abiHash"]);
-    const method = deps.contracts.method(
-      required(params, "contractId"),
-      required(params, "signature"),
-      params.get("abiHash") ?? undefined,
-    );
-    return response(context, {
-      ...method,
-      inputJsonSchema: functionInputJsonSchema(method),
-      outputJsonSchema: functionOutputJsonSchema(method),
-    });
-  });
-  reference?.get("/catalog/indexer", (context) => {
-    query(context, []);
-    return response(context, deps.indexer.catalog());
-  });
-  reference?.get("/catalog/operations", (context) => {
-    query(context, []);
-    return response(context, { operations: descriptors });
-  });
-  reference?.get("/catalog/operations/:id", (context) => {
-    query(context, []);
-    const descriptor = byId.get(context.req.param("id"));
-    if (!descriptor)
-      throw new RestError(
-        404,
-        "OPERATION_NOT_FOUND",
-        "Choose an operation from the catalog",
-      );
-    return response(context, descriptor);
-  });
-
   app.route(
     "/",
     createRestAuthRouter(deps.auth, {
@@ -548,186 +319,6 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
     }),
   );
 
-  reference?.get("/protocol/resolve", async (context) => {
-    const params = query(context, [
-      "chainId",
-      "contractId",
-      "address",
-      "projectId",
-      "blockNumber",
-    ]);
-    await authenticate(context, ["read"]);
-    return response(
-      context,
-      await deps.protocol.resolve(
-        protocolInput(params, false),
-        context.get("restSignal"),
-      ),
-    );
-  });
-  reference?.get("/protocol/read", async (context) => {
-    const params = query(context, [
-      "chainId",
-      "contractId",
-      "address",
-      "projectId",
-      "blockNumber",
-      "function",
-      "args",
-    ]);
-    await authenticate(context, ["read"]);
-    return response(
-      context,
-      await deps.protocol.read(
-        protocolInput(params, true),
-        context.get("restSignal"),
-      ),
-    );
-  });
-  reference?.get("/indexer/status", async (context) => {
-    const params = query(context, ["network"]);
-    await authenticate(context, ["read"]);
-    return response(
-      context,
-      await deps.indexer.status(
-        { network: required(params, "network") as "mainnet" | "testnet" },
-        context.get("restSignal"),
-      ),
-    );
-  });
-  reference?.get("/indexer/:entity/record", async (context) => {
-    const params = query(context, [
-      "network",
-      "chainId",
-      "projectId",
-      "id",
-      "fields",
-    ]);
-    await authenticate(context, ["read"]);
-    return response(
-      context,
-      await deps.indexer.read(
-        context.req.param("entity"),
-        indexerInput(params),
-        context.get("restSignal"),
-      ),
-    );
-  });
-  reference?.get("/indexer/:entity", async (context) => {
-    const params = query(context, [
-      "network",
-      "chainId",
-      "projectId",
-      "filters",
-      "fields",
-      "orderBy",
-      "limit",
-      "cursor",
-    ]);
-    await authenticate(context, ["read"]);
-    return response(
-      context,
-      await deps.indexer.list(
-        context.req.param("entity"),
-        indexerInput(params),
-        context.get("restSignal"),
-      ),
-    );
-  });
-  reference?.get("/projects/:chainId/:projectId", async (context) => {
-    const selected = source(query(context, ["source"]));
-    await authenticate(context, ["read"]);
-    return response(
-      context,
-      await deps.operations.execute(
-        "get_project",
-        {
-          project: {
-            chainId: integer(context.req.param("chainId"), "chainId"),
-            projectId: context.req.param("projectId"),
-            version: 6,
-          },
-        },
-        {
-          source: selected === "bendystraw" ? "indexer" : "onchain",
-          signal: context.get("restSignal"),
-        },
-      ),
-    );
-  });
-  reference?.get("/projects/:chainId/:projectId/omnichain", async (context) => {
-    const params = query(context, ["source", "maxMembers"]);
-    const selected = source(params);
-    await authenticate(context, ["read"]);
-    if (!deps.omnichain)
-      throw new RestError(
-        503,
-        "OMNICHAIN_UNAVAILABLE",
-        "The omnichain reader is not configured",
-      );
-    return response(
-      context,
-      await deps.omnichain.getProjectGroup(
-        {
-          chainId: integer(context.req.param("chainId"), "chainId"),
-          projectId: context.req.param("projectId"),
-          version: 6,
-        },
-        {
-          source: selected,
-          ...(params.has("maxMembers")
-            ? {
-                maxMembers: integer(
-                  required(params, "maxMembers"),
-                  "maxMembers",
-                  8,
-                ),
-              }
-            : {}),
-        },
-        context.get("restSignal"),
-      ),
-    );
-  });
-  reference?.get("/operations/:id", async (context) => {
-    const params = query(context, ["input", "source"]);
-    const id = context.req.param("id");
-    const descriptor = byId.get(id);
-    if (
-      !descriptor ||
-      descriptor.transaction ||
-      (descriptor.kind === "prepare" && !nonTransactionPreparations.has(id))
-    )
-      throw new RestError(
-        404,
-        "READ_OPERATION_NOT_FOUND",
-        "Choose a read operation from the catalog",
-      );
-    const selectable = descriptor.sources.filter(
-      (source) => source === "onchain" || source === "bendystraw",
-    );
-    const selected = params.has("source") ? source(params) : undefined;
-    if (selectable.length > 1 && !selected)
-      throw new RestError(
-        400,
-        "SOURCE_REQUIRED",
-        "Choose onchain or bendystraw explicitly",
-      );
-    await authenticate(context, ["read"]);
-    return response(
-      context,
-      await deps.operations.execute(
-        id,
-        jsonValue(params.get("input") ?? "{}"),
-        {
-          signal: context.get("restSignal"),
-          ...(selected
-            ? { source: selected === "bendystraw" ? "indexer" : "onchain" }
-            : {}),
-        },
-      ),
-    );
-  });
   app.post("/operations/:id/plans", async (context) => {
     query(context, []);
     const { input, principal } = await authenticate(context, ["plan"]);
@@ -771,13 +362,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
         "OPERATION_REQUIRED",
         "Choose a transaction operation or contract_calls",
       );
-    const draft =
-      body.operation === "contract_calls"
-        ? await deps.protocol.prepare(
-            object(body.input) as unknown as PrepareInput,
-            context.get("restSignal"),
-          )
-        : await draftFor(body.operation, body.input, context.get("restSignal"));
+    const draft = await draftFor(body.operation, body.input, context.get("restSignal"));
     return response(
       context,
       await deps.transactions.createPlan(
@@ -1184,10 +769,7 @@ export function createRestApp(deps: RestDependencies): Hono<RestEnv> {
       );
     // A head that fails to read leaves the draft to read its own.
     const at = head ? await head.catch(() => undefined) : undefined;
-    const draft =
-      body.operation === "contract_calls"
-        ? await deps.protocol.prepare(object(body.input) as unknown as PrepareInput, signal)
-        : await draftFor(body.operation, body.input, signal, at);
+    const draft = await draftFor(body.operation, body.input, signal, at);
     const drafted = Date.now();
     const plan = await deps.transactions.createSmartAccountPlan(actor(principal), bindingId, draft, key, hash, at);
     // Where a plan's time goes, for the production log; the request line only has the total.

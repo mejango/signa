@@ -251,23 +251,7 @@ suite('PostgreSQL transaction persistence', () => {
     await admin!.end();
   });
 
-  it('names the distinct pay targets of recent plans, newest first, for route warming', async () => {
-    const pay = (id: string, projectId: string, token: string, createdAt: number): StoredPlan => {
-      const value = plan(id);
-      return { ...value, createdAt, expiresAt: now + 60_000,
-        draft: { ...value.draft, operation: 'pay', summary: { project: { chainId: 8453, projectId, version: 6 }, payment: { token, amount: '1', unit: 'token-base-units' } } } };
-    };
-    await store.create(pay('pay-old', '6', '0x' + 'aa'.repeat(20), now - 100_000), idem('pay-old'), now);
-    await store.create(pay('pay-a', '6', '0x' + 'aa'.repeat(20), now - 5_000), idem('pay-a'), now);
-    await store.create(pay('pay-b', '6', '0x' + 'aa'.repeat(20), now - 1_000), idem('pay-b'), now);
-    await store.create(pay('pay-c', '7', '0x' + 'bb'.repeat(20), now - 3_000), idem('pay-c'), now);
-    await store.create(plan('not-pay'), idem('not-pay'), now);
-    expect(await store.recentPayTargets(now - 10_000, 10)).toEqual([
-      { project: { chainId: 8453, projectId: '6', version: 6 }, token: '0x' + 'aa'.repeat(20) },
-      { project: { chainId: 8453, projectId: '7', version: 6 }, token: '0x' + 'bb'.repeat(20) },
-    ]);
-    expect(await store.recentPayTargets(now - 10_000, 1)).toHaveLength(1);
-  });
+
   it('deduplicates preparation across replicas and reads the durable result after reconstruction', async () => {
     const copies = await Promise.all(
       Array.from({ length: 20 }, (_, index) =>

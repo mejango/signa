@@ -4,15 +4,15 @@ import { open, unlink } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
-const HELP = `Juicebox Center signed REST client (Node 22+)
+const HELP = `Signa signed REST client (Node 22+)
 
   center account --connection juicebox-connection.json
   center send --connection juicebox-connection.json --target /api/v1/...
 
   center keygen --out bot-key.json
   center proof --key bot-key.json --request public-proof-request.json --out registration.json
-  center sign --key bot-key.json --audience https://juicebox.center --account eip155:1:0x... --grant UUID --target /api/v1/... --out signed-request.json
-  center send --key bot-key.json --audience https://juicebox.center --account eip155:1:0x... --grant UUID --target /api/v1/...
+  center sign --key bot-key.json --audience https://api.signa.center --account eip155:1:0x... --grant UUID --target /api/v1/... --out signed-request.json
+  center send --key bot-key.json --audience https://api.signa.center --account eip155:1:0x... --grant UUID --target /api/v1/...
 
 sign/send options: --method GET|POST|PATCH|DELETE --body body.json
   --content-type application/json --idempotency KEY --retries 0|1|2 --timeout-ms 15000

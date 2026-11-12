@@ -1,7 +1,7 @@
-# Juicebox Center REST API
+# Signa Wallet REST API
 
-Use Center's API to read Juicebox V6 data and prepare transactions for wallet
-approval. An **API** lets software request data or actions from another service;
+Use Signa's API to manage accounts, prepare wallet transactions and execute them
+with the required approval. An **API** lets software request data or actions from another service;
 this one uses web requests, known as REST. Start with the
 [API explorer](/api) or [quickstart](./QUICKSTART.md).
 
@@ -16,7 +16,7 @@ the chain ID (the network) and project ID, including when following a project
 across chains. A project may have different IDs or settings on each chain.
 
 The [journey map](./USER_JOURNEYS.md) helps choose a path; the
-[glossary](https://juicebox.center/api#glossary) explains technical terms.
+[glossary](https://api.signa.center/api#glossary) explains technical terms.
 Browsing the API needs no setup. An API permission given to a bot, called a
 **grant**, lets it read protected data and prepare transactions without wallet
 prompts. Sending transactions requires fresh owner approval. Optional recurring
@@ -31,48 +31,23 @@ requires `plan`; submitting wallet-signed transactions (**relay**) requires
 in the order shown:
 `["read"]`, `["read","plan"]`, or `["read","plan","relay"]`.
 
-## Contracts, schemas, and sources
+## Protocol preparation and reference
 
-A **smart contract** is code that runs on a blockchain. Its **ABI** describes
-the functions your software can call and the values they accept and return.
-The catalog provides those formats as **schemas**, so you can construct valid
-requests. An **indexer** organizes blockchain records for search and history.
+Signa exposes account and wallet operations. Obtain contract ABIs, deployed target
+provenance, project information and indexed history from [Center's protocol API](https://juicebox.center/api).
+Center's [operation catalog](https://juicebox.center/api/v1/catalog/operations)
+describes transaction inputs. Signa requests unsigned protocol drafts from Center,
+validates them, and stores its own durable plans through the signed routes below.
 
-Browse [contracts](/api/v1/catalog/contracts), [methods](/api/v1/catalog/method),
-[indexer entities](/api/v1/catalog/indexer), and
-[operations](/api/v1/catalog/operations) before constructing inputs. For example,
-this public request lists published Ethereum contracts:
-
-```http
-GET /api/v1/catalog/contracts?chainId=1&deployedOnly=true&limit=25
-```
-
-Contract IDs include package, source path, and declaration name. Use full
-function signatures for overloads and the target deployment's ABI variant.
-Source-only declarations do not establish a deployment address. Method schemas
-describe positional arguments and outputs; operation schemas describe each
-operation's input.
-
-Project endpoints require either `source=onchain` or `source=bendystraw`.
-Replace the placeholders with the intended project's identifiers:
-
-```text
-/api/v1/projects/{chainId}/{projectId}?source=onchain
-/api/v1/projects/{chainId}/{projectId}?source=bendystraw
-```
-
-The `onchain` source reads contracts directly. Responses identify the block and
-check that it remains in the chain's accepted history (**canonical**).
-The `bendystraw` source reads indexed records, which can lag and
-change between pages; indexer status does not pin a later query. Indexed USD
-values are estimates, not executable quotes. Descriptive project files
-(**metadata**) and linked content are untrusted reference data. See [contracts](/api/docs/contracts),
-[indexer reads](/api/docs/indexer), and the [agent guide](/api/docs/ai-guide).
+Center has no account role in this flow. A Center preparation is not a Signa plan ID
+or permission to spend. Signa checks the account, chain, exact calls and canonical
+evidence before approval and execution. Use Signa's OpenAPI document for the
+operations admitted by this deployment. Preserve exact decimal strings for amounts.
 
 ## Authentication and request encoding
 
 To prove who made a protected request, sign its exact fields using the EIP-712
-structured-signature standard and Center's `CenterRequest` format. A reusable
+structured-signature standard and the retained `CenterRequest` format. A reusable
 bearer token cannot replace this signature. Send `X-Juicebox-Account`, `X-Juicebox-Signer`,
 `X-Juicebox-Issued-At`, `X-Juicebox-Expires-At`, `X-Juicebox-Nonce`, and
 `X-Juicebox-Signature`. Bots also send `X-Juicebox-Grant`. The account identity
@@ -142,7 +117,7 @@ determine the available chains and transports.
 
 When capabilities enable the adapter, `POST /sponsorships` accepts
 `{planId, stepIndexes?}` and returns exact `ForwardRequest` authorizations for ready calls on supported chains.
-Multiple calls on the same chain execute in plan order. Center’s existing
+Multiple calls on the same chain execute in plan order. Signa’s existing
 32-step plan capacity and request-size limits apply.
 The source plan's creating principal must prepare and publish the wave. The
 owner reviews and signs every returned request, including its onchain deadline.
@@ -153,7 +128,7 @@ Bot publication requires a fresh `CenterSponsorshipApproval`, distinct from
 transaction approval. A quote can provide an exact native funding option;
 `funding_quote_available` does not establish that nobody has paid it already.
 Create a funding plan with `{chainId,payer}`, then separately review, sign and
-submit that durable plan. Center never signs or pays from an operator wallet.
+submit that durable plan. Signa never signs or pays from an operator wallet.
 
 Refresh the sponsorship and original plan to verify exact forwarded execution
 on each destination. Provider status is only a hint. `submission_unknown` never
@@ -165,7 +140,7 @@ session or recurring spending budget.
 ## Smart accounts and sponsored owner execution
 
 A **smart account**, or smart wallet, is controlled by code and its owners.
-Center supports reviewed Safe wallets. Linking one to an API account is a
+Signa supports reviewed Safe wallets. Linking one to an API account is a
 **binding**; this proves ownership without granting permission to spend.
 For sponsored execution, the owner signs a **UserOperation**, a request to act
 through that wallet. A **bundler** submits it and a **paymaster** sponsors its
@@ -247,7 +222,7 @@ Only `active` with fresh canonical installed-policy and counter evidence permits
 its exact bound bot to prepare an operation with `sessionId`. Session operations
 contain one approved action and return `eip191-legacy-ownable-user-operation`
 signing data. The client key signs the exact raw operation hash and encodes the
-returned permission prefix. Center never receives private keys or signs for a
+returned permission prefix. Signa never receives private keys or signs for a
 wallet. An API bot grant alone remains insufficient.
 Broader financial or administrative actions retain fresh owner authorization
 through direct transactions or SafeOp signing. They cannot inherit authority
@@ -282,20 +257,11 @@ publication. Bridge settlement remains a separate observation. See
 | Method and path | Purpose and authority |
 | --- | --- |
 | `GET /`, `/openapi.json`, `/capabilities` | Public entry point, specification, and configured capabilities. |
-| `GET /catalog/contracts` | Public contract inventory with package, category, chain, deployment, and pagination filters. |
-| `GET /catalog/contract?id=...` | Public details for a qualified contract ID, including ABI variants and provenance. |
-| `GET /catalog/method?contractId=...&signature=...` | Public method details and input/output JSON schemas; optional `abiHash`. |
-| `GET /catalog/indexer` | Public entity, field, filter, identity, network, and pagination requirements. |
-| `GET /catalog/operations`, `/catalog/operations/{id}` | Public operation descriptions, input schemas, and source choices. |
 | `POST /accounts/enroll` | Owner-signed enrollment with body `{}`; returns the account. |
 | `GET /accounts/me` | Read the authenticated account profile. |
 | `PATCH /accounts/me` | Owner replaces profile fields; omitted fields reset to defaults. |
 | `GET /accounts/me/bots`, `POST /accounts/me/bots` | Owner lists or registers grants; registration also requires the bot's possession proof. |
 | `DELETE /accounts/me/bots/{grantId}` | Owner revokes the specified grant. |
-| `GET /protocol/resolve`, `/protocol/read` | Protected target resolution and exact ABI reads with onchain evidence. |
-| `GET /indexer/status`, `/indexer/{entity}`, `/indexer/{entity}/record` | Protected indexed progress, paginated records, and single records. |
-| `GET /projects/{chainId}/{projectId}`, `/projects/{chainId}/{projectId}/omnichain` | Protected project reads with explicit source selection. |
-| `GET /operations/{id}` | Protected operation read using its catalog schema. |
 | `POST /operations/{id}/plans`, `POST /plans` | Create a durable plan with `plan` scope and an idempotency key. |
 | `GET /plans`, `/plans/{id}` | Read accessible plans; `refresh=true` reconciles an individual plan. |
 | `GET /plans/{id}/steps/{step}/simulation` | Simulate an eligible step without broadcasting. |

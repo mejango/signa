@@ -3,8 +3,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { keccak256, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { z } from "zod";
-import { DomainError, type PlanDraft, type ProtocolOperation, type ProtocolOperations } from "@juicebox/mcp/host";
+import type { ProtocolOperations } from "../src/signaProtocol.js";
 import { createRestApp, type RestDependencies } from "../src/rest/app.js";
 import { timedAuthPhase } from "../src/rest/context.js";
 import { createRestAuth, MemoryAccountStore, type BotScope, type BotGrant, type RestPrincipal } from "../src/rest/auth/index.js";
@@ -13,8 +12,6 @@ import {
   type ClientOptions, type PreparedRequest, type RequestOptions,
 } from "../src/rest/client/index.js";
 import { getContractCatalog } from "../src/rest/contracts/catalog.js";
-import { createIndexerReadService } from "../src/rest/indexer/index.js";
-import { createProtocolReadService } from "../src/rest/protocol/index.js";
 import { type RestActor, type RestPlanDraft, type RestRpc, RestError } from "../src/rest/core.js";
 import { MemoryTransactionStore } from "../src/rest/transactions/memory.js";
 import { TransactionService } from "../src/rest/transactions/service.js";
@@ -23,7 +20,7 @@ import { TransactionService } from "../src/rest/transactions/service.js";
 const owner = privateKeyToAccount(`0x${"06".padStart(64, "0")}`);
 const bot = privateKeyToAccount(`0x${"07".padStart(64, "0")}`);
 const outsider = privateKeyToAccount(`0x${"08".padStart(64, "0")}`);
-const audience = "https://juicebox.center";
+const audience = "https://api.signa.center";
 const now = 1_900_000_000;
 const accountId = accountIdFor(owner.address, 1);
 const target = "0x1111111111111111111111111111111111111111" as Address;
@@ -39,14 +36,13 @@ const appPrincipal = (): RestPrincipal & { kind: "wallet-app" } => ({
   scopes: ["read", "plan", "relay"], requestNonce: newRequestNonce(), idempotencyKey: null,
 });
 
-function descriptor(id: string, transaction: boolean): ProtocolOperation {
+function descriptor(id: string, transaction: boolean): ReturnType<ProtocolOperations["list"]>[number] {
   return {
     id, transaction, kind: transaction ? "prepare" : "read",
     description: `HTTP integration fixture for ${id}`,
     sources: transaction ? ["onchain"] : ["onchain", "indexer"],
-    schema: z.object({}).passthrough(), inputJsonSchema: { type: "object" },
+    inputJsonSchema: { type: "object" },
     effects: { externalMutation: false, idempotent: true },
-    handler: async () => undefined,
   };
 }
 
@@ -71,18 +67,17 @@ async function fixture(overrides: Partial<RestDependencies> = {}) {
     summary: { description: "Unsigned local test plan" }, warnings: [],
   };
   const catalog = await getContractCatalog();
-  const protocol = createProtocolReadService({ catalog, rpc });
-  const prepare = vi.spyOn(protocol, "prepare").mockImplementation(async () => structuredClone(draft));
+  const prepare = vi.fn(async () => structuredClone(draft));
   const entries = [descriptor("get_project", false), descriptor("prepare_pay", true)];
-  const execute = vi.fn<ProtocolOperations["execute"]>(async (_id, input, options) => ({ source: options?.source, input }));
+  const execute = vi.spyOn(transactions, "listPlans").mockResolvedValue({ items: [] });
   const semanticPrepare = vi.fn<ProtocolOperations["prepare"]>(async () => ({
     account: draft.account, operation: "prepare_pay", summary: structuredClone(draft.summary), warnings: [...draft.warnings],
     calls: [{ ...structuredClone(draft.calls[0]!), chainId: 1, decoded: { functionName: "fixture", args: [] } }],
-    evidence: [{ chainId: 1, blockNumber: "100", blockHash, timestamp: String(now), source: "rpc" }],
-  } satisfies PlanDraft));
+    evidence: [{ chainId: 1, blockNumber: "100", blockHash, timestamp: String(now), source: "onchain" }],
+  } satisfies RestPlanDraft));
   const operations: ProtocolOperations = {
-    list: () => entries, get: (id) => entries.find((entry) => entry.id === id)!,
-    execute, prepare: semanticPrepare,
+    list: () => entries,
+    prepare: (id, input, options) => id === "contract_calls" ? prepare() : semanticPrepare(id, input, options),
   };
   const quotas = new Map<string, number>();
   const quota: RestDependencies["quota"] = { consumeRequest: async (key, limit) => {
@@ -92,7 +87,7 @@ async function fixture(overrides: Partial<RestDependencies> = {}) {
   } };
   const app = new Hono();
   app.route("/api/v1", createRestApp({
-    auth, quota, contracts: catalog, protocol, indexer: createIndexerReadService(),
+    auth, quota, contracts: catalog,
     operations, transactions, openapi: { openapi: "3.1.0", paths: {} }, ...overrides,
   }));
   const ownerConfig: ClientOptions = { audience, accountId, signer: owner, now: () => clock.now };
@@ -120,7 +115,7 @@ async function fixture(overrides: Partial<RestDependencies> = {}) {
 
 describe("wallet and account API surface", () => {
   it("omits standalone Center reference reads without invoking their services or authentication", async () => {
-    const f = await fixture({ surface: "wallet" });
+    const f = await fixture();
     const authenticate = vi.spyOn(f.auth, "authenticate");
     const paths = [
       "/catalog/contracts", "/catalog/contract", "/catalog/method", "/catalog/indexer", "/catalog/operations", "/catalog/operations/get_project",
@@ -136,7 +131,7 @@ describe("wallet and account API surface", () => {
   });
 
   it("keeps actual account, grant and transaction planning journeys with their signed authorization", async () => {
-    const f = await fixture({ surface: "wallet" });
+    const f = await fixture();
     expect((await f.send({ requestTarget: "/api/v1/accounts/me" })).status).toBe(200);
     const ownerPlan = await f.send({ method: "POST", requestTarget: "/api/v1/plans", json: { operation: "contract_calls", input: {} }, idempotencyKey: "wallet-owner-plan" });
     expect(ownerPlan.status).toBe(201); expect(f.prepare).toHaveBeenCalledTimes(1);
@@ -154,7 +149,7 @@ describe("wallet and account API surface", () => {
   });
 
   it("keeps execution routes protected and points discovery at Center's protocol reference", async () => {
-    const f = await fixture({ surface: "wallet" });
+    const f = await fixture();
     for (const path of ["/plans", "/sponsorships", "/smart-accounts/binding-challenges", "/smart-accounts/sessions", "/user-operations", "/wallet/payment-reviews"]) {
       expect((await f.app.request(`${audience}/api/v1${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).status, path).toBe(401);
     }
@@ -164,16 +159,7 @@ describe("wallet and account API surface", () => {
     expect(await (await f.app.request(`${audience}/api/v1`)).json()).toMatchObject({ protocolReference: "https://juicebox.center/api", accounts: "/accounts" });
   });
 
-  it("retains the existing full reference surface when no wallet profile is selected", async () => {
-    const f = await fixture();
-    expect((await f.app.request(`${audience}/api/v1/catalog/contracts`)).status).toBe(200);
-    const catalog = await (await f.app.request(`${audience}/api/v1/catalog/operations`)).json();
-    expect(catalog.operations.map((entry: { id: string }) => entry.id)).toEqual(["get_project", "prepare_pay"]);
-    expect((await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" })).status).toBe(200);
-    const capabilities = await (await f.app.request(`${audience}/api/v1/capabilities`)).json();
-    expect(capabilities).toHaveProperty("catalogs"); expect(capabilities).toHaveProperty("sources"); expect(capabilities).toHaveProperty("omnichain");
-    expect(capabilities).not.toHaveProperty("protocolReference");
-  });
+
 });
 
 describe('slow admission logging', () => {
@@ -244,20 +230,7 @@ describe("mounted signed REST API", () => {
     const capabilities = await f.app.request(`${audience}/api/v1/capabilities`);
     expect(capabilities.status).toBe(200);
     expect(await capabilities.json()).toMatchObject({ protocolVersion: 6, authentication: { staticCredentials: false } });
-    const catalog = await f.app.request(`${audience}/api/v1/catalog/contracts?limit=1`);
-    expect(catalog.status).toBe(200);
-    expect(await catalog.json()).toMatchObject({ protocolVersion: 6, items: expect.any(Array) });
-    const routers = await f.app.request(`${audience}/api/v1/catalog/contracts?packageId=%40bananapus%2Frouter-terminal-v6&category=contract&limit=100`);
-    expect(await routers.json()).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({
-      name: "JBRouterTerminal", chains: expect.arrayContaining([expect.objectContaining({ chainId: 11155111,
-        instances: expect.arrayContaining([
-          expect.objectContaining({ generation: "current", retired: false }),
-          expect.objectContaining({ generation: "previous", retired: true }),
-          expect.objectContaining({ generation: "v1", retired: true }),
-        ]),
-      })]),
-    })]) });
-    const unsigned = await f.app.request(`${audience}/api/v1/projects/1/1?source=onchain`);
+    const unsigned = await f.app.request(`${audience}/api/v1/plans`);
     expect(unsigned.status).toBe(401);
     expect(await unsigned.json()).toMatchObject({ code: "AUTH_REQUIRED", status: 401 });
     expect(f.execute).not.toHaveBeenCalled();
@@ -266,7 +239,7 @@ describe("mounted signed REST API", () => {
   it("enforces cumulative read, plan, and relay profiles at the HTTP boundary", async () => {
     const f = await fixture();
     const readBot = await f.register();
-    expect((await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" }, readBot.config)).status).toBe(200);
+    expect((await f.send({ requestTarget: "/api/v1/plans" }, readBot.config)).status).toBe(200);
     const planInput = { method: "POST", requestTarget: "/api/v1/plans", json: { operation: "contract_calls", input: {} }, idempotencyKey: "read-cannot-plan" };
     expect((await f.send(planInput, readBot.config)).status).toBe(403);
     expect(f.prepare).not.toHaveBeenCalled();
@@ -277,7 +250,7 @@ describe("mounted signed REST API", () => {
     const plan = await planResponse.json() as { id: string; account: string };
     expect(plan.account.toLowerCase()).toBe(owner.address.toLowerCase());
     expect((await f.send({ requestTarget: `/api/v1/plans/${plan.id}` })).status).toBe(200);
-    expect((await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" }, planner.config)).status).toBe(200);
+    expect((await f.send({ requestTarget: "/api/v1/plans" }, planner.config)).status).toBe(200);
     const relay = await f.send({ method: "POST", requestTarget: `/api/v1/plans/${plan.id}/steps/0/submissions`, json: { rawSignedTransaction: "0x01" }, idempotencyKey: "planner-cannot-relay" }, planner.config);
     expect(relay.status).toBe(403);
     const executor = await f.register(["read", "plan", "relay"]);
@@ -303,7 +276,7 @@ describe("mounted signed REST API", () => {
       { requestTarget: "/api/v1/accounts/me/bots" },
     ]) expect((await f.send(options, config)).status).toBe(403);
     expect((await f.send({ method: "DELETE", requestTarget: `/api/v1/accounts/me/bots/${grant.id}` })).status).toBe(200);
-    expect((await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" }, config)).status).toBe(403);
+    expect((await f.send({ requestTarget: "/api/v1/plans" }, config)).status).toBe(403);
   });
 
   it("separates owner quota from a bot's exhausted request budget", async () => {
@@ -320,7 +293,7 @@ describe("mounted signed REST API", () => {
     const f = await fixture(), principal = appPrincipal(), appAccountId = principal.account.id;
     // The auth boundary is tested independently; observe the real mounted HTTP quota behavior here.
     vi.spyOn(f.auth, "authenticate").mockImplementation(async () => principal);
-    const read = () => f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" });
+    const read = () => f.send({ requestTarget: "/api/v1/plans" });
     f.quotas.set(`rest:account:${appAccountId}:bots`, 300);
     expect((await read()).status).toBe(200);
     const bucket = [...f.quotas.keys()].find(key => key.includes(appAccountId) && !key.endsWith(":bots"))!;
@@ -345,50 +318,34 @@ describe("mounted signed REST API", () => {
     expect(await result.json()).toMatchObject({ code: "SESSION_APP_UNAVAILABLE" });
   });
 
-  it("requires explicit project source and never retries a failed source as another source", async () => {
-    const f = await fixture();
-    const omitted = await f.send({ requestTarget: "/api/v1/projects/1/1" });
-    expect(omitted.status).toBe(400);
-    const onchain = await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" });
-    expect(await onchain.json()).toMatchObject({ source: "onchain", input: { project: { chainId: 1, projectId: "1", version: 6 } } });
-    const indexed = await f.send({ requestTarget: "/api/v1/projects/1/1?source=bendystraw" });
-    expect(await indexed.json()).toMatchObject({ source: "indexer" });
-    f.execute.mockRejectedValueOnce(new DomainError("RPC_UNAVAILABLE", "The configured source is unavailable", { retryable: true }));
-    const callsBefore = f.execute.mock.calls.length;
-    const failed = await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" });
-    expect(failed.status).toBe(502);
-    expect(f.execute.mock.calls.slice(callsBefore)).toHaveLength(1);
-    expect(f.execute.mock.calls.at(-1)?.[2]?.source).toBe("onchain");
-    expect((await f.send({ requestTarget: "/api/v1/operations/get_project?input=%7B%7D" })).status).toBe(400);
-  });
 
   it("rejects duplicate and unknown query parameters on public and signed routes", async () => {
     const f = await fixture();
     for (const path of [
       "/api/v1?unknown=1", "/api/v1/capabilities?unknown=1",
-      "/api/v1/catalog/contracts?limit=1&limit=2",
-      "/api/v1/projects/1/1?source=onchain&source=bendystraw",
+      "/api/v1/plans?limit=1&limit=2",
+      "/api/v1/plans?limit=1&unknown=1",
       "/api/v1/accounts/me?unknown=1",
     ]) expect((await f.send({ requestTarget: path })).status).toBe(400);
   });
 
   it("binds equivalent query encodings and their exact order", async () => {
     const f = await fixture();
-    const canonical = "/api/v1/operations/get_project?source=onchain&input=%7B%22tag%22%3A%22a%2Fb%22%7D";
+    const canonical = "/api/v1/plans?limit=20&cursor=a%2Fb";
     const request = await f.prepared({ requestTarget: canonical });
     const changed = await f.sendPrepared(request, request.url.replace("%2F", "%2f"));
     expect(changed.status).toBe(401);
     expect(await changed.json()).toMatchObject({ code: "INVALID_SIGNATURE" });
     expect((await f.sendPrepared(request)).status).toBe(200);
     const reordered = await f.prepared({ requestTarget: canonical });
-    expect((await f.sendPrepared(reordered, `${audience}/api/v1/operations/get_project?input=%7B%22tag%22%3A%22a%2Fb%22%7D&source=onchain`)).status).toBe(401);
+    expect((await f.sendPrepared(reordered, `${audience}/api/v1/plans?cursor=a%2Fb&limit=20`)).status).toBe(401);
   });
 
   it("uses the Node raw target to reject normalization before routing or authentication", async () => {
     const f = await fixture();
-    const request = await f.prepared({ requestTarget: "/api/v1/projects/1/1?source=onchain" });
+    const request = await f.prepared({ requestTarget: "/api/v1/plans" });
     const response = await f.app.request(request.url, { method: request.method, headers: request.headers }, {
-      incoming: { url: "/api/v1/ignored/../projects/1/1?source=onchain" },
+      incoming: { url: "/api/v1/ignored/../plans" },
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ code: "NONCANONICAL_REQUEST_TARGET" });
@@ -462,7 +419,7 @@ describe("mounted signed REST API", () => {
   it("returns RFC9457 errors with request IDs, CORS, and no upstream credentials", async () => {
     const f = await fixture();
     f.execute.mockRejectedValue(new Error("private credential https://upstream.example/super-secret rawTransaction=0xabcdef"));
-    const prepared = await f.prepared({ requestTarget: "/api/v1/projects/1/1?source=onchain" });
+    const prepared = await f.prepared({ requestTarget: "/api/v1/plans" });
     prepared.headers.set("Origin", "https://another-agent.example");
     prepared.headers.set("X-Request-Id", "caller-controlled");
     const response = await f.sendPrepared(prepared);
@@ -483,7 +440,7 @@ describe("mounted signed REST API", () => {
 
   it("rejects declared GET bodies on public discovery and protected routes", async () => {
     const f = await fixture();
-    for (const path of ["/api/v1/capabilities", "/api/v1/accounts/me", "/api/v1/projects/1/1?source=onchain"]) {
+    for (const path of ["/api/v1/capabilities", "/api/v1/accounts/me", "/api/v1/plans"]) {
       const request = await f.prepared({ requestTarget: path });
       request.headers.set("content-length", "1");
       expect((await f.sendPrepared(request)).status).toBe(400);
@@ -494,7 +451,7 @@ describe("mounted signed REST API", () => {
     const f = await fixture();
     const { grant, config } = await f.register(["read", "plan", "relay"]);
     await f.accounts.revokeBot(accountId, grant.id, now);
-    const request = await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" }, config);
+    const request = await f.send({ requestTarget: "/api/v1/plans" }, config);
     expect(request.status).toBe(403);
     expect(f.execute).not.toHaveBeenCalled();
   });
@@ -518,7 +475,7 @@ describe("mounted signed REST API", () => {
     // The head reads start beside the plan's draft and reach the preparation; the draft pins its reads at that head.
     expect(headAhead).toHaveBeenCalledWith(expect.anything(), bindingId, expect.anything());
     expect(f.semanticPrepare).toHaveBeenLastCalledWith("prepare_pay", expect.anything(),
-      expect.objectContaining({ at: { chainId: 1, blockNumber: "100", blockHash, timestamp: String(now), source: "rpc" } }));
+      expect.objectContaining({ at: { chainId: 1, blockNumber: "100", blockHash, timestamp: String(now), source: "onchain" } }));
     expect(prepare).toHaveBeenCalledWith(expect.anything(), { planId: "plan-one", stepIndexes: [0, 1], sponsorAuthorization: "voucher" }, "beep:attempt", expect.stringMatching(/^0x[0-9a-f]{64}$/), expect.anything(),
       expect.objectContaining({ bindingId, nonceKey: 0n }));
     // A retry finds the plan by its key and does not draft again; a voucher the plan does not fit leaves the plan to be sponsored on its own.
@@ -537,7 +494,7 @@ describe("mounted signed REST API", () => {
     const f = await fixture();
     const { grant, config } = await f.register();
     f.clock.now = grant.expiresAt;
-    const request = await f.send({ requestTarget: "/api/v1/projects/1/1?source=onchain" }, config);
+    const request = await f.send({ requestTarget: "/api/v1/plans" }, config);
     expect(request.status).toBe(403);
     expect(f.execute).not.toHaveBeenCalled();
   });

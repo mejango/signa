@@ -5,7 +5,7 @@ import { Pool } from "pg";
 import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Store } from "../src/store.js";
-import { createCenterMcp } from "../src/mcp.js";
+import { createSignaProtocol } from "../src/signaProtocol.js";
 import { migrate } from "../src/db/migrate.js";
 import { createRestRuntime } from "../src/rest/runtime.js";
 import { readRestExecutionConfiguration } from "../src/rest/executionConfig.js";
@@ -37,11 +37,9 @@ suite("hosted Base signup runtime host", () => {
     if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await admin.end(); }
   });
   const store = { consumeRequest: async () => ({ allowed: true, remaining: 100 }), cleanupRateLimits: async () => 0 } as unknown as Store;
-  const mcp = () => createCenterMcp(store, { rpc: { request: async () => { throw new Error("The MCP transport is unused here"); }, supports: () => true },
-    env: { MCP_PLAN_SECRET: "PUBLIC_WALLET_RUNTIME_FIXTURE_SECRET_ONLY", MCP_PUBLIC_ORIGIN: audience } });
   async function runtime(host: { poolId: string; initialNonce: string }) {
-    const { services, config } = mcp();
-    return createRestRuntime({ pool, store, services, config, upstreams: new Map(), rpc: fixture.readOnlyRpc,
+    const operations = createSignaProtocol();
+    return createRestRuntime({ pool, store, operations, audience, upstreams: new Map(), rpc: fixture.readOnlyRpc,
       executionConfiguration: await readRestExecutionConfiguration({}), startMaintenance: false,
       wallet: { origin, manifest: fixture.manifest, utility: fixture.utility },
       walletSignup: context => createBaseWalletSignupHost(context, { url: fixture.endpoint, genesisHash: fixture.genesisHash, signer: privateKeyToAccount(signerKey),

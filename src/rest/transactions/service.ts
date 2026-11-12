@@ -650,11 +650,6 @@ export class TransactionService {
   async refresh(actor: RestActor, id: string) {
     return this.view(await this.refreshStored(await this.required(actor, id)));
   }
-  /** What to keep warm: the distinct pay targets of plans created since `sinceMs`. */
-  recentPayTargets(sinceMs: number, limit: number) {
-    return this.store.recentPayTargets(sinceMs, limit);
-  }
-
   async recoverPending(input: { limit?: number; cursor?: string } = {}) {
     const limit = input.limit ?? 20;
     if (!Number.isInteger(limit) || limit < 1 || limit > 100)

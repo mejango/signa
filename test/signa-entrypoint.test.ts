@@ -60,7 +60,7 @@ vi.mock("../src/keepAlive.js", () => ({ keepUpstreamConnections: () => {} }));
 vi.mock("../src/db/migrate.js", () => ({ migrate: async () => {} }));
 vi.mock("../src/db/postgres.js", () => ({ createPool: () => ({ end: async () => {} }), PostgresStore: class { health = async () => true; } }));
 vi.mock("../src/rpc.js", () => ({ createRpcGateway: () => ({}), dwellirRpcUpstreams: () => new Map(), DWELLIR_RPC_HOSTS: { 8453: "base.test" } }));
-vi.mock("../src/signaProtocol.js", () => ({ createSignaProtocol: () => ({ services: {}, config: {} }) }));
+vi.mock("../src/signaProtocol.js", () => ({ createSignaProtocol: () => ({ list: () => [], prepare: async () => { throw new Error("No protocol preparation expected"); } }) }));
 vi.mock("../src/rest/wallet/productionStack.js", () => ({ createBaseWalletProductionStack: async () => ({ manifest: {}, utility: {} }) }));
 vi.mock("../src/rest/executionConfig.js", () => ({ readRestExecutionConfiguration: async () => ({}) }));
 vi.mock("../src/rest/site.js", () => ({ mountRestSite: () => {} }));

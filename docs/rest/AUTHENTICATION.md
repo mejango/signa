@@ -1,6 +1,6 @@
 # Wallet-owned accounts and signed REST requests
 
-Center's API lets software request data or actions through web requests (REST).
+Signa's API lets software request data or actions through web requests (REST).
 To use protected routes, select **Sign in** on [Accounts](/accounts) and connect
 an existing wallet. Your wallet signs the request that creates or loads your
 account. The network used to identify that account is its **authority chain**.
@@ -9,10 +9,10 @@ The account identifier is
 
 Owners can let a bot sign API requests using its own locally generated
 secp256k1 key. The permissions form a **grant**; each permission is a **scope**.
-The private key stays with the client. Center stores the public address, fixed
+The private key stays with the client. Signa stores the public address, fixed
 grant ID, scopes, label, expiry, and revocation time. This scheme uses request
 signatures, with no API key, bearer token, or server-held wallet key. See the
-[glossary](https://juicebox.center/api#glossary).
+[glossary](https://api.signa.center/api#glossary).
 
 Public discovery does not require a bot grant. Owner enrollment is an independently
 signed request and works before an account or bot exists. A bot cannot enroll an
@@ -20,7 +20,7 @@ account on behalf of an unrelated owner.
 
 ## Start with the client
 
-Sign in on [Accounts](https://juicebox.center/accounts), then create a connection
+Sign in on [Accounts](https://api.signa.center/accounts), then create a connection
 under **02 / API access**. Choose its permissions and expiry and approve the
 locally generated bot key. The bot then authenticates API requests automatically
 through `SignedRestClient`; routine reads and planning need no owner wallet prompt.
@@ -32,7 +32,7 @@ import { SignedRestClient } from "@juicebox/center-client";
 // botSigner is the registered key held in your local signer or secret store.
 // accountId and grantId are the public identifiers returned at registration.
 const center = new SignedRestClient({
-  audience: "https://juicebox.center",
+  audience: "https://api.signa.center",
   accountId,
   grantId,
   signer: botSigner,
@@ -62,7 +62,7 @@ approval; supported Safe execution uses its time-limited `SafeOp` approval.
 ## Request signatures
 
 Every protected request signs structured fields using the EIP-712 standard and
-Center's `CenterRequest` format. A single-use random value (**nonce**) prevents
+Signa's `CenterRequest` format. A single-use random value (**nonce**) prevents
 replay. An **idempotency key** identifies retries of the same operation. The exact schema
 and browser-compatible helpers live in
 [`src/rest/auth/signatures.ts`](../../src/rest/auth/signatures.ts).
@@ -81,7 +81,7 @@ and browser-compatible helpers live in
 The EIP-712 domain is `{ name: "Juicebox Center REST", version: "1",
 chainId: authorityChainId, salt: keccak256(utf8(audience)) }`. The audience is the
 configured public service URL, without a trailing slash; production uses
-`https://juicebox.center`. It is not inferred from an untrusted Host header.
+`https://api.signa.center`. It is not inferred from an untrusted Host header.
 
 The signed message contains, in schema order:
 

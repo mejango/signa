@@ -1,6 +1,6 @@
 # Smart accounts, sessions and explicit payment budgets
 
-A **smart account**, or smart wallet, is controlled by code and its owners. A **session** lets a bot repeat specific actions within owner-approved limits and an expiry. The bot keeps its signing key. Center supports exactly seven or thirty days after owner activation and verification against the accepted chain history (**canonical**). See the [glossary](https://juicebox.center/api#glossary).
+A **smart account**, or smart wallet, is controlled by code and its owners. A **session** lets a bot repeat specific actions within owner-approved limits and an expiry. The bot keeps its signing key. Signa supports exactly seven or thirty days after owner activation and verification against the accepted chain history (**canonical**). See the [glossary](https://api.signa.center/api#glossary).
 
 The implementation uses Safe accounts with Safe7579, the pinned legacy ERC-4337 SmartSession validator, an exact policy compiler, stored lifecycle records, and a separate service for smart-wallet requests (**UserOperations**). A **guard** enforces limits onchain. Both checked guards, `CenterSessionGuard` (`legacy-v1`) and `CenterSessionGuardV2` (`current-v2`), are undeployed. Local implementation and tests do not establish a configured hosted provider, provider billing, an eligible sponsorship policy, an external audit, or authority on a user's wallet.
 
@@ -16,7 +16,7 @@ All fund movement requires fresh owner approval unless it spends an explicitly s
 
 The owner controls each linked smart account and separately approves any session
 that may act for it. API grants authenticate requests; wallet policies enforce
-financial authority, including permitted actions, budgets and expiry. Center has
+financial authority, including permitted actions, budgets and expiry. Signa has
 no bot-admin scope or session-created sessions. A weekly API grant alone never
 authorizes an onchain operation.
 
@@ -62,7 +62,7 @@ Cross-version composition requires explicit proof. The legacy validator calls `i
 
 The current [Safe7579 adapter](https://github.com/rhinestonewtf/safe7579/blob/f22a194148ff087f0c16125e530512e59794e188/artifacts/Safe7579/Safe7579.json) and [launchpad](https://github.com/rhinestonewtf/safe7579/blob/f22a194148ff087f0c16125e530512e59794e188/artifacts/Safe7579Launchpad/Safe7579Launchpad.json) matched official artifacts after declared immutable substitution on Ethereum and Sepolia. The adapter's [validation method](https://github.com/rhinestonewtf/safe7579/blob/f22a194148ff087f0c16125e530512e59794e188/src/Safe7579.sol#L253) preserves the installed validator's returned validity data. The singleton is SafeL2 v1.4.1, with factory/runtime evidence matching [official Safe deployment manifests](https://github.com/safe-global/safe-deployments/tree/1c3aad8cf686157272d7e5de05dae8cf5594e0bc/src/assets/v1.4.1) for all eight chains. The checked stack now pins EntryPoint, SafeProxy, the Ownable session validator and delegated utility too. Complete owner/module/history inspection remains mandatory on each actual account; historical address observations cannot replace it.
 
-The disabled registry checks belong specifically to this Safe7579 revision's `RegistryAdapter`. Legacy SmartSession's ordinary `ENABLE` path retains ERC-7484 checks. Center's separately owner-authorized setup uses the exact pinned `onInstall` `UNSAFE_ENABLE` mode after independent verification; bot operation signatures use only `USE`. Callers cannot select an alternate enable mode or bypass the owner lifecycle plan.
+The disabled registry checks belong specifically to this Safe7579 revision's `RegistryAdapter`. Legacy SmartSession's ordinary `ENABLE` path retains ERC-7484 checks. Signa's separately owner-authorized setup uses the exact pinned `onInstall` `UNSAFE_ENABLE` mode after independent verification; bot operation signatures use only `USE`. Callers cannot select an alternate enable mode or bypass the owner lifecycle plan.
 
 ## Verified smart-account registry
 
@@ -70,9 +70,9 @@ Register a `SmartAccountRef` under the existing API owner; never replace that ow
 
 Registration requires an owner-signed exact account claim plus independent onchain verification. An API EIP-1271 check on the authority chain does not establish ownership of a contract on another chain. The current binding adapter requires the API owner to be a current Safe owner and verifies exactly the current threshold of direct EIP-712 EOA-owner signatures, sorted by owner address. A body-supplied owner address or mere Safe membership is insufficient; contract/delegated owner signature forms remain unsupported.
 
-Predicted accounts remain `counterfactual` until the exact factory/initializer has executed and the final singleton, ownership and modules are verified. Recompute the address from pinned factory data; reject extra setup calls, unknown modules and substituted salt/init code. The owner retains a normal owner-authorized recovery path independent of the session module or Center.
+Predicted accounts remain `counterfactual` until the exact factory/initializer has executed and the final singleton, ownership and modules are verified. Recompute the address from pinned factory data; reject extra setup calls, unknown modules and substituted salt/init code. The owner retains a normal owner-authorized recovery path independent of the session module or Signa.
 
-Reverify account configuration before plans and admission. Owner rotation, threshold changes, module/fallback changes and unknown code invalidate Center's cached verification. They do not necessarily revoke an already installed onchain session: the wallet owner must disable it onchain. The current [Juicebox Money Safe safety path](https://github.com/mejango/juicebox-money/blob/c262a2fa7365af963ffb928b17deb45758235b57/src/lib/safe.ts#L416) rejects enabled modules; add a separate verified adapter, rather than weakening that existing check.
+Reverify account configuration before plans and admission. Owner rotation, threshold changes, module/fallback changes and unknown code invalidate Signa's cached verification. They do not necessarily revoke an already installed onchain session: the wallet owner must disable it onchain. The current [Juicebox Money Safe safety path](https://github.com/mejango/juicebox-money/blob/c262a2fa7365af963ffb928b17deb45758235b57/src/lib/safe.ts#L416) rejects enabled modules; add a separate verified adapter, rather than weakening that existing check.
 
 ## Compile a closed session policy
 
@@ -88,11 +88,11 @@ Encode project IDs and amounts from exact decimal strings into checked Solidity 
 
 The [SDK permission ID](https://github.com/rhinestonewtf/sdk/blob/91f8f1edc80aa38e698033b5287b6aa7537bb641/src/modules/validators/smart-sessions/digest.ts) hashes validator, validator configuration and salt, excluding actions, limits and expiry. The inspected resolver supplies zero salt. A permission ID therefore cannot stand in for a full policy digest or generation. Reusing the same key may overwrite policy configuration or reset counters. Use verified distinct salts through a supported encoding path, or new client-generated session keys; reject collisions and verify the installed full configuration after every change.
 
-A generation label in Center's database is not onchain replay protection. The selected legacy validator exposes `removeSession(bytes32)` and a separate [`revokeEnableSignature(bytes32)`](https://github.com/erc7579/smartsessions/blob/f24dddfcbf7269e10dcd4da90dae0a6ae6ccf188/contracts/core/NonceManager.sol#L28). Removal alone does not increment the enable nonce. Owner revocation plans must perform both, verify the new nonce and disabled permission, and reject reuse of old owner authorizations. Encode `enableSessions` from the matched ABI with a fresh explicit salt and full reviewed policy; no high-level SDK default may choose that salt.
+A generation label in Signa's database is not onchain replay protection. The selected legacy validator exposes `removeSession(bytes32)` and a separate [`revokeEnableSignature(bytes32)`](https://github.com/erc7579/smartsessions/blob/f24dddfcbf7269e10dcd4da90dae0a6ae6ccf188/contracts/core/NonceManager.sol#L28). Removal alone does not increment the enable nonce. Owner revocation plans must perform both, verify the new nonce and disabled permission, and reject reuse of old owner authorizations. Encode `enableSessions` from the matched ABI with a fresh explicit salt and full reviewed policy; no high-level SDK default may choose that salt.
 
 ### Action coverage and V6 caller semantics
 
-The action catalog can grow through verified module policy definitions without deploying a new Center executor. The implemented session action kinds are `v6-project-uri`, `erc20-transfer`, and closed `v6-pay`. Financial session actions additionally require an explicit approved allocation. Other operations retain fresh-owner authority. Reads, simulations, transaction preparation and metadata preparation do not acquire financial authority merely because they occur in a session.
+The action catalog can grow through verified module policy definitions without deploying a new Signa executor. The implemented session action kinds are `v6-project-uri`, `erc20-transfer`, and closed `v6-pay`. Financial session actions additionally require an explicit approved allocation. Other operations retain fresh-owner authority. Reads, simulations, transaction preparation and metadata preparation do not acquire financial authority merely because they occur in a session.
 
 | Operation                                                    | V6 method and authority                                                                           | Policy requirement                                                                                                                             |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -112,7 +112,7 @@ Check current project owner, `DIRECTORY.controllerOf(projectId)`, hook ownership
 
 ## Explicit set-aside payment accounts
 
-Use a separate registered owner-controlled smart account for a recurring-payment allocation. Fund only the approved asset/principal and install only its reviewed payment policy. This reuses the selected account/module stack; no new Center vault or executor contract is proposed. The owner's other wallets and spending accounts remain outside this session's authority.
+Use a separate registered owner-controlled smart account for a recurring-payment allocation. Fund only the approved asset/principal and install only its reviewed payment policy. This reuses the selected account/module stack; no new Signa vault or executor contract is proposed. The owner's other wallets and spending accounts remain outside this session's authority.
 
 The owner approves the exact chain/account, asset in integer base units, funding transaction, project ID, terminal, beneficiary, empty memo/metadata, per-call and lifetime caps, minimum output, expiry and recovery path. The seven/thirty-day interval has one cumulative lifetime allocation; it is not a rolling daily/weekly reset policy. Funding and every allowance increase require fresh approval. The payment session cannot pull from the owner's other wallet, top itself up, change a spender, transfer to the bot or pay its own sponsor fees from the payment allocation.
 
@@ -135,7 +135,7 @@ The verified UniAction source reads a 32-byte word at `data[4 + offset:4 + offse
 
 Reject unsupported fee-on-transfer, rebasing, callback or upgradeable tokens until exact behavior is proven. Native payment caps must cover actual value; output floors must not be weakened by the bot. Full derived ruleset identity includes cycle/start/weight/metadata: [`JBRuleset.id` survives auto-cycles](https://github.com/Bananapus/nana-core-v6/blob/898f08b96194391d545df31a62f9d89ef6759f9a/src/structs/JBRuleset.sol#L10). A policy that only compares calldata cannot pin changing ruleset state. Do not claim that an offchain preflight enforces this against direct session submission.
 
-Smart-session counters may be updated during validation before execution. Verify failure behavior; a reverted UserOperation can still consume gas or policy allowance. Never refund/reset a budget counter in Center based on a failed receipt without matching canonical onchain state. Donations and later deposits must not silently increase the approved spend cap; replenishment is fresh-approved funding, and an account balance is not an authorization ledger.
+Smart-session counters may be updated during validation before execution. Verify failure behavior; a reverted UserOperation can still consume gas or policy allowance. Never refund/reset a budget counter in Signa based on a failed receipt without matching canonical onchain state. Donations and later deposits must not silently increase the approved spend cap; replenishment is fresh-approved funding, and an account balance is not an authorization ledger.
 
 Buyback hooks, 721 hooks, router terminals and revnets keep full read and fresh-owner plan support. Their recurring payment profiles require separate proof of closed calldata, all dependencies, refunds, asset/output accounting and allowed economic changes. A smart-account SDK does not automatically make every V6 operation session-safe.
 
@@ -143,7 +143,7 @@ Buyback hooks, 721 hooks, router terminals and revnets keep full read and fresh-
 
 Represent each `(chainId, smartAccountAddress, projectId, asset)` allocation separately. At most eight members per group; never sum incompatible assets or promise a shared atomic remaining balance across chains. An owner-signed manifest binds every local account, policy digest, generation, allocation and exact-unit cap; compatible-asset allocations must sum to the approved total.
 
-Each chain enforces only its own verified policy. The compiler and owner review must reject duplicate allocations and overlapping independently spendable sessions. A module without crosschain accounting cannot enforce a global manifest merely because Center records it. Reusing a retired allocation requires fresh approval, confirmed revocation and reconciliation of old spending. A pending revocation or source bridge receipt never establishes freed capacity or destination credit.
+Each chain enforces only its own verified policy. The compiler and owner review must reject duplicate allocations and overlapping independently spendable sessions. A module without crosschain accounting cannot enforce a global manifest merely because Signa records it. Reusing a retired allocation requires fresh approval, confirmed revocation and reconciliation of old spending. A pending revocation or source bridge receipt never establishes freed capacity or destination credit.
 
 ## Interfaces and lifecycle
 
@@ -173,7 +173,7 @@ Only the current admitted activation/revocation plan can execute. An expired pla
 
 One admitted or observed-enabled generation reserves the whole physical wallet on its chain across API aliases, keys, assets and time windows, including URI-only policies. Expiry alone never releases it. The owner revocation plan atomically removes the permission and advances its enable nonce. Only finalized canonical disabled state with the advanced nonce releases the reservation; identity tombstones remain. There are no `/budgets` resources, automatic deposits, periodic counter resets or automatic renewals. Funding, allowances and recovery use separately approved ordinary wallet plans.
 
-API grant revocation, unlinking and Safe owner rotation stop applicable Center admissions but do not remove an otherwise active legacy onchain session. An owner must revoke it onchain; new owners should explicitly remove old permissions and revoke their enable signatures. Chain ordering determines whether an already submitted operation executes before revocation. Reorganizations invalidate affected observations until canonical evidence is available.
+API grant revocation, unlinking and Safe owner rotation stop applicable Signa admissions but do not remove an otherwise active legacy onchain session. An owner must revoke it onchain; new owners should explicitly remove old permissions and revoke their enable signatures. Chain ordering determines whether an already submitted operation executes before revocation. Reorganizations invalidate affected observations until canonical evidence is available.
 
 Receipt proof binds the exact registered account, EntryPoint version, operation hash, validator/session, full policy digest, generation and nonce. Reconciliation verifies the account's scoped inner execution and modeled V6 effects with the smart account as caller/payer. A provider response or successful outer transaction alone cannot prove payment completion. `submission_unknown` retains reservations and never permits automatic republication; bridge settlement remains separate.
 
