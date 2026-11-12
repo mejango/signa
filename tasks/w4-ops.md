@@ -4,13 +4,11 @@ Steps the W4 hardening changes need outside the repository. Each names its PR an
 
 ## Signa build commit on Railway (verifiable build)
 
-The Dockerfile takes the source commit as the plain build argument `SIGNA_BUILD_COMMIT`; CI passes `${{ github.sha }}`. Railway builds from the Dockerfile and passes a service variable to a build argument of the same name, so the Signa service needs:
+The Dockerfile accepts the explicit build argument `SIGNA_BUILD_COMMIT`; CI passes `${{ github.sha }}`. When that value is absent or empty, the server reads Railway's native `RAILWAY_GIT_COMMIT_SHA` directly. No service-variable alias is needed.
 
-- Variable `SIGNA_BUILD_COMMIT` = `${{RAILWAY_GIT_COMMIT_SHA}}` (a Railway reference to the deployed commit).
+Remove an existing `SIGNA_BUILD_COMMIT=${{RAILWAY_GIT_COMMIT_SHA}}` alias. The production check on 2026-11-12 found that alias resolved to an empty string while the native Railway variable contained the correct deployment commit.
 
-Until it is set, `GET https://api.signa.center/healthz` reports `"commit": null`. The `web` manifest hash and `scripts/rest/verify-served-build.mjs` work without it.
-
-Anything other than a full 40-hex commit (an unresolved reference included) is reported as null, never echoed. Check after the next deploy: `curl -s https://api.signa.center/healthz` shows the deployed 40-hex commit, then `node scripts/rest/verify-served-build.mjs https://signa.center <that commit>` exits 0.
+Only a full 40-hex commit is reported. A nonempty malformed explicit override remains null rather than being replaced by the fallback. These are deployment metadata; the manifest and served-file verifier independently check the browser assets. After deployment, confirm `GET https://api.signa.center/healthz` reports the deployment SHA, then run `node scripts/rest/verify-served-build.mjs https://signa.center <that commit>`.
 
 On GCP, pass the same build argument from the build trigger (for Cloud Build, `--build-arg SIGNA_BUILD_COMMIT=$COMMIT_SHA`).
 

@@ -33,10 +33,10 @@ function exactOrigin(value: string): URL {
 const apiAsset = /^\/assets\/(?:accounts\.(?:[0-9a-f]{12}\.)?(?:css|js)|accounts-signed-in\.(?:[0-9a-f]{12}\.)?js|docs\.(?:[0-9a-f]{12}\.)?js|api\.(?:[0-9a-f]{12}\.)?css|accounts-icon\.svg)$/;
 const apiPath = (path: string) => path === '/api' || path.startsWith('/api/') || path === '/accounts' || apiAsset.test(path);
 
-/** The build this process serves: its source commit (the SIGNA_BUILD_COMMIT build argument, null when
- * absent) and the sha256 of its web manifest (scripts/rest/build-web.mjs, null when not built). */
+/** The explicit build commit or Railway deployment commit, and the sha256 of the web manifest
+ * (scripts/rest/build-web.mjs). Missing or malformed metadata is reported as null. */
 function servedBuild() {
-  const commit = process.env.SIGNA_BUILD_COMMIT ?? '';
+  const commit = process.env.SIGNA_BUILD_COMMIT || process.env.RAILWAY_GIT_COMMIT_SHA || '';
   let web: string | null = null;
   try { web = createHash('sha256').update(readFileSync(new URL('../.generated/rest/web-manifest.json', import.meta.url))).digest('hex'); }
   catch { /* An unbuilt source tree has no manifest. */ }

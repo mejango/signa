@@ -224,3 +224,28 @@ Pending runtime changes and verification.
 - Host load rose to88 from unrelated Go compilation/tests and other work. Preserve other processes and all existing test deadlines; use the existing remote Linux CI full release gate and Docker build for acceptance instead of duplicating the full gate locally under contention.
 - Production operations guidance now records Railway observations from2026-11-12: /readyz120s, drain30s, overlap0, daily04:53UTC PostgreSQL backups retained6days, latestNov12 04:53:02.929UTC. These observations establish configured readiness and backup entries, not a successful restore drill or end-to-end wallet transaction.
 - Independent source review and exact-head CI remain pending before merge.
+
+
+# 2026-11-12: Report Railway's actual deployment commit
+
+## Plan refinement
+- **Objective:** Finish hosting verification by making API health identify the actual deployed Signa commit when the optional explicit build variable is absent or empty.
+- **System fit:** This changes public operational metadata only. Wallet authority, credential host boundaries, readiness, transaction construction and persistence remain unchanged. Signa's explicit provider-neutral build argument stays preferred; the already-present Railway deployment metadata supplies the fallback.
+- **Reuse and simplicity:** Reuse the existing servedBuild function and40-hex validator with a single fallback expression; extend its existing HTTP health test. Remove the ineffective hosting alias and correct existing operator guidance, without adding another metadata service or key.
+- **Evidence and unknowns:** The documented alias was applied exactly but live SSH proved SIGNA_BUILD_COMMIT is empty while RAILWAY_GIT_COMMIT_SHA equals00a7e1bb62982cfb5ed52aba3cdaf14bdae50aa9. All18 served assets already match that source and Node26.13.1 is live. A direct environment fallback uses the verified value rather than relying on unproven interpolation timing.
+- **Verification:** Existing host tests must fail for the observed empty-alias case before the fix and pass afterward, including explicit override priority and malformed-value rejection. Run typecheck and full required remote CI/Docker, independently review, then verify automatic deployment, Node version, API health commit, readiness and served assets against merged source.
+- **Resource budget:** One-line runtime change with focused local tests; reuse exact-lock dependencies and existing CI. Root owns journals. Remove only the ineffective alias using a checked skip-deploy variable batch, then let the normal source merge trigger the single rollout.
+
+- [x] Extend existing host regression and prove observed empty alias fails before the fix.
+- [x] Add native deployment fallback and correct operator guidance; run focused checks and independent review.
+- [ ] Pass required CI, merge exact reviewed head, remove ineffective alias and verify live metadata.
+
+## Review
+Pending implementation and verification.
+
+### Verification before PR
+- The unchanged health implementation failed the extended existing regression: expected native deployment commit, received null.
+- After the one-line fallback, all12 host-boundary tests passed on Node26.13.1. Both TypeScript checks and git diff --check passed. Locked install did not change dependency manifests or locks.
+- Independent review found no actionable issues. Explicit nonempty overrides retain priority; malformed overrides and native values remain null.
+- Removed only the ineffective Railway SIGNA_BUILD_COMMIT alias with skipDeploys. Fresh raw-map comparison proves every other service variable unchanged, and no deployment was triggered. The next normal source rollout will supply native metadata.
+- Required remote CI, exact-head merge and live commit verification remain pending. No wallet authority or request handling changed.

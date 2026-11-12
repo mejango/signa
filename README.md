@@ -72,8 +72,9 @@ deployment manifest. The repository leaves health check settings to the service
 so a later deployment cannot restore the dormant liveness probe. A successful
 build or liveness probe does not establish wallet readiness.
 
-`/healthz` on the API host also names the build: `commit` is the `SIGNA_BUILD_COMMIT`
-Docker build argument (null when the build did not pass one) and `web` is the sha256 of
+`/healthz` on the API host also names the build: `commit` uses `SIGNA_BUILD_COMMIT`,
+falling back to Railway's native `RAILWAY_GIT_COMMIT_SHA` when absent or empty. Only
+a full 40-hex commit is reported; other values become null. `web` is the sha256 of
 the image's web manifest. `node scripts/rest/verify-served-build.mjs https://signa.center
 <commit>` rebuilds that commit (it must be on `origin/main`) and exits 1 when any wallet
 page, script or stylesheet the origin serves differs. The manifest describes production's

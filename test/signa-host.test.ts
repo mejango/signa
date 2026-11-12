@@ -78,12 +78,25 @@ describe('Signa HTTP boundary', () => {
     const manifest = await readFile(new URL('../.generated/rest/web-manifest.json', import.meta.url)).catch(() => undefined);
     const web = manifest ? createHash('sha256').update(manifest).digest('hex') : null;
     vi.stubEnv('SIGNA_BUILD_COMMIT', commit);
+    vi.stubEnv('RAILWAY_GIT_COMMIT_SHA', '');
     try {
       for (const host of ['private.railway.internal', 'api.signa.center'])
         expect(await (await fixture({ currentRuntime: () => undefined }).app.request(`http://${host}/healthz`)).json()).toEqual({ ok: true, commit, web });
       for (const unset of ['', 'main', commit.slice(0, 12), commit.toUpperCase()]) {
         vi.stubEnv('SIGNA_BUILD_COMMIT', unset);
         expect(await (await fixture().app.request('http://private.railway.internal/healthz')).json()).toEqual({ ok: true, commit: null, web });
+      }
+      const railwayCommit = 'cd'.repeat(20);
+      for (const [explicit, railway, expected] of [
+        [undefined, railwayCommit, railwayCommit],
+        ['', railwayCommit, railwayCommit],
+        [commit, railwayCommit, commit],
+        ['main', railwayCommit, null],
+        ['', 'main', null],
+      ] as const) {
+        vi.stubEnv('SIGNA_BUILD_COMMIT', explicit);
+        vi.stubEnv('RAILWAY_GIT_COMMIT_SHA', railway);
+        expect(await (await fixture().app.request('http://private.railway.internal/healthz')).json()).toEqual({ ok: true, commit: expected, web });
       }
     } finally { vi.unstubAllEnvs(); }
   });
