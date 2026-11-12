@@ -2,15 +2,14 @@
 
 The repository contains the session compiler, installed-policy verifier, owner activation/revocation preparation, durable execution tracking, and the hosted ERC4337 transport. Production recurring execution requires the deployed and verified guard matching the selected paymaster profile, an eligible sponsorship policy and provider billing, working archive traces, and an owner-approved session. Both checked guards, `CenterSessionGuard` (`legacy-v1`) and `CenterSessionGuardV2` (`current-v2`), are **undeployed**. Local tests create disposable contracts and use test signers; they do not provision provider billing or install modules on a user's wallet. Source verification and local tests do not establish an external audit or production readiness.
 
-All commands below run from the `jbcenter` repository root. The deployment command is provided for an operator to review and execute; it has not been broadcast as part of implementation.
+All commands below run from the Signa repository root. The deployment command is provided for an operator to review and execute; it has not been broadcast as part of implementation.
 
 ## Required release checks
 
-Use Node.js 22 and Foundry **v1.7.0**, release commit `f83bad912a9dba7bf0371def1e70bb1896048356`. The official binaries may print `1.6.0-v1.7.0`; the check verifies their exact commit. CI pins both the [official installation action](https://github.com/foundry-rs/foundry-toolchain/tree/908c540300062bd5a7e473851cdb4282204cee09) and the [Foundry release](https://github.com/foundry-rs/foundry/releases/tag/v1.7.0). With Foundry's installer already installed, select that release with `foundryup --install v1.7.0`.
+Use Node.js 26.13.1 from `.nvmrc`, its bundled npm 11.20.0 and Foundry **v1.7.0**, release commit `f83bad912a9dba7bf0371def1e70bb1896048356`. The official binaries may print `1.6.0-v1.7.0`; the check verifies their exact commit. CI pins both the [official installation action](https://github.com/foundry-rs/foundry-toolchain/tree/908c540300062bd5a7e473851cdb4282204cee09) and the [Foundry release](https://github.com/foundry-rs/foundry/releases/tag/v1.7.0). With Foundry's installer already installed, select that release with `foundryup --install v1.7.0`.
 
 ```sh
 npm ci --ignore-scripts
-npm --prefix mcp ci --ignore-scripts
 npm run check:execution
 # Supply TEST_DATABASE_URL for the disposable integration-test database.
 npm run check
@@ -216,7 +215,7 @@ forge create "$CENTER_GUARD_TARGET" \
   --account "$CENTER_DEPLOYER_KEYSTORE" --broadcast --json
 ```
 
-Record the returned transaction hash and address as `CENTER_GUARD_DEPLOYMENT_TX` and `CENTER_GUARD_ADDRESS`. Keep the receipt, selected chain, guard version, source content hash, repository revision and artifact/manifest hashes in the deployment record. The following read-only check selects the artifact by `CENTER_GUARD_VERSION` and verifies the chain, successful creation receipt, exact creation bytecode, and runtime at that receipt's canonical block. It does not print the RPC endpoint. It requires Node 22 and the installed `viem` dependency.
+Record the returned transaction hash and address as `CENTER_GUARD_DEPLOYMENT_TX` and `CENTER_GUARD_ADDRESS`. Keep the receipt, selected chain, guard version, source content hash, repository revision and artifact/manifest hashes in the deployment record. The following read-only check selects the artifact by `CENTER_GUARD_VERSION` and verifies the chain, successful creation receipt, exact creation bytecode, and runtime at that receipt's canonical block. It does not print the RPC endpoint. It requires Node 26.13.1 and the installed `viem` dependency.
 
 ```sh
 node --input-type=module <<'NODE'

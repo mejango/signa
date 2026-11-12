@@ -199,3 +199,28 @@ Official checksum-verified Node26.13.1/npm11.20.0 passed the V6 fixture, executi
 - [x] A single file-local sendAndConfirm helper reuses the existing receipt-success poll for all three fixture writes. The fixture now starts Anvil with one-second mining so asynchronous inclusion remains covered. Production/contract/dependency code, all counter/override/authority assertions and existing RPC/poll/test limits are unchanged.
 - [x] Clean locked install and focused whole-file verification pass5/5 in3.76s; git diff --check passes. Evidence /private/tmp/signa-postmerge-repro/fix-focused.log. No PostgreSQL restart or unrelated tests were needed for this focused reproduction.
 - Independent review and full normal PR CI remain required before shipping this corrective test change. Retain initial main-CI failure43208233078 as evidence; a successful receipt, not transaction-hash return, is the fixture's state boundary.
+
+
+# 2026-11-12: Signa Node 26.13.1 security runtime
+
+## Plan refinement
+- **Objective:** Move Signa build, CI, publish workflow and production Docker runtime to Node26.13.1 without changing wallet behavior or its public client's compatibility contract.
+- **System fit:** Signa remains the account/wallet authority, using SDK6.4.0 and Center protocol preparation. The runtime is delivered through the existing main CI and Railway build; exact source/build evidence, readiness and recovery behavior remain required.
+- **Reuse and simplicity:** Add the conventional .nvmrc exact pin and have existing setup-node steps read it; update existing Docker pins and private-service engine floor, existing preflight checks and active setup guidance. Preserve separately pinned publishing npm11.21.1, all dependencies and public wallet-client engine range. No new package-manager policy is needed.
+- **Evidence and unknowns:** Current main e60b011 contains the confirmed delayed-mining test fix. Official26.13.1 is a security release bundling npm11.20.0. Fresh official Docker digest is verified separately. Existing production deployment is successful, but upgraded runtime and readiness require fresh evidence after delivery.
+- **Verification:** Review only runtime/build metadata and corresponding guard tests; reject26.13.0 in the updated preflight; clean locked install; existing full release gate on26.13.1, CI Linux Docker build/audit, independent diff review, main and live deployment checks. Do not weaken assertion or timeout limits.
+- **Resource budget:** Agent owns source edits in this isolated worktree, root owns this journal. Center uses the first heavy local slot, Signa follows; remote CI may run independently. Existing PostgreSQL fixtures and verified Node binary are reused. Stop and refine on concrete compatibility failures.
+
+- [ ] Update runtime pins, private-service engine metadata and existing runtime guard tests.
+- [ ] Verify locked install, release gate, CI Docker build and independent review.
+- [ ] Deliver normal PR and verify requested runtime in the live deployment.
+
+## Review
+Pending runtime changes and verification.
+
+### Verification progress and resource adjustment
+- Exact Node26.13.1/npm11.20.0 clean install passed; parsed lock comparison proves all248 dependency entries unchanged, with only owning Node engine metadata updated.
+- Existing runtime guard test passed with the new minimum and unchanged database checks. A direct old-validator comparison accepted26.13.0, confirming the new patch-floor boundary is meaningful. The focused run selected one test and intentionally did not select25 others; it is not a full-suite result.
+- Host load rose to88 from unrelated Go compilation/tests and other work. Preserve other processes and all existing test deadlines; use the existing remote Linux CI full release gate and Docker build for acceptance instead of duplicating the full gate locally under contention.
+- Production operations guidance now records Railway observations from2026-11-12: /readyz120s, drain30s, overlap0, daily04:53UTC PostgreSQL backups retained6days, latestNov12 04:53:02.929UTC. These observations establish configured readiness and backup entries, not a successful restore drill or end-to-end wallet transaction.
+- Independent source review and exact-head CI remain pending before merge.
