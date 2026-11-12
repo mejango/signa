@@ -173,3 +173,10 @@ Official checksum-verified Node26.13.1/npm11.20.0 passed the V6 fixture, executi
 - [ ] Generate and review actual registry manifest/lock changes.
 - [ ] Clean install and pass full required service gate and production audit.
 - [ ] Update the existing draft PR with final evidence, preserving deployment authority boundaries.
+
+### Published-registry review
+- [x] Verified actual core6.4.0 publication at SDK7fce09a6 and exact registry integrity; updated existing pin and generated npm lock. Only root/SDK lock records changed;247unrelated locked records are unchanged.
+- [x] Clean npm ci --ignore-scripts installed198packages; all1931SDK files match the verified public tarball SHA25682939d54cfc6246eb91e4e96a8c75a6394ebe7827d77ef5b79a74c2b848359ed. ESM/CJS operation-evidence exports resolve.
+- [x] Full required gate passed at clean074539215c92d5e23e8ed20fd777bd87ab0ba057 in320.217s:201service files/4066tests, connect41, execution53Foundrytests plus5target evidence,34passkey stack tests, required V6 sources/types/productionbuild. All seven stages passed, no required evidence skipped. Source fingerprint684a3e1bd66c16addb4d115fd23ae7fe76fb4bb3b1d9e435fdc9af195c6295f8 remained unchanged. Observation .generated/checks/2026-11-12T04-09-43.526Z-0aec4c90/summary.json; supporting records /private/tmp/signa-registry-20261112/{final-gate-verification,installed-artifact-verification,lock-verification}.json.
+- [x] Production audit passes the declared high/critical threshold with zero high/critical and one unchanged moderate @hono/node-server GHSA-rmxm-3fg6-px4f advisory. Existing server uses getRequestListener, with no serveStatic caller found. This is not a vulnerability-free dependency graph claim.
+- Final evidence is journal-only after the frozen source run. DraftPR52 remains the delivery surface; fresh remote review/push/CI follow. Declared runtime remains Node22.23.4/npm10.9.9. Patched-runtime evaluation remains incomplete, and this local result does not prove a Linux image/deployment. No service mainmerge, production deployment or live database mutation.
