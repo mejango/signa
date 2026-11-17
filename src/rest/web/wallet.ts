@@ -116,6 +116,8 @@ function render() {
   renderNetworks(); renderDevice(); renderFunds(); renderBalance();
   passkey.textContent = session?.passkeyName ?? ""; passkey.hidden = passkeyLabel.hidden = !session?.passkeyName;
 }
+/** A rate-limited answer quiets this page's background polls for 30 seconds; what a person starts still goes at once. */
+let limitedUntil = 0;
 async function request(path: string, body?: unknown, csrfToken?: string, timeoutMs = 10_000): Promise<Json> {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -124,6 +126,7 @@ async function request(path: string, body?: unknown, csrfToken?: string, timeout
         "content-type": "application/json", "x-center-wallet-request": "1", ...(csrfToken ? { "x-center-wallet-csrf": csrfToken } : {}),
       } }) });
     if (!response.ok) {
+      if (response.status === 429) limitedUntil = Date.now() + 30_000;
       let code: string | undefined, appOrigin: string | undefined;
       if (path === `${base}/authorize/issue` && response.status === 403) {
         const body = await response.json().catch(() => null);
@@ -364,7 +367,7 @@ function renderNetworks() {
   // Polling runs beside the busy gate so a click is never dropped; it stops after ten minutes or when nothing is pending.
   const waiting = !!view && (view.pending.length > 0 || view.networks.some(item => item.owners === "updating"));
   if (waiting && !networksTimer) networksTimer = setInterval(() => {
-    if (busy || document.hidden || !navigator.onLine || networksPolls++ > 200) return;
+    if (busy || document.hidden || !navigator.onLine || Date.now() < limitedUntil || networksPolls++ > 200) return;
     networksStatus().catch(() => { /* The next poll reads again. */ });
   }, 3000);
   if (!waiting && networksTimer) { clearInterval(networksTimer); networksTimer = null; networksPolls = 0; }
@@ -689,7 +692,7 @@ function watchOrder(orderId: string) {
   let polls = 0;
   const stop = () => { if (orderTimer) clearInterval(orderTimer); orderTimer = null; };
   orderTimer = setInterval(() => {
-    if (document.hidden || busy || !session) return;
+    if (document.hidden || busy || !session || Date.now() < limitedUntil) return;
     if (polls++ > 180) return stop();
     request(`${base}/onramp/status`, { orderId }, csrf).then(value => {
       const state = string(value.status, 40);
@@ -753,7 +756,7 @@ function renderDevice() {
   const polled = devicePolled(phase) || !!device!.view.chains?.some(chain => chain.state === "approved" || chain.state === "submitted");
   if (!polled && deviceTimer) { clearInterval(deviceTimer); deviceTimer = null; }
   if (polled && !deviceTimer) deviceTimer = setInterval(() => {
-    if (busy || document.hidden || !navigator.onLine) return;
+    if (busy || document.hidden || !navigator.onLine || Date.now() < limitedUntil) return;
     devicePoll().catch(() => { /* The next poll reads again. */ });
   }, 3000);
 }
