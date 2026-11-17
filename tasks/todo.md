@@ -1,3 +1,22 @@
+# Dropdown caret gate on the account page (2026-11-16)
+
+Resources: `/Users/jango/Documents/jb/v6/evm/AGENTS.md`, `/Users/jango/Documents/jb/v6/evm/workflow/ponytail/SKILL.md`, `/Users/jango/Documents/jb/v6/evm/docs/PLAN_REFINEMENT.md`; local `AGENTS.md`, `tasks/lessons.md`. Worktree `.worktrees/lean-signa` on `fix/select-caret`.
+
+## Plan refinement
+
+- **Objective:** No dropdown on a Signa page can show the browser's default arrow flush against the right edge. Authentication, signing, sessions and CSP headers do not change.
+- **System fit:** The only selects are the five on `/accounts` (`src/rest/web/page.ts`, `src/rest/web/smartPage.ts`); the wallet pages have none. Their look is owned by the single `select` rule in `accountsCss()`. Nothing else is affected.
+- **Reuse and simplicity:** The global rule already exists at origin/main (appearance none, caret 14px from the right, 42px right padding, written after the shared field padding so it wins). No CSS change; only the missing gate is added.
+- **Evidence and unknowns:** Rendered `/accounts` in Chromium at 1280 and 390 wide, signed out and signed in: all five selects compute `appearance: none`, the data SVG caret loads under `img-src 'self' data:` with no CSP report, and the longest option clips before the caret. Safari and Firefox were not rendered.
+- **Verification:** A test in `test/rest-accounts-browser.test.ts` (a required suite) reads every select's computed style on the served page and fails when the rule is removed or its padding shrinks. Then `npm run check` with PostgreSQL 16.
+- **Resource budget:** One test, no source change. Replan only if a render shows a select the rule misses.
+
+- [x] Render and look at every select, desktop and 390px
+- [x] Gate test, shown to fail without the rule
+- [x] `npm run check`
+
+Review: `npm run check` exits 0 on Node 26.13.1 with a disposable PostgreSQL 16 container (service 201 files, 4069 tests). The new test fails when `appearance:none` is removed from the rule and when its right padding is cut to 12px.
+
 # Lean network requests on the browser pages (2026-11-16)
 
 Resources: `/Users/jango/Documents/jb/v6/evm/AGENTS.md`, `/Users/jango/Documents/jb/v6/evm/workflow/ponytail/SKILL.md`, `/Users/jango/Documents/jb/v6/evm/docs/PLAN_REFINEMENT.md`; local `AGENTS.md`, `tasks/lessons.md`. Worktree `.worktrees/lean-signa` on `perf/lean-network`.
