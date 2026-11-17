@@ -1,3 +1,23 @@
+# SDK 6.10.2 (2026-11-17)
+
+Resources: `/Users/jango/Documents/jb/v6/evm/AGENTS.md`, `/Users/jango/Documents/jb/v6/evm/workflow/ponytail/SKILL.md`, `/Users/jango/Documents/jb/v6/evm/docs/PLAN_REFINEMENT.md`; local `AGENTS.md`, `tasks/lessons.md`. Worktree `.worktrees/lean-signa` on `chore/sdk-6-10-2` from origin/main 5ad530d.
+
+## Plan refinement
+
+- **Objective:** Signa depends on `@bananapus/nana-sdk-core` 6.10.2 (from 6.4.0) with no change to what it signs, verifies, encodes, sends or serves. Authentication, sessions and CSP are untouched.
+- **System fit:** Signa takes only pure pieces of the SDK. Server: `NATIVE_TOKEN`, `jbMultiTerminalAbi` (`src/signaProtocol.ts`), `JB_CHAINS` and `verifyV6OperationEvidence` (`src/rest/protocol/semantics.ts`), `decodePayFailure` (`src/rest/userOperations/payFailure.ts`), `describeJBHookMetadata` (`src/rest/userOperations/userPayMetadata.ts`), `PAY_QUOTE_FAILED_MESSAGE` (`src/rest/wallet/paymentReviews.ts`), `USDC_ADDRESSES` (`src/rest/wallet/productionStack.ts`), `jbPermissionsAbi` (`scripts/rest/production-check.mjs`). Browser: `decodePayFailure` only, bundled into the two client packages from `src/rest/client/payFailure.ts`. The served wallet pages import no SDK code. None of the SDK's send, hold, poll, Safe service or indexer code is used, so the leaner polling in 6.10.2 does not reach Signa.
+- **Reuse and simplicity:** Version and lockfile only unless a check fails. No local retry rule exists over an SDK request, so nothing stacks on the SDK's 429 retry.
+- **Evidence and unknowns:** Each SDK export Signa's source and tests import was bundled from the 6.4.0 and 6.10.2 packages (esbuild, viem external) and compared: the code is identical line for line for both the production set and the test set. SDK changelog 6.5.0 to 6.10.2 lists additions elsewhere (Safe proposals, Permit2, drafts, pay routes, polling). Type declarations are covered by `npm run typecheck`.
+- **Verification:** `npm run check` on Node 26.13.1 with a disposable PostgreSQL 16 database.
+- **Resource budget:** One install, one bundle comparison, one check run. Stop and report, without adapting, if any compared export differs or a signing, verification or encoding test changes its result.
+
+- [x] Map every SDK use
+- [x] Compare the used SDK code between 6.4.0 and 6.10.2
+- [x] Bump and install with npm 12
+- [x] `npm run check`
+
+Review: version and lockfile only; no source or test change. The SDK code behind every export Signa imports is identical between 6.4.0 and 6.10.2. `npm run check` exits 0 on Node 26.13.1 with a disposable PostgreSQL 16 container (service 201 files, 4069 tests; connect 8 files, 41 tests; build passed).
+
 # Dropdown caret gate on the account page (2026-11-16)
 
 Resources: `/Users/jango/Documents/jb/v6/evm/AGENTS.md`, `/Users/jango/Documents/jb/v6/evm/workflow/ponytail/SKILL.md`, `/Users/jango/Documents/jb/v6/evm/docs/PLAN_REFINEMENT.md`; local `AGENTS.md`, `tasks/lessons.md`. Worktree `.worktrees/lean-signa` on `fix/select-caret`.
