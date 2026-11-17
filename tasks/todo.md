@@ -1,3 +1,20 @@
+# Lean network requests on the browser pages (2026-11-16)
+
+Resources: `/Users/jango/Documents/jb/v6/evm/AGENTS.md`, `/Users/jango/Documents/jb/v6/evm/workflow/ponytail/SKILL.md`, `/Users/jango/Documents/jb/v6/evm/docs/PLAN_REFINEMENT.md`; local `AGENTS.md`, `tasks/lessons.md`. Worktree `.worktrees/lean-signa` on `perf/lean-network`.
+
+## Plan refinement
+
+- **Objective:** The browser pages stop asking when nobody can see the answer and stop asking a rate-limited service every few seconds. Nothing about authentication, signing, sessions or what a page verifies changes.
+- **System fit:** Only the background polls change: the added device's page (`src/rest/web/walletDevice.ts`) and the account page's three polls (`src/rest/web/wallet.ts`). Every read still happens, later or on return; actions a person starts are untouched. Server timers, the signup stream, recovery and payment pages are unaffected.
+- **Reuse and simplicity:** Reuse the `document.hidden` skip the sibling pages already apply and each page's single `request` owner for the 429 mark. No new module, cap or control.
+- **Evidence and unknowns:** Audit at origin/main: the added device's page reads its state every 3 s while awaiting approval, hidden or not, until the link expires; a 429 answer is asked again at the poll pace (3 s or 5 s) on both pages. Popup, payment-expiry and callback timers are local. Signup and recovery polls are hidden-aware and count-capped, so they stay.
+- **Verification:** Two browser tests in `test/rest-wallet-device-browser.test.ts` with a paused clock: a hidden waiting page reads nothing and reads at once when shown; a 429 quiets each page's poll for 30 s and the poll resumes. Then `npm run check` with PostgreSQL 16.
+- **Resource budget:** Two source files and one test file. Replan if pausing the added device's page could strand an addition; the pause covers only the wait for the other device's approval.
+
+- [ ] Added device's page: no reads while hidden and awaiting approval, one read on return
+- [ ] A 429 quiets the background polls for 30 s (added device's page, account page)
+- [ ] Tests, `npm run check`
+
 # Retire a refused payment approval and review a fresh one at once
 
 jango, 2026-10-20: "go ahead and do the queued real fix". Follows PR #18 (4162e5a) and Codex review 7.

@@ -100,17 +100,21 @@ async function session() {
     location.replace(base || '/');
   } catch { message(steps.ready + ' Sign in with its passkey.'); render(); }
 }
+// Waiting on the other device's approval, a hidden page asks nothing and reads at once when shown; work in
+// flight is still followed. A rate-limited read quiets the poll for 30 seconds.
+let limitedUntil = 0;
 async function poll() {
-  if (disposed || busy || !polling()) return;
+  if (disposed || busy || !polling() || Date.now() < limitedUntil || (document.hidden && view?.phase === 'awaiting_approval')) return;
   try {
     accept(await request('state', {}));
     if (view?.phase === 'awaiting_activation') await run(advance);
     else if (view?.phase === 'ready') await run(session);
   }
-  catch { /* keep polling */ } finally { render(); }
+  catch (error) { if ((error as { status?: number }).status === 429) limitedUntil = Date.now() + 30_000; } finally { render(); }
 }
 next.addEventListener('click', () => void run(advance));
 setInterval(() => void poll(), 3000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void poll(); });
 void run(async () => {
   if (!linkToken) throw new Error('Open this page from the link your account showed.');
   accept(await request('state', {}));

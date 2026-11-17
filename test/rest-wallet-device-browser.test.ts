@@ -21,7 +21,7 @@ describe("served device pages", () => {
   const requests: { path: string; body: any }[] = [];
   let phase = "awaiting_registration", approvals = 0, activations = 0, beginFailures = 0, otherChains = false, tampered = false, skewed = false, kitScript = "";
   let lostApprovals = 0, networksPending = false, quotesOffered = false, quotes = 0, chainState: string | null = null;
-  let networksApprovals = 0, unfundedApproval = false, heldReads = 0;
+  let networksApprovals = 0, unfundedApproval = false, heldReads = 0, limited = false;
   const held: (() => void)[] = [];
   // The account page rebuilds each addition it signs from the account and the device signer it shows.
   const deviceSigner = `0x${"05".repeat(20)}`, challengeOn = (chainId: number, nonce = "0") => walletDeviceAdditionChallenge(walletAddress, deviceSigner, nonce, chainId);
@@ -73,6 +73,7 @@ describe("served device pages", () => {
       if (path === "/wallet/devices/begin") return beginFailures-- > 0 ? json({ error: { message: "unavailable" } }, 500) : json({ view: view(), link: `${origin}/wallet/add#${link}` });
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111") {
         // A held read answers late with what it saw when it was asked.
+        if (limited) return json({ error: { message: "limit" } }, 429);
         if (heldReads > 0) { heldReads--; const seen = view(); held.push(() => json({ view: seen })); return; }
         return json({ view: view() });
       }
@@ -88,6 +89,7 @@ describe("served device pages", () => {
         return json({ view: view() });
       }
       if (path === "/wallet/devices/11111111-1111-4111-8111-111111111111/activate") { activations++; phase = "ready"; return json({ view: view() }); }
+      if (path === "/wallet/devices/link/state" && limited) return json({ error: { message: "limit" } }, 429);
       if (path === "/wallet/devices/link/state") return body?.linkToken === link ? json({ view: view() }) : json({ error: { message: "no" } }, 403);
       if (path === "/wallet/devices/link/register") { if (body?.linkToken !== link || body.type !== "public-key") return json({ error: {} }, 400); phase = "awaiting_possession"; return json({ view: view() }); }
       if (path === "/wallet/devices/link/prove") { if (body?.linkToken !== link || !body.assertion?.signature) return json({ error: {} }, 400); phase = "awaiting_approval"; return json({ view: view() }); }
@@ -384,5 +386,59 @@ describe("served device pages", () => {
       await expect.poll(() => accountPage.locator("#wallet-status").textContent(), { timeout: 15_000 }).toContain("The device is added");
       expect(approvals).toBe(1);
     } finally { heldReads = 0; for (const answer of held.splice(0)) answer(); await account.close(); }
+  }, 30_000);
+
+  it("asks nothing from a hidden page that waits for the other device's approval, reads at once when shown, and gives a rate limit 30 seconds", async () => {
+    phase = "awaiting_approval"; requests.length = 0;
+    const other = await browser.newContext(), devicePage = await other.newPage();
+    const reads = () => requests.filter(item => item.path === "/wallet/devices/link/state").length;
+    const show = (hidden: boolean) => devicePage.evaluate(value => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => value }); document.dispatchEvent(new Event("visibilitychange"));
+    }, hidden);
+    try {
+      await devicePage.clock.install();
+      await devicePage.goto(`${origin}/wallet/add#${link}`);
+      await expect.poll(() => devicePage.locator("#wallet-status").textContent()).toContain("Approve this device from the device you started on");
+      await devicePage.clock.pauseAt(Date.now() + 60_000);
+      await expect.poll(reads).toBeGreaterThan(0);
+      await devicePage.waitForTimeout(300);
+      await show(true);
+      let read = reads(); await devicePage.clock.runFor(9_000); await devicePage.waitForTimeout(300); expect(reads()).toBe(read);
+      await show(false);
+      await expect.poll(reads).toBe(read + 1);
+      // A rate-limited read is not asked again at the poll's pace.
+      limited = true; read = reads();
+      await devicePage.clock.runFor(3_000); await expect.poll(reads).toBe(read + 1);
+      await devicePage.clock.runFor(12_000); await devicePage.waitForTimeout(300); expect(reads()).toBe(read + 1);
+      limited = false;
+      await devicePage.clock.runFor(21_000); await expect.poll(reads).toBeGreaterThan(read + 1);
+      // The approval lands while the page reads again: it finishes as before.
+      phase = "awaiting_activation"; activations = 0;
+      await devicePage.clock.runFor(3_000);
+      await expect.poll(() => activations).toBe(1);
+    } finally { limited = false; await other.close(); }
+  }, 30_000);
+
+  it("gives a rate-limited device read on the account page 30 seconds before asking again", async () => {
+    phase = "awaiting_possession"; requests.length = 0;
+    const account = await browser.newContext(), accountPage = await account.newPage();
+    await chainRpcs(account);
+    await withAuthenticator(account, accountPage, true);
+    const reads = () => requests.filter(item => item.path === "/wallet/devices/11111111-1111-4111-8111-111111111111").length;
+    try {
+      await accountPage.clock.install();
+      await accountPage.goto(`${origin}/wallet`);
+      await expect.poll(() => accountPage.locator("#wallet-device-add").isVisible()).toBe(true);
+      await accountPage.locator("#wallet-device-add").click();
+      await expect.poll(() => accountPage.locator("#wallet-status").textContent()).toContain("Waiting for the other device");
+      await accountPage.clock.pauseAt(Date.now() + 60_000);
+      await accountPage.waitForTimeout(300);
+      limited = true; const read = reads();
+      await accountPage.clock.runFor(3_000); await expect.poll(reads).toBe(read + 1);
+      await accountPage.clock.runFor(12_000); await accountPage.waitForTimeout(300); expect(reads()).toBe(read + 1);
+      limited = false; phase = "awaiting_approval";
+      await accountPage.clock.runFor(21_000);
+      await expect.poll(() => accountPage.locator("#wallet-device-approve").isVisible()).toBe(true);
+    } finally { limited = false; await account.close(); }
   }, 30_000);
 });
