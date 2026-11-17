@@ -11,9 +11,11 @@ Resources: `/Users/jango/Documents/jb/v6/evm/AGENTS.md`, `/Users/jango/Documents
 - **Verification:** Two browser tests in `test/rest-wallet-device-browser.test.ts` with a paused clock: a hidden waiting page reads nothing and reads at once when shown; a 429 quiets each page's poll for 30 s and the poll resumes. Then `npm run check` with PostgreSQL 16.
 - **Resource budget:** Two source files and one test file. Replan if pausing the added device's page could strand an addition; the pause covers only the wait for the other device's approval.
 
-- [ ] Added device's page: no reads while hidden and awaiting approval, one read on return
-- [ ] A 429 quiets the background polls for 30 s (added device's page, account page)
-- [ ] Tests, `npm run check`
+- [x] Added device's page: no reads while hidden and awaiting approval, one read on return
+- [x] A 429 quiets the background polls for 30 s (added device's page, account page)
+- [x] Tests, `npm run check`
+
+Review: `npm run check` exits 0 on Node 26.13.1 with PostgreSQL 16 (service 201 files, 4068 tests; connect 8 files, 41 tests). A first run failed once in `rest-wallet-deployment-settlement-evm-postgres.integration.test.ts` (worker barrier timeout under load); it passes alone and in the rerun. Both new tests fail with the source change reverted.
 
 # Retire a refused payment approval and review a fresh one at once
 
