@@ -60,4 +60,17 @@ describe("served /accounts page", () => {
     expect(await page.locator("#smart-fields").isDisabled()).toBe(false);
     await page.close();
   });
+
+  it("never shows a dropdown with the browser's default arrow", async () => {
+    const { page } = await open("/accounts", false);
+    const selects = await page.locator("select:not([multiple]):not([size])").evaluateAll(nodes => nodes.map(node => {
+      const style = getComputedStyle(node);
+      return { id: node.id, appearance: style.appearance, caret: style.backgroundImage !== "none",
+        clear: parseFloat(style.paddingRight) >= 14 + parseFloat(style.backgroundSize) + 8 };
+    }));
+    expect(selects.length).toBeGreaterThan(0);
+    // The caret sits 14px from the right edge; the padding keeps the text clear of it.
+    for (const select of selects) expect(select).toEqual({ id: select.id, appearance: "none", caret: true, clear: true });
+    await page.close();
+  });
 });
